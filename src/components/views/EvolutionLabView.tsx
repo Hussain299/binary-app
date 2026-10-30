@@ -52,6 +52,8 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
   const [searchBatch, setSearchBatch] = React.useState<StrategySearchBatch | null>(null);
   const [isSearchingBatch, setIsSearchingBatch] = React.useState(false);
   const [searchError, setSearchError] = React.useState('');
+  const [historyImportBusy, setHistoryImportBusy] = React.useState(false);
+  const [historyImportStatus, setHistoryImportStatus] = React.useState('');
 
   React.useEffect(() => {
     fetch('/api/research/candles/status')
@@ -67,6 +69,93 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
       })
       .catch(() => setSearchError('Could not read historical-data status.'));
   }, []);
+
+  const importHistoricalCsv = async (file?: File) => {
+    if (!file) return;
+    setHistoryImportBusy(true);
+    setHistoryImportStatus('');
+    setSearchError('');
+    try {
+      const pairCode = searchPair.replace('/', '');
+      const filePair = file.name.toUpperCase().match(/^([A-Z]{6})_DATA\.CSV$/)?.[1];
+      if (filePair && filePair !== pairCode) {
+        throw new Error(`This file contains ${filePair}, but the selected pair is ${pairCode}. Select the matching pair first.`);
+      }
+
+      const lines = (await file.text()).replace(/^\uFEFF/, '').trim().split(/\r?\n/);
+      if (lines.length < 30_001) {
+        throw new Error(`The file has only ${Math.max(0, lines.length - 1).toLocaleString()} data rows; at least 30,000 M1 rows are required.`);
+      }
+      const headers = lines[0].split(',').map(value => value.trim().toLowerCase().replaceAll('"', ''));
+      const index = (name: string) => headers.indexOf(name);
+      const fromIndex = index('from');
+      const timeIndex = fromIndex >= 0 ? fromIndex : ['timestampms', 'timestamp', 'datetime', 'time', 'date'].map(index).find(value => value >= 0) ?? -1;
+      const openIndex = index('open'), highIndex = index('high'), lowIndex = index('low'), closeIndex = index('close');
+      const volumeIndex = index('volume');
+      if ([timeIndex, openIndex, highIndex, lowIndex, closeIndex].some(value => value < 0)) {
+        throw new Error('CSV must contain timestamp/from, open, high, low and close columns.');
+      }
+
+      const candles: Array<{ timestampMs: number; open: number; high: number; low: number; close: number; volume: number; source: string }> = [];
+      let previousTimestamp = -Infinity;
+      for (let lineIndex = 1; lineIndex < lines.length; lineIndex++) {
+        const cells = lines[lineIndex].split(',').map(value => value.trim().replaceAll('"', ''));
+        if (cells.length < headers.length) throw new Error(`Malformed CSV row ${lineIndex + 1}; nothing was imported.`);
+        const rawTime = cells[timeIndex];
+        const numericTime = Number(rawTime);
+        const timestampMs = Number.isFinite(numericTime) && rawTime !== ''
+          ? numericTime * (fromIndex >= 0 || numericTime < 10_000_000_000 ? 1000 : 1)
+          : Date.parse(rawTime);
+        const open = Number(cells[openIndex]), high = Number(cells[highIndex]);
+        const low = Number(cells[lowIndex]), close = Number(cells[closeIndex]);
+        const volume = volumeIndex >= 0 ? Number(cells[volumeIndex] || 0) : 0;
+        if (!Number.isFinite(timestampMs) || ![open, high, low, close, volume].every(Number.isFinite) ||
+            high < Math.max(open, close, low) || low > Math.min(open, close, high)) {
+          throw new Error(`Invalid timestamp/OHLC on CSV row ${lineIndex + 1}; nothing was imported.`);
+        }
+        if (timestampMs <= previousTimestamp) {
+          throw new Error(`Timestamps are duplicated or out of order at CSV row ${lineIndex + 1}; sort and deduplicate the source first.`);
+        }
+        previousTimestamp = timestampMs;
+        candles.push({ timestampMs, open, high, low, close, volume, source: 'imported' });
+      }
+
+      const zeroVolumeFlat = candles.filter(c =>
+        c.volume === 0 && c.open === c.high && c.high === c.low && c.low === c.close
+      ).length;
+      const chunkSize = 15_000;
+      let imported = 0;
+      for (let offset = 0; offset < candles.length; offset += chunkSize) {
+        const chunk = candles.slice(offset, offset + chunkSize);
+        const response = await fetch('/api/research/candles/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol: searchPair, candles: chunk }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(`Import stopped at ${imported.toLocaleString()} / ${candles.length.toLocaleString()} rows: ${payload.error || 'server rejected a chunk'}. Re-uploading the same file is safe; duplicate timestamps are updated idempotently.`);
+        }
+        imported += chunk.length;
+        setHistoryImportStatus(`Imported ${imported.toLocaleString()} / ${candles.length.toLocaleString()} rows…`);
+      }
+
+      const statusResponse = await fetch('/api/research/candles/status');
+      const statusPayload = await statusResponse.json();
+      const counts: Record<string, number> = {};
+      (statusPayload.pairs || []).forEach((pair: { symbol: string; count: number }) => {
+        counts[pair.symbol] = pair.count;
+      });
+      setHistoryCounts(counts);
+      setHistoryImportStatus(
+        `${imported.toLocaleString()} rows imported for ${searchPair}. ${zeroVolumeFlat.toLocaleString()} zero-volume flat closure rows will be excluded from research; no rows were interpolated.`
+      );
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : 'Historical import failed.');
+    } finally {
+      setHistoryImportBusy(false);
+    }
+  };
 
   const runThreeHundredSearch = async () => {
     setIsSearchingBatch(true);
@@ -184,6 +273,23 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
             </button>
           </div>
         </div>
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-neutral-800 bg-neutral-950 p-3">
+          <label className="text-xs text-neutral-300" htmlFor="m1-history-upload">Import M1 CSV for {searchPair}</label>
+          <input
+            id="m1-history-upload"
+            type="file"
+            accept=".csv,text/csv"
+            disabled={historyImportBusy || isSearchingBatch}
+            onChange={event => {
+              const file = event.target.files?.[0];
+              void importHistoricalCsv(file);
+              event.currentTarget.value = '';
+            }}
+            className="max-w-full text-[11px] text-neutral-400 file:mr-3 file:rounded file:border-0 file:bg-neutral-800 file:px-3 file:py-2 file:text-xs file:text-white"
+          />
+          {historyImportBusy && <span className="text-xs text-cyan-300">Importing…</span>}
+        </div>
+        {historyImportStatus && <p className="text-[11px] text-emerald-300">{historyImportStatus}</p>}
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-neutral-400">
           <span>Imported history: <strong className="text-white">{selectedHistoryCount.toLocaleString()} / 30,000 M1 candles</strong></span>
           <span>Historic gate: <strong className="text-white">300 scored test trades · 70% validation and test WR</strong></span>
