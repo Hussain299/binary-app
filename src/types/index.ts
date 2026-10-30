@@ -169,7 +169,11 @@ export interface ResearchSignal {
   modelVersion: string;
   notes?: string;
   strategyName?: string;
+  /** Measured historical test win rate only; undefined means not validated. */
   strategyWinRate?: number;
+  strategyHistoricalSampleSize?: number;
+  strategyEvidenceStatus?: 'UNVALIDATED' | 'BACKTESTED';
+  strategyId?: string;
   advanceNoticeMinutes?: number;
   candleOpenTimeUtc?: string;
   candleCloseTimeUtc?: string;
@@ -231,6 +235,16 @@ export interface StrategyBacktestMetrics {
   testPeriod: { start: string; end: string };
 }
 
+export interface StrategyPerformanceRecord {
+  strategyId: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  scratches: number;
+  netPips: number;
+  updatedAt: string;
+}
+
 export interface StrategyPaperMetrics {
   trades: number;
   wins: number;
@@ -249,6 +263,10 @@ export interface SynthesizedStrategyGene {
   parents: string[];
   mutationRate: number;
   nonLinearOperator: 'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion';
+  /** The same coefficients used by the live evaluator and historical backtester. */
+  operatorParameters?: { alpha: number; beta: number; gamma: number; exponent: number; threshold: number };
+  /** Currency pair used to validate this candidate against historical data. */
+  symbol?: ForexSymbol;
   optimalHorizonMinutes: 5 | 10 | 15 | 20 | 25 | 30;
   sessionAffinity: MarketSessionId | 'ALL';
   /** Measured untouched-test win rate. Zero means no verified result exists. */
@@ -298,6 +316,7 @@ export interface ExperimentMetrics {
 
 export interface ResearchExperiment {
   id: string;
+  experimentType?: 'BACKTEST' | 'LIVE_TRADE';
   experimentType?: 'BACKTEST' | 'LIVE_TRADE';
   generation: number;
   name: string;
