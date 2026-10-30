@@ -252,7 +252,7 @@ export async function runAllVerificationTests(): Promise<{
   // 3. ML & RESEARCH PIPELINE TESTS
   // ==========================================
   await runTest('ML', 'Purged Walk-Forward Splits & Embargo Verification', () => {
-    const candles = dataFeedEngine.generateRealisticHistoricalCandles('EUR/USD', 120);
+    const candles = dataFeedEngine.generateRealisticHistoricalCandles('EUR/USD', 1500).map(c => ({ ...c, source: 'biquote' as const }));
     const exp = researchEngine.runWalkForwardExperiment('EUR/USD', candles, 'momentum_5', 10, 1);
 
     if (exp.purgedWindowCandles !== 10) {
@@ -266,8 +266,30 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
+  await runTest('ML', 'Synthetic candles cannot be used for research claims', () => {
+    const synthetic = dataFeedEngine.generateRealisticHistoricalCandles('EUR/USD', 1500);
+    let rejected = false;
+    try {
+      researchEngine.runWalkForwardExperiment('EUR/USD', synthetic, 'momentum_5', 10, 1);
+    } catch (error: any) {
+      rejected = String(error.message).includes('genuine market candles');
+    }
+    if (!rejected) throw new Error('Synthetic fallback candles were not rejected by the backtest engine.');
+  });
+
+  await runTest('RESEARCH', 'Generated strategy remains unvalidated until historical testing', () => {
+    const candles = dataFeedEngine.generateRealisticHistoricalCandles('EUR/USD', 100);
+    const gene = researchEngine.synthesizeInfiniteNovelStrategy(candles, 'EUR/USD', 99);
+    if (gene.verifiedAccuracy !== 0 || gene.sampleCount !== 0) {
+      throw new Error('New candidate must not contain a fabricated accuracy or sample count.');
+    }
+    if (gene.status !== 'EXPERIMENTING' || gene.accuracyStatus !== 'UNVALIDATED') {
+      throw new Error('New candidate must remain unvalidated and out of the promoted pool.');
+    }
+  });
+
   await runTest('ML', 'Probabilistic Calibration & Brier Score Calculation', () => {
-    const candles = dataFeedEngine.generateRealisticHistoricalCandles('USD/JPY', 120);
+    const candles = dataFeedEngine.generateRealisticHistoricalCandles('USD/JPY', 1500).map(c => ({ ...c, source: 'biquote' as const }));
     const exp = researchEngine.runWalkForwardExperiment(
       'USD/JPY',
       candles,
@@ -285,7 +307,7 @@ export async function runAllVerificationTests(): Promise<{
   });
 
   await runTest('RESEARCH', 'Skeptical Auditor Rejection of Overfitted Candidates', async () => {
-    const candles = dataFeedEngine.generateRealisticHistoricalCandles('EUR/GBP', 120);
+    const candles = dataFeedEngine.generateRealisticHistoricalCandles('EUR/GBP', 1500).map(c => ({ ...c, source: 'biquote' as const }));
     const exp = researchEngine.runWalkForwardExperiment('EUR/GBP', candles, 'wick_reversal', 15, 1);
     const reviews = await researchEngine.generateTrinityReviews(exp);
 
