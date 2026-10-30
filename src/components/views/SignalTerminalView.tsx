@@ -242,9 +242,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const validatedGenes = synthesizedStrategies.filter(
     gene => gene.accuracyStatus === 'BACKTESTED' && !!gene.backtestMetrics
   );
-  const averageTestWinRate = validatedGenes.length
-    ? (validatedGenes.reduce((sum, gene) => sum + (gene.backtestMetrics?.testWinRate || 0), 0) / validatedGenes.length * 100).toFixed(1)
-    : null;
+  const validatedGeneCount = validatedGenes.length;
+  const paperTradingGeneCount = synthesizedStrategies.filter(gene => gene.status === 'PAPER_TRADING').length;
 
   // 5-Minute Candle Synchronization
   const FIVE_MIN_MS = 5 * 60 * 1000;
@@ -838,7 +837,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                         <div className="mt-1 p-2 rounded-lg bg-cyan-950/40 border border-cyan-800/70 font-mono text-[10px] text-cyan-200 flex items-center justify-between gap-1 overflow-x-auto scrollbar-none">
                           <span className="text-cyan-400 font-bold shrink-0">Equation:</span>
                           <span className="truncate">{sig.mathematicalFormula}</span>
-                          <span className="text-[9px] px-1 py-0.2 bg-cyan-500/20 text-cyan-300 rounded shrink-0 font-bold">Non-Human</span>
+                          <span className="text-[9px] px-1 py-0.2 bg-cyan-500/20 text-cyan-300 rounded shrink-0 font-bold">Formula</span>
                         </div>
                       )}
 
@@ -1203,7 +1202,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   </div>
                   {selectedSignal.whyHumansMissThis && (
                     <div className="text-[11px] text-neutral-300 leading-relaxed bg-neutral-900/80 p-2.5 rounded-lg border border-neutral-800">
-                      <strong className="text-amber-400 block mb-0.5">Why Humans Miss This:</strong>
+                      <strong className="text-amber-400 block mb-0.5">Candidate Design Rationale:</strong>
                       {selectedSignal.whyHumansMissThis}
                     </div>
                   )}
@@ -1405,7 +1404,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
         </div>
       )}
 
-      {/* MODAL 6: AI STRATEGY GENESIS (INFINITE COMBINATIONS) */}
+      {/* MODAL 6: STRATEGY CANDIDATE RESEARCH */}
       {showGenesisModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-neutral-900 border border-neutral-700 rounded-2xl max-w-3xl w-full p-5 sm:p-6 text-neutral-200 space-y-4 max-h-[90vh] overflow-y-auto shadow-2xl">
@@ -1416,13 +1415,13 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 </div>
                 <div>
                   <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                    <span>AI Strategy Genesis</span>
+                    <span>Strategy Candidate Research</span>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-mono">
-                      Infinite Non-Human Combinations
+                      Candidate formula search
                     </span>
                   </h3>
                   <p className="text-xs text-neutral-400">
-                    Evolutionary genetic cross-breeding of quantitative equations beyond human perception
+                    Randomized formula candidates with historical validation and forward paper-trading evidence
                   </p>
                 </div>
               </div>
@@ -1439,7 +1438,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="space-y-0.5">
                   <span className="text-xs font-bold text-white uppercase tracking-wider block">
-                    Autonomous Genetic Engine
+                    Candidate Formula Generator
                   </span>
                   <p className="text-[11px] text-neutral-400">
                     Generates candidate formulas. Validation and promotion require genuine historical out-of-sample evidence.
@@ -1455,7 +1454,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-neutral-850 text-xs font-mono">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2 border-t border-neutral-850 text-xs font-mono">
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
                   <span className="text-[10px] text-neutral-400 block uppercase">Forward Approved</span>
                   <span className="text-sm font-extrabold text-cyan-400">
@@ -1465,14 +1464,16 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
                   <span className="text-[10px] text-neutral-400 block uppercase">Generation</span>
                   <span className="text-sm font-extrabold text-white">
-                    Gen-{synthesizedStrategies[0]?.generation || 33}+
+                    {synthesizedStrategies[0]?.generation ? `Gen-${synthesizedStrategies[0].generation}+` : '—'}
                   </span>
                 </div>
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
-                  <span className="text-[10px] text-neutral-400 block uppercase">Measured test win rate</span>
-                  <span className="text-sm font-extrabold text-emerald-400">
-                    {averageTestWinRate ? `${averageTestWinRate}% test WR` : 'No validated results'}
-                  </span>
+                  <span className="text-[10px] text-neutral-400 block uppercase">Backtested Candidates</span>
+                  <span className="text-sm font-extrabold text-emerald-400">{validatedGeneCount}</span>
+                </div>
+                <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
+                  <span className="text-[10px] text-neutral-400 block uppercase">Paper Trading</span>
+                  <span className="text-sm font-extrabold text-amber-300">{paperTradingGeneCount} Candidates</span>
                 </div>
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
                   <span className="text-[10px] text-neutral-400 block uppercase">Operators</span>
@@ -1485,8 +1486,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
             <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-4 space-y-3">
               <div>
-                <h4 className="text-sm font-bold text-white">Import genuine historical candles</h4>
-                <p className="text-[11px] text-neutral-400 mt-1">Upload a 1-minute CSV or JSON dataset. At least 10,000 valid real candles are required for strategy validation; synthetic fallback data is rejected.</p>
+                <h4 className="text-sm font-bold text-white">Import externally sourced historical candles</h4>
+                <p className="text-[11px] text-neutral-400 mt-1">Upload 1-minute CSV or JSON candles. Validation requires at least 10,000 structurally valid M1 rows. Synthetic fallback candles are rejected. The app checks OHLC and timestamps but cannot independently authenticate an uploaded file's provider or contents; import only genuine broker/provider exports.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <select
@@ -1504,15 +1505,14 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               {historyImportMessage && <p className="text-[11px] text-cyan-200 break-words">{historyImportMessage}</p>}
             </div>
 
-            {/* WHY NON-HUMAN FORMULAS BEAT 50% COIN-FLIPS */}
+            {/* CANDIDATE VALIDATION POLICY */}
             <div className="p-3.5 rounded-xl bg-cyan-950/20 border border-cyan-800/40 text-xs text-neutral-300 space-y-1.5 leading-relaxed">
               <strong className="text-cyan-300 font-bold flex items-center gap-1.5">
                 <Cpu className="w-4 h-4 text-cyan-400" />
-                Why Human Trading Strategies Produce ~50% Coin-Flips:
+                How candidates become forward-approved:
               </strong>
               <p>
-                Human chartists rely on simple visual heuristics (candlestick wick shapes, 70/30 RSI lines, EMA crossovers) that modern institutional high-frequency algorithms routinely exploit. 
-                The <strong>AI Genesis Engine</strong> synthesizes non-human equations using hyperbolic tangents (<code className="text-cyan-300 font-mono">tanh</code>), second-derivative curvature acceleration, and logarithmic harmonic damping to detect institutional limit absorptions before directional 5-minute candle expansion.
+                The generator samples four executable operator families and stores the exact coefficients used by the live evaluator. A generated equation is only a candidate: it starts unvalidated, must pass a chronological historical test using the scheduled entry/expiry model, and then must accumulate at least 200 scored forward paper outcomes before it can be marked forward-approved.
               </p>
             </div>
 
@@ -1520,7 +1520,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <div className="space-y-3">
               <div className="flex items-center justify-between text-xs font-mono text-neutral-400">
                 <span className="uppercase font-bold tracking-wider">
-                  Active Synthesized Genetic Pool ({synthesizedStrategies.length})
+                  Strategy Candidate Pool ({synthesizedStrategies.length})
                 </span>
                 <span className="text-[11px] text-neutral-400">Promotion requires untouched-test evidence</span>
               </div>
