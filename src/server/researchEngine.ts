@@ -788,7 +788,8 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
       sampleCount: test.trades,
       accuracyStatus: 'BACKTESTED',
       backtestMetrics,
-      status: promotionEligible ? 'PROMOTED_ACTIVE' : 'EXPERIMENTING',
+      // Historical validation only qualifies a candidate for forward paper trading.
+      status: promotionEligible ? 'PAPER_TRADING' : 'EXPERIMENTING',
     };
     db.updateSynthesizedStrategy(updated);
     return updated;
