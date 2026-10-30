@@ -818,7 +818,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                           </span>
                         </div>
                         <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800/80 font-mono text-[11px] font-bold shrink-0">
-                          {sig.strategyEvidenceStatus === 'BACKTESTED' && typeof sig.strategyWinRate === 'number' ? `${sig.strategyWinRate.toFixed(1)}% Historical test WR · n=${sig.strategyHistoricalSampleSize || 0}` : 'Historical result not validated'}
+                          {sig.paperOnly ? 'PAPER ONLY · NOT APPROVED' : (sig.strategyEvidenceStatus === 'BACKTESTED' && typeof sig.strategyWinRate === 'number' ? `${sig.strategyWinRate.toFixed(1)}% Historical test WR · n=${sig.strategyHistoricalSampleSize || 0}` : 'Historical result not validated')}
                         </span>
                       </div>
 
@@ -1157,7 +1157,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   {selectedSignal.strategyName || '5-Min Momentum Breakout'}
                 </span>
                 <span className="text-emerald-400 font-bold">
-                  {selectedSignal.strategyEvidenceStatus === 'BACKTESTED' && typeof selectedSignal.strategyWinRate === 'number' ? `${selectedSignal.strategyWinRate.toFixed(1)}% Historical test WR · n=${selectedSignal.strategyHistoricalSampleSize || 0}` : 'Historical result not validated'}
+                  {selectedSignal.paperOnly ? 'PAPER ONLY · NOT APPROVED' : (selectedSignal.strategyEvidenceStatus === 'BACKTESTED' && typeof selectedSignal.strategyWinRate === 'number' ? `${selectedSignal.strategyWinRate.toFixed(1)}% Historical test WR · n=${selectedSignal.strategyHistoricalSampleSize || 0}` : 'Historical result not validated')}
                 </span>
               </div>
               {(() => {
