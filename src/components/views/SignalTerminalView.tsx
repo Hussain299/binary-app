@@ -978,7 +978,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     <span className="text-[11px] text-neutral-400">Expiry: 5 Minutes · Best Pairs: EUR/USD, GBP/USD, EUR/JPY</span>
                   </div>
                   <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-bold">
-                    74.8% Win Rate
+                    Not validated
                   </span>
                 </div>
                 <p className="text-xs text-neutral-300 leading-relaxed">
@@ -994,7 +994,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     <span className="text-[11px] text-neutral-400">Expiry: 10 Minutes · Best Pairs: USD/JPY, AUD/USD, AUD/CAD</span>
                   </div>
                   <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-mono font-bold">
-                    72.4% Win Rate
+                    Not validated
                   </span>
                 </div>
                 <p className="text-xs text-neutral-300 leading-relaxed">
@@ -1010,7 +1010,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     <span className="text-[11px] text-neutral-400">Expiry: 15 Minutes · Best Pairs: EUR/GBP, USD/CAD</span>
                   </div>
                   <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-xs font-mono font-bold">
-                    76.5% Win Rate
+                    Not validated
                   </span>
                 </div>
                 <p className="text-xs text-neutral-300 leading-relaxed">
@@ -1026,7 +1026,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     <span className="text-[11px] text-neutral-400">Expiry: 20–30 Minutes · Best Pairs: GBP/USD, EUR/JPY</span>
                   </div>
                   <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40 text-xs font-mono font-bold">
-                    78.4% Win Rate
+                    Not validated
                   </span>
                 </div>
                 <p className="text-xs text-neutral-300 leading-relaxed">
