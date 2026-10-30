@@ -269,7 +269,9 @@ export class AutonomousScheduler {
           // Checks if an evolved, multi-dimensional quantitative formula
           // with non-linear polynomial operators triggers on this candle
           // -------------------------------------------------------------
-          const promotedGenes = db.getPaperTradingStrategies();
+          const promotedGenes = db.getPaperTradingStrategies().sort((a, b) =>
+            Number(b.status === 'PROMOTED_ACTIVE') - Number(a.status === 'PROMOTED_ACTIVE')
+          );
           let novelGeneCandidate: {
             gene: typeof promotedGenes[0];
             direction: 'BUY' | 'SELL';
@@ -323,7 +325,10 @@ export class AutonomousScheduler {
               synthesizedGeneId: gene.id,
               mathematicalFormula: gene.mathematicalFormula,
               whyHumansMissThis: gene.whyHumansMissThis,
-              notes: `[GENERATED CANDIDATE FORMULA]: ${gene.mathematicalFormula} | Edge: ${gene.whyHumansMissThis}`,
+              paperOnly: gene.status !== 'PROMOTED_ACTIVE',
+              notes: gene.status !== 'PROMOTED_ACTIVE'
+                ? `[PAPER ONLY — NOT APPROVED FOR ACTIONABLE TRADING] Forward validation sample. ${gene.mathematicalFormula}`
+                : `[APPROVED AFTER 300 HISTORICAL + 300 FORWARD OUTCOMES]: ${gene.mathematicalFormula} | Edge: ${gene.whyHumansMissThis}`,
             });
 
             createdSignals.push(signal);
