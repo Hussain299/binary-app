@@ -14,6 +14,7 @@ import {
   SignalLifecycleState,
 } from '../types/index.js';
 import { db } from './db.js';
+import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
 import { getSessionFromTimestamp } from './dataFeeds.js';
 
 export interface SignalCreationParams {
@@ -23,12 +24,15 @@ export interface SignalCreationParams {
   ruleFamily: string;
   expiryMinutes?: number;
   confidence: number;
+  /** Broker-observed payout where available; otherwise use the 80% research floor. */
+  payoutPct?: number;
+  payoutSource?: 'ASSUMED_MINIMUM' | 'BROKER_OBSERVED';
   modelVersion: string;
   notes?: string;
   strategyName?: string;
   strategyWinRate?: number;
   strategyHistoricalSampleSize?: number;
-  strategyEvidenceStatus?: 'UNVALIDATED' | 'BACKTESTED';
+  strategyEvidenceStatus?: 'UNVALIDATED' | 'INSUFFICIENT_SAMPLE' | 'BACKTESTED';
   strategyId?: string;
   candleOpenTimeUtc?: string;
   candleCloseTimeUtc?: string;
@@ -39,6 +43,7 @@ export interface SignalCreationParams {
   synthesizedGeneId?: string;
   mathematicalFormula?: string;
   whyHumansMissThis?: string;
+  paperOnly?: boolean;
 }
 
 export class EntryExitEngine {
@@ -209,6 +214,9 @@ export class EntryExitEngine {
       grossReturnPips: null,
       estimatedSpreadPips: this.spreadsPips[params.symbol] || 1.5,
       netReturnPips: null,
+      payoutPct: params.payoutPct ?? DEFAULT_BINARY_PAYOUT_PERCENT,
+      payoutSource: params.payoutSource ?? 'ASSUMED_MINIMUM',
+      netReturnUnits: null,
       outcomeResult: 'PENDING',
       ruleFamily: params.ruleFamily,
       modelVersion: params.modelVersion,
@@ -232,6 +240,7 @@ export class EntryExitEngine {
       synthesizedGeneId: params.synthesizedGeneId,
       mathematicalFormula: params.mathematicalFormula,
       whyHumansMissThis: params.whyHumansMissThis,
+      paperOnly: params.paperOnly ?? false,
     };
 
     return db.addSignal(signal);
@@ -343,8 +352,8 @@ export class EntryExitEngine {
           const candleOpenMs = Date.parse(signal.candleOpenTimeUtc);
           const newestCandle = candles[candles.length - 1];
           const nowMs = Date.now();
-          if (newestCandle.timestampMs >= candleOpenMs || nowMs >= candleOpenMs) {
-            const entryCandle = candles.find(c => c.timestampMs >= candleOpenMs) || newestCandle;
+          const entryCandle = candles.find(c => Math.abs(c.timestampMs - candleOpenMs) <= 5_000);
+          if (entryCandle) {
             const entryFillPrice = entryCandle.open;
             const entryTimeUtc = signal.candleOpenTimeUtc;
             const plannedExitMs = candleOpenMs + (signal.expiryMinutes || 5) * 60 * 1000;
@@ -360,10 +369,21 @@ export class EntryExitEngine {
               timestamp: new Date().toISOString(),
               fromState: 'WAITING_FOR_ENTRY',
               toState: 'ACTIVE',
-              reason: `Trade opened strictly at 5M Candle Open (${signal.candleOpenTimeIst || entryTimeUtc}) at price ${entryFillPrice}. Expiry: ${signal.expiryMinutes} Min duration (${signal.candleCloseTimeIst || plannedExitTimeUtc}).`,
+              reason: `Trade opened on the exact 5M candle boundary (${signal.candleOpenTimeIst || entryTimeUtc}) at price ${entryFillPrice}. Expiry: ${signal.expiryMinutes} minutes (${signal.candleCloseTimeIst || plannedExitTimeUtc}).`,
               price: entryFillPrice,
             });
 
+            changed = true;
+          } else if (newestCandle.timestampMs > candleOpenMs + 5_000) {
+            // Do not substitute a later candle for a missed exact M5 open.
+            signal.lifecycleState = 'EXPIRED';
+            signal.outcomeResult = 'CANCELLED';
+            signal.lifecycleHistory.push({
+              timestamp: new Date().toISOString(),
+              fromState: 'WAITING_FOR_ENTRY',
+              toState: 'EXPIRED',
+              reason: `Exact 5M entry candle was unavailable at ${signal.candleOpenTimeUtc}; no late substitute entry was taken.`,
+            });
             changed = true;
           }
         }
@@ -393,38 +413,70 @@ export class EntryExitEngine {
         const nowMs = Date.now();
         
         const isTest = signal.ruleFamily?.startsWith('test_');
-        // Find candle at or immediately after the planned exit time, or use current candle if live clock reached expiry
-        const exitCandle = candles.find(c => c.timestampMs >= plannedExitMs) || (!isTest && nowMs >= plannedExitMs ? newestCandle : null);
+        // Match the historical replay exactly: the M1 candle opened one minute
+        // before expiry closes at the binary contract's target expiry timestamp.
+        // Never use a later candle as a substitute when the target candle is missing.
+        const targetExitCandle = candles.find(c =>
+          Math.abs((c.timestampMs + 60_000) - plannedExitMs) <= 5_000
+        );
+        const exitCandle = targetExitCandle && (isTest || nowMs >= plannedExitMs)
+          ? targetExitCandle
+          : null;
 
         if (exitCandle) {
           const isJpy = signal.symbol.includes('JPY');
           const pipFactor = isJpy ? 100 : 10000;
           const exitPrice = exitCandle.close;
           const entryPrice = signal.actualEntryPrice;
-
-          let rawDiff = signal.direction === 'BUY' ? exitPrice - entryPrice : entryPrice - exitPrice;
-          let grossPips = Number((rawDiff * pipFactor).toFixed(1));
-          let netPips = Number((grossPips - signal.estimatedSpreadPips).toFixed(1));
-
-          let outcome: 'WIN' | 'LOSS' | 'SCRATCH' = 'SCRATCH';
-          if (netPips > 0.5) outcome = 'WIN';
-          else if (netPips < -0.5) outcome = 'LOSS';
+          const payoutPct = signal.payoutPct ?? DEFAULT_BINARY_PAYOUT_PERCENT;
+          const settlement = calculateBinarySettlement(
+            signal.direction,
+            entryPrice,
+            exitPrice,
+            payoutPct
+          );
+          const grossPips = Number((
+            (signal.direction === 'BUY' ? exitPrice - entryPrice : entryPrice - exitPrice) * pipFactor
+          ).toFixed(1));
 
           signal.actualExitTimeUtc = exitCandle.timestamp;
           signal.actualExitPrice = exitPrice;
-          signal.grossReturnPips = grossPips;
-          signal.netReturnPips = netPips;
-          signal.outcomeResult = outcome;
+          signal.grossReturnPips = grossPips; // Informational price movement only; not the contract P/L.
+          signal.netReturnPips = null; // Binary options are not scored using forex pip spreads.
+          signal.netReturnUnits = settlement.netReturnUnits;
+          signal.payoutPct = payoutPct;
+          signal.payoutSource = signal.payoutSource ?? 'ASSUMED_MINIMUM';
+          signal.outcomeResult = settlement.outcome;
           signal.lifecycleState = 'CLOSED';
 
+          const unitText = settlement.netReturnUnits > 0
+            ? `+${settlement.netReturnUnits.toFixed(2)} stake units`
+            : settlement.netReturnUnits < 0
+              ? `${settlement.netReturnUnits.toFixed(2)} stake units`
+              : '0.00 stake units (push)';
           signal.lifecycleHistory.push({
             timestamp: new Date().toISOString(),
             fromState: 'ACTIVE',
             toState: 'CLOSED',
-            reason: `Position reached planned expiry (${signal.plannedExitTimeUtc}). Closed at ${exitPrice} on candle ${exitCandle.timestamp}. Net Return: ${netPips > 0 ? '+' : ''}${netPips} pips (${outcome}).`,
+            reason: `Binary contract expired at ${signal.plannedExitTimeUtc}. Entry ${entryPrice}; expiry ${exitPrice}; payout ${payoutPct}% (${signal.payoutSource}); result ${settlement.outcome}; return ${unitText}.`,
             price: exitPrice,
           });
 
+          changed = true;
+        } else if (
+          (isTest || nowMs >= plannedExitMs) &&
+          newestCandle.timestampMs + 60_000 > plannedExitMs
+        ) {
+          // The contract expiry minute has passed, but its exact M1 close is
+          // absent. Mark the observation unscored instead of settling a later bar.
+          signal.lifecycleState = 'EXPIRED';
+          signal.outcomeResult = 'CANCELLED';
+          signal.lifecycleHistory.push({
+            timestamp: new Date().toISOString(),
+            fromState: 'ACTIVE',
+            toState: 'EXPIRED',
+            reason: `Exact binary expiry candle was missing at ${signal.plannedExitTimeUtc}; no later candle was substituted, so no WIN/LOSS was recorded.`,
+          });
           changed = true;
         }
       }

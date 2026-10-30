@@ -14,6 +14,40 @@ import { autonomousScheduler } from './scheduler.js';
 import { runAllVerificationTests } from './tests.js';
 import { historicalDataStore } from './historicalData.js';
 
+interface StrategySearchJob {
+  jobId: string;
+  symbol: ForexSymbol;
+  status: 'RUNNING' | 'COMPLETED' | 'FAILED';
+  total: 300;
+  completed: number;
+  passedHistorical: number;
+  insufficientSample: number;
+  rejected: number;
+  replicationFinalists: number;
+  approvedCount: number;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+  topCandidates?: Array<{
+    id: string;
+    name: string;
+    formula: string;
+    status: string;
+    testWinRate: number;
+    testScoredTrades: number;
+    validationWinRate: number;
+    validationExpectedValueUnits: number;
+    testExpectedValueUnits: number;
+    testedOnHoldout: boolean;
+    expectedValueUnits: number;
+    minimumPayoutPct: number;
+    testBlockWinRates: number[];
+    reason?: string;
+  }>;
+}
+
+const strategySearchJobs = new Map<string, StrategySearchJob>();
+
 export const apiRouter = Router();
 
 // Healthcheck
@@ -192,6 +226,106 @@ apiRouter.post('/strategies/validate', (req: Request, res: Response) => {
   }
 });
 
+// Run a real 300-candidate symbolic search against imported M1 history.
+apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
+  try {
+    const rawSymbol = String(req.body.symbol || '').toUpperCase();
+    const symbol = FOREX_PAIRS.find(pair => pair.replace('/', '') === rawSymbol.replace('/', ''));
+    if (!symbol) return res.status(400).json({ error: 'Choose a supported forex pair.' });
+    const activeJob = [...strategySearchJobs.values()].find(job => job.status === 'RUNNING');
+    if (activeJob) return res.status(409).json({ error: 'A 300-candidate strategy search is already running.', jobId: activeJob.jobId });
+
+    const candles = historicalDataStore.getCandles(symbol);
+    if (candles.length < 30_000) {
+      return res.status(409).json({
+        error: `${symbol} has ${candles.length.toLocaleString()} imported M1 candles. At least 30,000 are required for a meaningful 300-trade test, especially for 20–30 minute expiries.`,
+        availableCandles: candles.length,
+        requiredCandles: 30_000,
+      });
+    }
+
+    const jobId = `strategy_search_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    const latestGeneration = db.getGenerations()[0]?.generation || 7;
+    const job: StrategySearchJob = {
+      jobId,
+      symbol,
+      status: 'RUNNING',
+      total: 300,
+      completed: 0,
+      passedHistorical: 0,
+      insufficientSample: 0,
+      rejected: 0,
+      replicationFinalists: 0,
+      approvedCount: db.getPromotedActiveStrategies().length,
+      startedAt: new Date().toISOString(),
+    };
+    strategySearchJobs.set(jobId, job);
+
+    void researchEngine.runNovelStrategySearchBatch(
+      symbol,
+      candles,
+      jobId,
+      latestGeneration + 1,
+      progress => {
+        job.completed = progress.completed;
+        job.passedHistorical = progress.passedHistorical;
+        job.insufficientSample = progress.insufficientSample;
+        job.rejected = progress.rejected;
+        job.replicationFinalists = progress.replicationFinalists;
+      }
+    ).then(results => {
+      job.status = 'COMPLETED';
+      job.finishedAt = new Date().toISOString();
+      job.approvedCount = db.getPromotedActiveStrategies().length;
+      job.topCandidates = [...results]
+        .sort((a, b) =>
+          Number(b.status === 'PAPER_TRADING') - Number(a.status === 'PAPER_TRADING') ||
+          Number(!!b.backtestMetrics) - Number(!!a.backtestMetrics) ||
+          (b.discoveryMetrics?.validationExpectedValueUnits ?? b.backtestMetrics?.validationWinRate ?? 0) -
+            (a.discoveryMetrics?.validationExpectedValueUnits ?? a.backtestMetrics?.validationWinRate ?? 0) ||
+          (b.discoveryMetrics?.validationWinRate ?? 0) - (a.discoveryMetrics?.validationWinRate ?? 0)
+        )
+        .slice(0, 10)
+        .map(gene => ({
+          id: gene.id,
+          name: gene.name,
+          formula: gene.mathematicalFormula,
+          status: gene.status,
+          testWinRate: gene.backtestMetrics?.testWinRate ?? 0,
+          testScoredTrades: gene.backtestMetrics?.testScoredSampleSize ?? 0,
+          validationWinRate: gene.discoveryMetrics?.validationWinRate ?? gene.backtestMetrics?.validationWinRate ?? 0,
+          validationExpectedValueUnits: gene.discoveryMetrics?.validationExpectedValueUnits ?? 0,
+          testExpectedValueUnits: gene.backtestMetrics?.expectedValueUnits ?? 0,
+          testedOnHoldout: !!gene.backtestMetrics,
+          expectedValueUnits: gene.discoveryMetrics?.validationExpectedValueUnits ?? gene.backtestMetrics?.expectedValueUnits ?? 0,
+          testBlockWinRates: gene.backtestMetrics?.testBlockWinRates ?? [],
+          minimumPayoutPct: gene.discoveryMetrics?.minimumPayoutPct ?? gene.backtestMetrics?.binaryPayoutPct ?? 0,
+          reason: gene.validationFailureReason,
+        }));
+    }).catch(error => {
+      job.status = 'FAILED';
+      job.finishedAt = new Date().toISOString();
+      job.error = error?.message || 'Strategy search failed.';
+    });
+
+    // Keep only the most recent jobs in memory.
+    while (strategySearchJobs.size > 20) {
+      const oldest = strategySearchJobs.keys().next().value;
+      if (oldest) strategySearchJobs.delete(oldest);
+      else break;
+    }
+    return res.status(202).json({ success: true, jobId, total: 300, symbol, status: 'RUNNING' });
+  } catch (err: any) {
+    return res.status(409).json({ error: err.message });
+  }
+});
+
+apiRouter.get('/strategies/search-batch/:jobId', (req: Request, res: Response) => {
+  const job = strategySearchJobs.get(String(req.params.jobId));
+  if (!job) return res.status(404).json({ error: 'Strategy search job not found.' });
+  return res.json(job);
+});
+
 // POST /api/strategies/evolve — Trigger immediate evolutionary synthesis of a novel strategy
 apiRouter.post('/strategies/evolve', async (_req: Request, res: Response) => {
   try {
@@ -246,9 +380,21 @@ apiRouter.post('/signals/evaluate', async (_req: Request, res: Response) => {
     }
 
     const updated = entryExitEngine.evaluateSignals(candlesMap);
+    const completed = updated.filter(signal =>
+      signal.lifecycleState === 'CLOSED' &&
+      ['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult)
+    );
+    // A settled outcome is written once to the forward journal and strategy
+    // ledger. recordStrategyOutcome de-duplicates signal IDs and uses only
+    // payout-aware stake units for the 300-outcome approval window.
+    for (const signal of completed) {
+      db.recordForwardObservation(signal);
+      db.recordStrategyOutcome(signal);
+    }
     res.json({
       evaluatedCount: db.getActiveSignals().length,
       transitionedCount: updated.length,
+      completedOutcomesRecorded: completed.length,
       signals: db.getSignals().slice(0, 50),
     });
   } catch (err: any) {

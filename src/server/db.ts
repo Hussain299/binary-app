@@ -73,15 +73,27 @@ class DatabaseService {
         // without stored untouched-test evidence; quarantine all such legacy candidates.
         if (Array.isArray(parsed.synthesizedStrategies)) {
           parsed.synthesizedStrategies = parsed.synthesizedStrategies.map((gene: any) => {
-            if (!gene.backtestMetrics || !gene.accuracyStatus) {
+            if (!gene.backtestMetrics || !gene.accuracyStatus ||
+                gene.backtestMetrics.testScoredSampleSize < 300 ||
+                gene.backtestMetrics.validationScoredSampleSize < 150 ||
+                gene.backtestMetrics.testWinRate < 0.70 ||
+                gene.backtestMetrics.validationWinRate < 0.70 ||
+                !Array.isArray(gene.backtestMetrics.testBlockWinRates) ||
+                gene.backtestMetrics.testBlockWinRates.length !== 3 ||
+                gene.backtestMetrics.testBlockWinRates.some((rate: number) => rate < 0.70)) {
               return {
                 ...gene,
                 verifiedAccuracy: 0,
                 sampleCount: 0,
                 accuracyStatus: 'UNVALIDATED',
                 backtestMetrics: undefined,
+                paperMetrics: undefined,
                 status: 'EXPERIMENTING',
               };
+            }
+            // Older approval records may predate the stricter forward 300-trade gate.
+            if (gene.status === 'PROMOTED_ACTIVE' && !this.hasForwardApprovalEvidence(gene)) {
+              return { ...gene, status: 'PAPER_TRADING' };
             }
             return gene;
           });
@@ -446,6 +458,7 @@ class DatabaseService {
    */
   public recordForwardObservation(sig: ResearchSignal): ResearchExperiment {
     const netPips = sig.netReturnPips ?? 0;
+    const netReturnUnits = sig.netReturnUnits ?? 0;
     const sessionName = sig.marketSessionName || 'Market Session';
     const strategyName = sig.strategyName || 'Algorithmic Strategy';
 
@@ -454,6 +467,8 @@ class DatabaseService {
       experimentType: 'FORWARD_OBSERVATION',
       liveOutcome: sig.outcomeResult === 'CANCELLED' || sig.outcomeResult === 'PENDING' ? 'SCRATCH' : sig.outcomeResult,
       observedNetPips: netPips,
+      observedNetReturnUnits: netReturnUnits,
+      observedPayoutPct: sig.payoutPct ?? 0,
       generation: this.state.generations.length + 1,
       name: `Forward Signal Outcome: ${sig.symbol} ${sig.direction} (${sessionName})`,
       symbol: sig.symbol,
@@ -467,6 +482,8 @@ class DatabaseService {
         marketSession: sig.marketSession || 'ASIA',
         confluenceScore: sig.confluenceScore ?? 0,
         observedNetPips: netPips,
+        observedNetReturnUnits: netReturnUnits,
+        observedPayoutPct: sig.payoutPct ?? 0,
         observedOutcome: sig.outcomeResult,
         isStackedStrategy: sig.isStackedStrategy ? 'true' : 'false',
       },
@@ -505,9 +522,9 @@ class DatabaseService {
         end: sig.actualExitTimeUtc || sig.predictionTimeUtc,
       },
       purgedWindowCandles: 0,
-      scientistHypothesis: `Forward observation for ${strategyName} during ${sessionName}. One trade is recorded as an outcome only; it is not evidence of a repeatable statistical edge.`,
-      scientistDisproofCondition: `No strategy-level conclusion can be drawn from one trade. Recorded outcome: ${sig.outcomeResult}; net result: ${netPips > 0 ? '+' : ''}${netPips} pips.`,
-      engineerConfigNotes: `Feed-based paper entry/exit estimate using ${sig.entrySource || 'market data'}. Entry: ${sig.actualEntryPrice}, Exit: ${sig.actualExitPrice}, Duration: ${sig.expiryMinutes}m; no broker fill is asserted.`,
+      scientistHypothesis: `Forward observation for ${strategyName} during ${sessionName}. One contract outcome is recorded at a binary payout of ${sig.payoutPct ?? 'unknown'}%; it is not evidence of a repeatable statistical edge.`,
+      scientistDisproofCondition: `No strategy-level conclusion can be drawn from one trade. Recorded binary outcome: ${sig.outcomeResult}; net return: ${netReturnUnits.toFixed(2)} stake units at ${sig.payoutPct ?? 'unknown'}% payout.`,
+      engineerConfigNotes: `Candle-based paper settlement using ${sig.entrySource || 'market data'}. Entry: ${sig.actualEntryPrice}, expiry: ${sig.actualExitPrice}, duration: ${sig.expiryMinutes}m, payout: ${sig.payoutPct ?? 'unknown'}% (${sig.payoutSource ?? 'unspecified'}); no broker fill is asserted.`,
       auditorVerdict: 'PROVISIONAL',
       auditorConcerns: ['Single forward trade recorded for outcome tracking only. This observation does not validate or reject a strategy.'],
       createdAt: new Date().toISOString(),
@@ -610,8 +627,8 @@ class DatabaseService {
   public addSynthesizedStrategy(gene: SynthesizedStrategyGene) {
     if (!this.state.synthesizedStrategies) this.state.synthesizedStrategies = [];
     this.state.synthesizedStrategies.unshift(gene);
-    if (this.state.synthesizedStrategies.length > 200) {
-      this.state.synthesizedStrategies = this.state.synthesizedStrategies.slice(0, 200);
+    if (this.state.synthesizedStrategies.length > 1000) {
+      this.state.synthesizedStrategies = this.state.synthesizedStrategies.slice(0, 1000);
     }
     this.scheduleSave();
   }
@@ -620,23 +637,53 @@ class DatabaseService {
     return this.state.synthesizedStrategies || [];
   }
 
+  private hasHistoricalApprovalEvidence(gene: SynthesizedStrategyGene): boolean {
+    const metrics = gene.backtestMetrics;
+    return !!metrics &&
+      gene.accuracyStatus === 'BACKTESTED' &&
+      gene.sampleCount >= 300 &&
+      metrics.testScoredSampleSize >= 300 &&
+      metrics.trainScoredSampleSize >= 150 &&
+      metrics.validationScoredSampleSize >= 150 &&
+      metrics.testWinRate >= 0.70 &&
+      metrics.validationWinRate >= 0.70 &&
+      metrics.testBlockWinRates?.length === 3 &&
+      metrics.testBlockWinRates.every(rate => rate >= 0.70) &&
+      metrics.binaryPayoutPct >= 80 &&
+      metrics.expectedValueUnits > 0 &&
+      metrics.profitFactor >= 1.15 &&
+      metrics.confidenceInterval95[0] >= 0.60;
+  }
+
+  private hasForwardApprovalEvidence(gene: SynthesizedStrategyGene): boolean {
+    const metrics = gene.paperMetrics;
+    return !!metrics &&
+      metrics.trades >= 300 &&
+      metrics.scoredTrades >= 300 &&
+      metrics.winRate >= 0.70 &&
+      Array.isArray(metrics.rollingWinRates) &&
+      metrics.rollingWinRates.length === 3 &&
+      metrics.rollingWinRates.every(rate => rate >= 0.70) &&
+      metrics.minimumPayoutPct >= 80 &&
+      metrics.netReturnUnits > 0 &&
+      metrics.profitFactor >= 1.15 &&
+      metrics.confidenceInterval95[0] >= 0.60;
+  }
+
   public getPromotedActiveStrategies(): SynthesizedStrategyGene[] {
-    return (this.state.synthesizedStrategies || []).filter(
-      s => s.status === 'PROMOTED_ACTIVE' &&
-        s.accuracyStatus === 'BACKTESTED' &&
-        !!s.backtestMetrics &&
-        s.sampleCount >= 200 &&
-        !!s.paperMetrics &&
-        s.paperMetrics.trades >= 200
+    return (this.state.synthesizedStrategies || []).filter(gene =>
+      gene.status === 'PROMOTED_ACTIVE' &&
+      this.hasHistoricalApprovalEvidence(gene) &&
+      this.hasForwardApprovalEvidence(gene)
     );
   }
 
   public getPaperTradingStrategies(): SynthesizedStrategyGene[] {
-    return (this.state.synthesizedStrategies || []).filter(
-      s => (s.status === 'PAPER_TRADING' || s.status === 'PROMOTED_ACTIVE') &&
-        s.accuracyStatus === 'BACKTESTED' &&
-        !!s.backtestMetrics &&
-        s.sampleCount >= 200
+    return (this.state.synthesizedStrategies || []).filter(gene =>
+      (gene.status === 'PAPER_TRADING' && this.hasHistoricalApprovalEvidence(gene)) ||
+      (gene.status === 'PROMOTED_ACTIVE' &&
+        this.hasHistoricalApprovalEvidence(gene) &&
+        this.hasForwardApprovalEvidence(gene))
     );
   }
 
@@ -657,67 +704,125 @@ class DatabaseService {
     if (!this.state.strategyPerformance) this.state.strategyPerformance = {};
     const existing = this.state.strategyPerformance[strategyId] || {
       strategyId, trades: 0, wins: 0, losses: 0, scratches: 0,
-      netPips: 0, positivePips: 0, negativePips: 0, updatedAt: new Date().toISOString(),
+      netPips: 0, positivePips: 0, negativePips: 0,
+      netReturnUnits: 0, positiveReturnUnits: 0, negativeReturnUnits: 0,
+      binaryTrades: 0, binaryWins: 0, binaryLosses: 0, binaryPushes: 0,
+      minimumPayoutPct: 100,
+      scoredOutcomes: [], signalIds: [], updatedAt: new Date().toISOString(),
     };
-    // Backfill fields for records created before gross contribution tracking existed.
-    if (!Number.isFinite(existing.positivePips)) existing.positivePips = 0;
-    if (!Number.isFinite(existing.negativePips)) existing.negativePips = 0;
+    existing.scoredOutcomes = Array.isArray(existing.scoredOutcomes)
+      ? existing.scoredOutcomes.filter(outcome =>
+          (outcome.result === 'WIN' || outcome.result === 'LOSS') &&
+          Number.isFinite(outcome.netReturnUnits) &&
+          Number.isFinite(outcome.payoutPct)
+        )
+      : [];
+    existing.signalIds = Array.isArray(existing.signalIds) ? existing.signalIds : [];
+    existing.binaryTrades = Number.isFinite(existing.binaryTrades) ? existing.binaryTrades! : 0;
+    existing.binaryWins = Number.isFinite(existing.binaryWins) ? existing.binaryWins! : 0;
+    existing.binaryLosses = Number.isFinite(existing.binaryLosses) ? existing.binaryLosses! : 0;
+    existing.binaryPushes = Number.isFinite(existing.binaryPushes) ? existing.binaryPushes! : 0;
+    existing.netReturnUnits = Number.isFinite(existing.netReturnUnits) ? existing.netReturnUnits! : 0;
+    existing.positiveReturnUnits = Number.isFinite(existing.positiveReturnUnits) ? existing.positiveReturnUnits! : 0;
+    existing.negativeReturnUnits = Number.isFinite(existing.negativeReturnUnits) ? existing.negativeReturnUnits! : 0;
+    existing.minimumPayoutPct = Number.isFinite(existing.minimumPayoutPct) ? existing.minimumPayoutPct! : 100;
+
+    // Only settled binary outcomes count. Legacy pip-only observations are not
+    // eligible for the new payout-aware forward approval gate.
+    if (!['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult) ||
+        !Number.isFinite(signal.netReturnUnits) ||
+        !Number.isFinite(signal.payoutPct)) {
+      return { ...existing };
+    }
+
+    // A duplicate lifecycle update must never inflate the trade sample.
+    if (existing.signalIds.includes(signal.id)) return { ...existing };
+    existing.signalIds.push(signal.id);
+    if (existing.signalIds.length > 600) existing.signalIds = existing.signalIds.slice(-600);
+
+    const payoutPct = signal.payoutPct!;
+    const netUnits = signal.netReturnUnits!;
+    existing.binaryTrades += 1;
     existing.trades += 1;
-    const netPips = signal.netReturnPips || 0;
+    existing.minimumPayoutPct = Math.min(existing.minimumPayoutPct, payoutPct);
+    existing.netReturnUnits = Number((existing.netReturnUnits + netUnits).toFixed(4));
     if (signal.outcomeResult === 'WIN') {
+      existing.binaryWins += 1;
       existing.wins += 1;
-      existing.positivePips = Number((existing.positivePips + Math.max(0, netPips)).toFixed(1));
+      existing.positiveReturnUnits = Number((existing.positiveReturnUnits + Math.max(0, netUnits)).toFixed(4));
+      existing.scoredOutcomes.push({ result: 'WIN', netReturnUnits: netUnits, payoutPct });
     } else if (signal.outcomeResult === 'LOSS') {
+      existing.binaryLosses += 1;
       existing.losses += 1;
-      existing.negativePips = Number((existing.negativePips + Math.abs(Math.min(0, netPips))).toFixed(1));
-    } else existing.scratches += 1;
-    existing.netPips = Number((existing.netPips + netPips).toFixed(1));
+      existing.negativeReturnUnits = Number((existing.negativeReturnUnits + Math.abs(Math.min(0, netUnits))).toFixed(4));
+      existing.scoredOutcomes.push({ result: 'LOSS', netReturnUnits: netUnits, payoutPct });
+    } else {
+      existing.binaryPushes += 1;
+      existing.scratches += 1;
+    }
+
+    // Store only the newest 300 decisive outcomes for the approval window.
+    if (existing.scoredOutcomes.length > 300) {
+      existing.scoredOutcomes = existing.scoredOutcomes.slice(-300);
+    }
     existing.updatedAt = new Date().toISOString();
     this.state.strategyPerformance[strategyId] = existing;
 
-    // A strategy that passed historical testing enters paper trading only. It must
-    // earn a large independent forward sample before the promoted/approved state.
     const gene = this.getSynthesizedStrategyById(strategyId);
     if (gene && gene.status !== 'REJECTED') {
-      const scoredTrades = existing.wins + existing.losses;
-      const paperWinRate = scoredTrades > 0 ? existing.wins / scoredTrades : 0;
-      const profitFactor = existing.negativePips > 0
-        ? existing.positivePips / existing.negativePips
-        : (existing.positivePips > 0 ? 99 : 0);
+      const recent = existing.scoredOutcomes;
+      const recentWins = recent.filter(outcome => outcome.result === 'WIN').length;
+      const recentRate = recent.length ? recentWins / recent.length : 0;
+      const rollingWinRates = recent.length === 300
+        ? [0, 1, 2].map(block =>
+            recent.slice(block * 100, (block + 1) * 100)
+              .filter(outcome => outcome.result === 'WIN').length / 100
+          )
+        : [];
+      const recentNetUnits = recent.reduce((sum, outcome) => sum + outcome.netReturnUnits, 0);
+      const recentPositiveUnits = recent.reduce((sum, outcome) => sum + Math.max(0, outcome.netReturnUnits), 0);
+      const recentNegativeUnits = recent.reduce((sum, outcome) => sum + Math.abs(Math.min(0, outcome.netReturnUnits)), 0);
+      const recentProfitFactor = recentNegativeUnits > 0
+        ? recentPositiveUnits / recentNegativeUnits
+        : (recentPositiveUnits > 0 ? 99 : 0);
       const z = 1.96;
-      const denominator = 1 + (z * z) / Math.max(1, scoredTrades);
-      const center = (paperWinRate + (z * z) / (2 * Math.max(1, scoredTrades))) / denominator;
+      const n = Math.max(1, recent.length);
+      const denominator = 1 + (z * z) / n;
+      const center = (recentRate + (z * z) / (2 * n)) / denominator;
       const margin = z * Math.sqrt(
-        (paperWinRate * (1 - paperWinRate)) / Math.max(1, scoredTrades) +
-        (z * z) / (4 * Math.max(1, scoredTrades * scoredTrades))
+        (recentRate * (1 - recentRate)) / n +
+        (z * z) / (4 * n * n)
       ) / denominator;
       const interval: [number, number] = [
         Math.max(0, Number((center - margin).toFixed(4))),
         Math.min(1, Number((center + margin).toFixed(4))),
       ];
+      const lifetimeScored = existing.binaryWins + existing.binaryLosses;
       gene.paperMetrics = {
-        trades: existing.trades,
-        scoredTrades,
-        wins: existing.wins,
-        losses: existing.losses,
-        scratches: existing.scratches,
-        winRate: Number(paperWinRate.toFixed(4)),
-        netPips: existing.netPips,
-        profitFactor: Number(profitFactor.toFixed(2)),
+        trades: existing.binaryTrades,
+        scoredTrades: recent.length,
+        wins: recentWins,
+        losses: recent.length - recentWins,
+        scratches: existing.binaryPushes,
+        winRate: Number(recentRate.toFixed(4)),
+        allTimeWinRate: lifetimeScored ? Number((existing.binaryWins / lifetimeScored).toFixed(4)) : 0,
+        rollingWinRates: rollingWinRates.map(rate => Number(rate.toFixed(4))),
+        netReturnUnits: Number(recentNetUnits.toFixed(4)),
+        minimumPayoutPct: existing.minimumPayoutPct,
+        netPips: 0,
+        profitFactor: Number(recentProfitFactor.toFixed(2)),
         confidenceInterval95: interval,
       };
 
-      if (
-        gene.status === 'PAPER_TRADING' &&
-        scoredTrades >= 200 &&
-        paperWinRate >= 0.55 &&
-        existing.netPips > 0 &&
-        profitFactor >= 1.15 &&
-        interval[0] > 0.50
-      ) {
+      const forwardPassed =
+        this.hasHistoricalApprovalEvidence(gene) &&
+        this.hasForwardApprovalEvidence(gene);
+
+      if (gene.status === 'PAPER_TRADING' && forwardPassed) {
         gene.status = 'PROMOTED_ACTIVE';
-      } else if (gene.status === 'PAPER_TRADING' && scoredTrades >= 300) {
-        gene.status = 'REJECTED';
+      } else if (gene.status === 'PROMOTED_ACTIVE' && !forwardPassed) {
+        // Approved status is lost when the latest binary 300-outcome window fails.
+        gene.status = 'PAPER_TRADING';
       }
       const geneIndex = (this.state.synthesizedStrategies || []).findIndex(item => item.id === gene.id);
       if (geneIndex >= 0) this.state.synthesizedStrategies[geneIndex] = gene;

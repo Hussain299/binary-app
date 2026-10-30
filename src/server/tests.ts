@@ -9,6 +9,7 @@ import { dataFeedEngine } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
+import { calculateBinarySettlement } from './binarySettlement.js';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -54,6 +55,25 @@ export async function runAllVerificationTests(): Promise<{
       });
     }
   };
+
+  await runTest('DATA', 'Binary payout settlement (win, loss, push and payout floor)', () => {
+    const win = calculateBinarySettlement('BUY', 1.10000, 1.10010, 80);
+    if (win.outcome !== 'WIN' || win.netReturnUnits !== 0.8) {
+      throw new Error('A winning binary contract must return +0.80 stake units at an 80% payout.');
+    }
+    const loss = calculateBinarySettlement('BUY', 1.10010, 1.10000, 80);
+    if (loss.outcome !== 'LOSS' || loss.netReturnUnits !== -1) {
+      throw new Error('A losing binary contract must return -1.00 stake units.');
+    }
+    const push = calculateBinarySettlement('SELL', 1.10000, 1.10000, 80);
+    if (push.outcome !== 'SCRATCH' || push.netReturnUnits !== 0) {
+      throw new Error('An exact strike tie must be recorded as a zero-return push.');
+    }
+    const lowPayout = calculateBinarySettlement('BUY', 1.1, 1.1001, 75);
+    if (lowPayout.netReturnUnits !== 0.75) {
+      throw new Error('Observed payout must be reflected exactly in the binary return.');
+    }
+  });
 
   // ==========================================
   // 1. DATA TESTS
@@ -212,6 +232,58 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
+  await runTest('ENTRY_EXIT', 'Missing binary expiry candle is not replaced by a later candle', () => {
+    const baseTime = 1793282400000;
+    const signalCandle: Candle = {
+      symbol: 'EUR/USD',
+      timestamp: new Date(baseTime).toISOString(),
+      timestampMs: baseTime,
+      open: 1.085,
+      high: 1.086,
+      low: 1.084,
+      close: 1.0858,
+      volume: 120,
+      source: 'test_fixture',
+    };
+    const signal = entryExitEngine.createResearchSignal({
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      signalCandle,
+      ruleFamily: `test_missing_expiry_${Date.now()}`,
+      expiryMinutes: 10,
+      confidence: 0.7,
+      modelVersion: 'vTest',
+    });
+    const entryCandle: Candle = {
+      ...signalCandle,
+      timestamp: new Date(baseTime + 60_000).toISOString(),
+      timestampMs: baseTime + 60_000,
+      open: 1.0859,
+      high: 1.0868,
+      low: 1.0855,
+      close: 1.0865,
+    };
+    const laterCandle: Candle = {
+      ...entryCandle,
+      timestamp: new Date(baseTime + 12 * 60_000).toISOString(),
+      timestampMs: baseTime + 12 * 60_000,
+      open: 1.0865,
+      high: 1.0870,
+      low: 1.0860,
+      close: 1.0867,
+    };
+
+    entryExitEngine.evaluateSignals({ 'EUR/USD': [signalCandle, entryCandle] } as any, true);
+    entryExitEngine.evaluateSignals({ 'EUR/USD': [signalCandle, entryCandle, laterCandle] } as any, true);
+    const settled = db.getSignalById(signal.id);
+    if (!settled || settled.lifecycleState !== 'EXPIRED' || settled.outcomeResult !== 'CANCELLED') {
+      throw new Error(`A missing exact expiry candle must expire unscored, got ${settled?.lifecycleState}/${settled?.outcomeResult}.`);
+    }
+    if (settled.netReturnUnits !== null) {
+      throw new Error('A later candle must never be used to fabricate a binary settlement.');
+    }
+  });
+
   await runTest('ENTRY_EXIT', 'Ambiguous Candle Ordering Detection', () => {
     const baseTime = 1793282500000;
     const signalCandle: Candle = {
@@ -263,7 +335,7 @@ export async function runAllVerificationTests(): Promise<{
   // 3. ML & RESEARCH PIPELINE TESTS
   // ==========================================
   await runTest('ML', 'Purged Walk-Forward Splits & Embargo Verification', () => {
-    const candles = makeM1TestCandles('EUR/USD', 4000);
+    const candles = makeM1TestCandles('EUR/USD', 12000);
     const exp = researchEngine.runWalkForwardExperiment('EUR/USD', candles, 'momentum_5', 10, 1, { allowTestFixtures: true });
 
     if (exp.purgedWindowCandles < 10) {
@@ -297,16 +369,36 @@ export async function runAllVerificationTests(): Promise<{
   await runTest('RESEARCH', 'Generated strategy remains unvalidated until historical testing', () => {
     const candles = dataFeedEngine.generateRealisticHistoricalCandles('EUR/USD', 100);
     const gene = researchEngine.synthesizeInfiniteNovelStrategy(candles, 'EUR/USD', 99);
+    if (!gene.genome || gene.genome.version !== 1 || !gene.genome.signature || gene.genome.complexity < 1) {
+      throw new Error('Generated candidate must contain a persisted executable symbolic genome.');
+    }
     if (gene.verifiedAccuracy !== 0 || gene.sampleCount !== 0) {
       throw new Error('New candidate must not contain a fabricated accuracy or sample count.');
     }
     if (gene.status !== 'EXPERIMENTING' || gene.accuracyStatus !== 'UNVALIDATED') {
       throw new Error('New candidate must remain unvalidated and out of the promoted pool.');
     }
+    const closes = candles.map(candle => candle.close);
+    const evaluated = researchEngine.evaluateSynthesizedGeneSignal(
+      gene,
+      candles[99],
+      candles[98],
+      closes,
+      closes,
+      closes,
+      closes.map(() => 50),
+      99
+    );
+    if (!Number.isFinite(evaluated.conviction) || !['BUY', 'SELL'].includes(evaluated.direction)) {
+      throw new Error('The saved symbolic genome must be executable by the live evaluator.');
+    }
+    if (!evaluated.rationale.includes('Symbolic genome score')) {
+      throw new Error('The candidate was not evaluated through its symbolic genome.');
+    }
   });
 
   await runTest('ML', 'Probabilistic Calibration & Brier Score Calculation', () => {
-    const candles = makeM1TestCandles('USD/JPY', 4000);
+    const candles = makeM1TestCandles('USD/JPY', 12000);
     const exp = researchEngine.runWalkForwardExperiment(
       'USD/JPY',
       candles,
@@ -325,7 +417,7 @@ export async function runAllVerificationTests(): Promise<{
   });
 
   await runTest('RESEARCH', 'Skeptical Auditor Rejection of Overfitted Candidates', async () => {
-    const candles = makeM1TestCandles('EUR/GBP', 4000);
+    const candles = makeM1TestCandles('EUR/GBP', 12000);
     const exp = researchEngine.runWalkForwardExperiment('EUR/GBP', candles, 'wick_reversal', 15, 1, { allowTestFixtures: true });
     const reviews = await researchEngine.generateTrinityReviews(exp);
 

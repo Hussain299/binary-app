@@ -163,6 +163,11 @@ export interface ResearchSignal {
   grossReturnPips: number | null;
   estimatedSpreadPips: number;
   netReturnPips: number | null;
+  /** Assumed or observed binary-option payout at entry; recorded with each outcome. */
+  payoutPct?: number;
+  payoutSource?: 'ASSUMED_MINIMUM' | 'BROKER_OBSERVED';
+  /** Binary-option profit/loss in stake units: +payout on win, -1 on loss, 0 on push. */
+  netReturnUnits?: number | null;
   outcomeResult: 'WIN' | 'LOSS' | 'SCRATCH' | 'PENDING' | 'CANCELLED';
   
   // Model Meta & 5-Minute Candle Synchronization
@@ -173,7 +178,7 @@ export interface ResearchSignal {
   /** Measured historical test win rate only; undefined means not validated. */
   strategyWinRate?: number;
   strategyHistoricalSampleSize?: number;
-  strategyEvidenceStatus?: 'UNVALIDATED' | 'BACKTESTED';
+  strategyEvidenceStatus?: 'UNVALIDATED' | 'INSUFFICIENT_SAMPLE' | 'BACKTESTED';
   strategyId?: string;
   advanceNoticeMinutes?: number;
   candleOpenTimeUtc?: string;
@@ -189,6 +194,8 @@ export interface ResearchSignal {
   synthesizedGeneId?: string;
   mathematicalFormula?: string;
   whyHumansMissThis?: string;
+  /** True when this is an internal forward-paper observation, not an approved actionable alert. */
+  paperOnly?: boolean;
   lossAutopsy?: LossAutopsy;
 }
 
@@ -220,6 +227,39 @@ export interface LossAutopsy {
   timestamp: string;
 }
 
+export type StrategyFeatureName =
+  | 'return_1' | 'return_3' | 'return_5' | 'return_13'
+  | 'body_direction' | 'body_ratio' | 'wick_imbalance' | 'close_location'
+  | 'ema_spread' | 'ema_curvature' | 'rsi_centered' | 'rsi_momentum'
+  | 'range_position_13' | 'range_position_34' | 'volatility_ratio'
+  | 'directional_efficiency' | 'return_autocorrelation'
+  | 'wick_pressure_change' | 'range_expansion';
+
+export type StrategyExpressionNode =
+  | { kind: 'feature'; feature: StrategyFeatureName }
+  | { kind: 'constant'; value: number }
+  | { kind: 'unary'; operator: 'tanh' | 'abs' | 'signed_power' | 'log_abs' | 'sin' | 'cos' | 'sqrt_abs' | 'negate'; exponent: number; input: StrategyExpressionNode }
+  | { kind: 'binary'; operator: 'add' | 'subtract' | 'multiply' | 'protected_divide' | 'max' | 'min' | 'hypot' | 'atan2'; left: StrategyExpressionNode; right: StrategyExpressionNode };
+
+export interface StrategyGenome {
+  version: 1;
+  expression: StrategyExpressionNode;
+  activationThreshold: number;
+  signature: string;
+  complexity: number;
+}
+
+export interface StrategyDiscoveryMetrics {
+  trainScoredTrades: number;
+  validationScoredTrades: number;
+  trainWinRate: number;
+  validationWinRate: number;
+  /** Validation expectancy in stake units per contract at the recorded binary payout. */
+  validationExpectedValueUnits: number;
+  validationProfitFactor: number;
+  minimumPayoutPct?: number;
+}
+
 export interface StrategyBacktestMetrics {
   trainSampleSize: number;
   trainScoredSampleSize: number;
@@ -233,9 +273,15 @@ export interface StrategyBacktestMetrics {
   testScoredSampleSize: number;
   testWins: number;
   testLosses: number;
-  expectedValuePips: number;
+  /** Historical binary payout used by the backtest (80% conservative floor). */
+  binaryPayoutPct: number;
+  excludedZeroVolumeFlatCandles: number;
+  /** Net profit/loss in stake units per contract, after binary settlement. */
+  expectedValueUnits: number;
   profitFactor: number;
   confidenceInterval95: [number, number];
+  /** Win rates for the latest three consecutive 100-trade blocks in the untouched test. */
+  testBlockWinRates: number[];
   trainPeriod: { start: string; end: string };
   validationPeriod: { start: string; end: string };
   testPeriod: { start: string; end: string };
@@ -247,9 +293,23 @@ export interface StrategyPerformanceRecord {
   wins: number;
   losses: number;
   scratches: number;
+  /** Legacy pip fields retained for reading earlier research snapshots; never used for binary approval. */
   netPips: number;
   positivePips: number;
   negativePips: number;
+  /** Binary contract return units accumulated from outcomes collected under the new settlement model. */
+  netReturnUnits?: number;
+  positiveReturnUnits?: number;
+  binaryTrades?: number;
+  binaryWins?: number;
+  binaryLosses?: number;
+  binaryPushes?: number;
+  minimumPayoutPct?: number;
+  negativeReturnUnits?: number;
+  /** Recent unique completed outcomes used to calculate a rolling 300-trade approval window. */
+  scoredOutcomes?: Array<{ result: 'WIN' | 'LOSS'; netReturnUnits: number; payoutPct: number }>;
+  /** Recent signal IDs prevent the same outcome from being counted more than once. */
+  signalIds?: string[];
   updatedAt: string;
 }
 
@@ -259,7 +319,15 @@ export interface StrategyPaperMetrics {
   wins: number;
   losses: number;
   scratches: number;
+  /** Rolling win rate across the latest 300 scored forward outcomes once available. */
   winRate: number;
+  allTimeWinRate?: number;
+  rollingWinRates: number[];
+  /** Binary-option return in stake units over the rolling scored outcomes. */
+  netReturnUnits: number;
+  /** Lowest payout represented in the rolling 300 completed outcomes. */
+  minimumPayoutPct: number;
+  /** Legacy field retained for old clients; not used for strategy approval. */
   netPips: number;
   profitFactor: number;
   confidenceInterval95: [number, number];
@@ -276,6 +344,13 @@ export interface SynthesizedStrategyGene {
   nonLinearOperator: 'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion';
   /** The same coefficients used by the live evaluator and historical backtester. */
   operatorParameters?: { alpha: number; beta: number; gamma: number; exponent: number; threshold: number };
+  /** Executable symbolic-expression genome shared by the historical and live evaluators. */
+  genome?: StrategyGenome;
+  /** Candidate belongs to a 300-strategy search run. */
+  searchBatchId?: string;
+  validationFailureReason?: string;
+  /** Train/validation-only metrics used to select finalists before the untouched test is opened. */
+  discoveryMetrics?: StrategyDiscoveryMetrics;
   /** Currency pair used to validate this candidate against historical data. */
   symbol?: ForexSymbol;
   optimalHorizonMinutes: 5 | 10 | 15 | 20 | 25 | 30;
@@ -284,7 +359,7 @@ export interface SynthesizedStrategyGene {
   verifiedAccuracy: number;
   /** Number of out-of-sample test trades, never a generated estimate. */
   sampleCount: number;
-  accuracyStatus?: 'UNVALIDATED' | 'BACKTESTED';
+  accuracyStatus?: 'UNVALIDATED' | 'INSUFFICIENT_SAMPLE' | 'BACKTESTED';
   backtestMetrics?: StrategyBacktestMetrics;
   paperMetrics?: StrategyPaperMetrics;
   forwardPerformance?: StrategyPerformanceRecord;
@@ -335,6 +410,9 @@ export interface ResearchExperiment {
   liveOutcome?: 'WIN' | 'LOSS' | 'SCRATCH';
   /** One forward observation's actual net result; not a model expected value. */
   observedNetPips?: number;
+  /** One forward binary contract's return in stake units; separate from forex pips. */
+  observedNetReturnUnits?: number;
+  observedPayoutPct?: number;
   generation: number;
   name: string;
   symbol: ForexSymbol;
