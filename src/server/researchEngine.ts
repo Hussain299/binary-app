@@ -735,10 +735,10 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       const denominator = Math.max(1, trades);
       return {
         trades, wins, losses, scratches,
-        winRate: wins / denominator,
+        winRate: wins / Math.max(1, wins + losses),
         netPips,
         expectedValuePips: netPips / denominator,
-        profitFactor: positivePips / Math.max(0.01, negativePips),
+        profitFactor: negativePips > 0 ? positivePips / negativePips : (positivePips > 0 ? 99 : 0),
       };
     };
 
@@ -777,9 +777,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       expectedValuePips: Number(test.expectedValuePips.toFixed(2)),
       profitFactor: Number(test.profitFactor.toFixed(2)),
       confidenceInterval95: interval,
-      trainPeriod: { start: ordered[30].timestamp, end: ordered[trainEnd - 1].timestamp },
-      validationPeriod: { start: ordered[validationStart].timestamp, end: ordered[validationEnd - 1].timestamp },
-      testPeriod: { start: ordered[testStart].timestamp, end: ordered[n - 1].timestamp },
+      trainPeriod: { start: trainSet[0].candle.timestamp, end: trainSet[trainSet.length - 1].candle.timestamp },
+      validationPeriod: { start: validationSet[0].candle.timestamp, end: validationSet[validationSet.length - 1].candle.timestamp },
+      testPeriod: { start: testSet[0].candle.timestamp, end: testSet[testSet.length - 1].candle.timestamp },
     };
 
     const testScoredTrades = test.wins + test.losses;
@@ -898,7 +898,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
   }
 
   /**
-   * Evaluates live market conditions against a synthesized non-human strategy gene.
+   * Evaluates current market candles against a stored strategy candidate.
    * Computes the mathematical formula activation f(x) and yields high-conviction setup.
    */
   public evaluateSynthesizedGeneSignal(
@@ -994,11 +994,10 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
   }
 
   /**
-   * Autonomous AGI Forensic Loss Investigation & Self-Correction Engine
-   * Investigates every losing trade like a human quantitative researcher + AGI,
-   * identifies the root cause (spread friction, premature wick sweep, exhaustion divergence,
-   * session liquidity shift, or operator noise), extracts concrete algorithmic lessons,
-   * and immediately evolves an Antidote Strategy Gene to adaptively counter the failure mode.
+   * Rule-based loss-pattern diagnostics for a completed forward paper observation.
+   * The labels below are hypotheses derived from OHLC and modeled spread thresholds;
+   * they do not prove institutional activity, broker slippage or the true market cause.
+   * Any resulting filter candidate remains unvalidated until independently tested.
    */
   public conductForensicLossAutopsy(
     signal: ResearchSignal,
@@ -1020,7 +1019,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     // 1. Root Cause Autopsy & Forensic Diagnostics
     if (Math.abs(grossReturn) <= spread * 1.2) {
       rootCause = 'SPREAD_EXPANSION_SLIPPAGE';
-      explanation = `Spread friction (${spread} pips) consumed the micro-edge. The gross price movement (${grossReturn > 0 ? '+' : ''}${grossReturn} pips) was in line with expected volatility, but institutional bid-ask spread widened during execution, flipping a marginal win into a net loss.`;
+      explanation = `The modeled net result was dominated by the configured spread assumption (${spread} pips). This is a cost-sensitivity flag, not evidence that a broker spread widened or that slippage occurred.`;
       lessonsLearned = [
         `Enforce strict Dynamic Spread Gate: Reject signals when current pair spread exceeds 25% of expected ATR move.`,
         `Switch to high-liquidity session windows (London/NY Overlap) where spreads compress to sub-pip levels.`,
@@ -1031,7 +1030,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       antidoteName = `Antidote-${signal.symbol}: Dynamic Spread Damping + Harmonic Wavelet`;
     } else if (signal.direction === 'BUY' && (candle.low < (signal.actualEntryPrice || signal.triggerPrice) - 3 * pipScale)) {
       rootCause = 'MICRO_WICK_FALSE_ABSORPTION';
-      explanation = `Premature wick absorption trap. The initial lower wick appeared to absorb selling pressure, but institutional algorithmic stop-runs penetrated below the swing low before directional expansion occurred.`;
+      explanation = `A rule-based adverse-wick pattern was observed: price moved below the reference level by the configured threshold. OHLC candles cannot establish that stop-runs or institutional absorption occurred.`;
       lessonsLearned = [
         `Increase polynomial wick exponent from 1.85 to 2.30 to demand deeper liquidity absorption verification.`,
         `Incorporate sub-tick volume delta confirmation: verify tick volume expands on the rejection wick.`,
@@ -1042,7 +1041,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       antidoteName = `Antidote-${signal.symbol}: Deep Wick Exponent + Polynomial Saturation`;
     } else if (signal.direction === 'SELL' && (candle.high > (signal.actualEntryPrice || signal.triggerPrice) + 3 * pipScale)) {
       rootCause = 'MICRO_WICK_FALSE_ABSORPTION';
-      explanation = `Upper liquidity sweep failure. Price temporarily penetrated the 20-bar high, triggering our PUT setup, but market makers absorbed short liquidity and forced a secondary squeeze.`;
+      explanation = `A rule-based adverse-wick pattern was observed: price moved above the reference level by the configured threshold. OHLC candles cannot establish market-maker activity or a liquidity sweep.`;
       lessonsLearned = [
         `Increase upper wick threshold to >55% of candle range before considering bearish liquidity sweeps.`,
         `Enforce second-derivative RSI deceleration: confirm momentum has stalled before fading the high.`,
@@ -1053,7 +1052,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       antidoteName = `Antidote-${signal.symbol}: Upper Squeeze Neutralizer + RSI Curvature`;
     } else if ((signal.expiryMinutes || 5) >= 15) {
       rootCause = 'SESSION_BOUNDARY_LIQUIDITY_VACUUM';
-      explanation = `Time-horizon decay over extended duration (${signal.expiryMinutes}m). The initial 5-minute directional momentum was valid, but during minutes 10–${signal.expiryMinutes}, session participant turnover introduced order-flow drift that reversed price.`;
+      explanation = `The modeled outcome reversed over the selected ${signal.expiryMinutes}-minute horizon. The session-liquidity explanation is a hypothesis, not a verified cause.`;
       lessonsLearned = [
         `Dynamically compress expiry duration from ${signal.expiryMinutes}m to 5m/10m when trading in transition windows.`,
         `Evaluate session turnover timer: reject >15m expiries within 30 minutes of London or New York close.`,
@@ -1064,7 +1063,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       antidoteName = `Antidote-${signal.symbol}: Dynamic Expiry Compression + Wave Curvature`;
     } else {
       rootCause = 'MOMENTUM_EXHAUSTION_DIVERGENCE';
-      explanation = `Momentum collapsed rapidly within 120 seconds of candle open. The setup candle had strong directional bias, but volume evaporated immediately upon the next candle opening, causing mean reversion.`;
+      explanation = `The forward paper outcome moved against the predicted direction inside the selected horizon. This rule-based label does not establish a volume or order-flow cause.`;
       lessonsLearned = [
         `Filter out low-volume continuation setups where setup candle volume was < 80% of 20-period average.`,
         `Require second-derivative EMA acceleration confirmation (d²E/dt² > 0) rather than simple linear slope.`,
@@ -1082,7 +1081,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       code: `ANTIDOTE_${rootCause.slice(0, 4)}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
       generation: 40 + Math.floor(Math.random() * 10),
       mathematicalFormula: formula,
-      parents: [signal.strategyName || 'Baseline Strategy', `Forensic Loss Autopsy (${signal.symbol})`],
+      parents: [signal.strategyName || 'Baseline Strategy', `Rule-based Loss Pattern (${signal.symbol})`],
       mutationRate: 0.065,
       nonLinearOperator: operator,
       optimalHorizonMinutes: (signal.expiryMinutes === 5 ? 10 : 5) as any,
@@ -1091,12 +1090,12 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       sampleCount: 0,
       accuracyStatus: 'UNVALIDATED',
       status: 'EXPERIMENTING',
-      scientificHypothesis: `Autonomous adaptive counter-measure evolved directly from trade failure: ${lessonsLearned[0]}`,
-      whyHumansMissThis: `Humans repeat emotional mistakes or abandon strategies after a loss; the AGI quantifies the exact failure mode, extracts parameter corrections, and synthesizes a mathematical antidote.`,
+      scientificHypothesis: `Unvalidated filter hypothesis generated from a rule-based loss tag: ${lessonsLearned[0]}`,
+      whyHumansMissThis: `This filter hypothesis was generated from a rule-based outcome label. It has no measured predictive accuracy until separately validated on untouched historical data and forward paper outcomes.`,
       createdAt: new Date().toISOString(),
     };
 
-    // Promote the newly evolved antidote strategy into the genetic pool
+    // Store the unvalidated filter hypothesis for later research; it is not eligible for signal generation.
     db.addSynthesizedStrategy(antidoteGene);
 
     const autopsy: LossAutopsy = {
