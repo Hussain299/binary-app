@@ -151,6 +151,7 @@ apiRouter.get('/strategies/synthesized', (_req: Request, res: Response) => {
       livePerformance: db.getStrategyPerformance().find(p => p.strategyId === gene.id) || null,
     })),
     promotedCount: promoted.length,
+    paperTradingCount: db.getPaperTradingStrategies().filter(gene => gene.status === 'PAPER_TRADING').length,
     totalCount: all.length,
     generationsCount: db.getGenerations().length,
   });
@@ -206,6 +207,7 @@ apiRouter.post('/strategies/evolve', async (_req: Request, res: Response) => {
       gene: newGene,
       strategies: db.getSynthesizedStrategies(),
       promotedCount: db.getPromotedActiveStrategies().length,
+      paperTradingCount: db.getPaperTradingStrategies().filter(gene => gene.status === 'PAPER_TRADING').length,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
