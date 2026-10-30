@@ -23,6 +23,7 @@ interface StrategySearchJob {
   passedHistorical: number;
   insufficientSample: number;
   rejected: number;
+  replicationFinalists: number;
   approvedCount: number;
   startedAt: string;
   finishedAt?: string;
@@ -35,6 +36,9 @@ interface StrategySearchJob {
     testWinRate: number;
     testScoredTrades: number;
     validationWinRate: number;
+    validationExpectedValuePips: number;
+    testExpectedValuePips: number;
+    testedOnHoldout: boolean;
     expectedValuePips: number;
     testBlockWinRates: number[];
     reason?: string;
@@ -250,6 +254,7 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
       passedHistorical: 0,
       insufficientSample: 0,
       rejected: 0,
+      replicationFinalists: 0,
       approvedCount: db.getPromotedActiveStrategies().length,
       startedAt: new Date().toISOString(),
     };
@@ -265,6 +270,7 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
         job.passedHistorical = progress.passedHistorical;
         job.insufficientSample = progress.insufficientSample;
         job.rejected = progress.rejected;
+        job.replicationFinalists = progress.replicationFinalists;
       }
     ).then(results => {
       job.status = 'COMPLETED';
@@ -273,9 +279,10 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
       job.topCandidates = [...results]
         .sort((a, b) =>
           Number(b.status === 'PAPER_TRADING') - Number(a.status === 'PAPER_TRADING') ||
-          Number((b.backtestMetrics?.testScoredSampleSize ?? 0) >= 300) - Number((a.backtestMetrics?.testScoredSampleSize ?? 0) >= 300) ||
-          (b.backtestMetrics?.testWinRate ?? 0) - (a.backtestMetrics?.testWinRate ?? 0) ||
-          (b.backtestMetrics?.expectedValuePips ?? 0) - (a.backtestMetrics?.expectedValuePips ?? 0)
+          Number(!!b.backtestMetrics) - Number(!!a.backtestMetrics) ||
+          (b.discoveryMetrics?.validationExpectedValuePips ?? b.backtestMetrics?.validationWinRate ?? 0) -
+            (a.discoveryMetrics?.validationExpectedValuePips ?? a.backtestMetrics?.validationWinRate ?? 0) ||
+          (b.discoveryMetrics?.validationWinRate ?? 0) - (a.discoveryMetrics?.validationWinRate ?? 0)
         )
         .slice(0, 10)
         .map(gene => ({
@@ -285,8 +292,11 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
           status: gene.status,
           testWinRate: gene.backtestMetrics?.testWinRate ?? 0,
           testScoredTrades: gene.backtestMetrics?.testScoredSampleSize ?? 0,
-          validationWinRate: gene.backtestMetrics?.validationWinRate ?? 0,
-          expectedValuePips: gene.backtestMetrics?.expectedValuePips ?? 0,
+          validationWinRate: gene.discoveryMetrics?.validationWinRate ?? gene.backtestMetrics?.validationWinRate ?? 0,
+          validationExpectedValuePips: gene.discoveryMetrics?.validationExpectedValuePips ?? 0,
+          testExpectedValuePips: gene.backtestMetrics?.expectedValuePips ?? 0,
+          testedOnHoldout: !!gene.backtestMetrics,
+          expectedValuePips: gene.discoveryMetrics?.validationExpectedValuePips ?? gene.backtestMetrics?.expectedValuePips ?? 0,
           testBlockWinRates: gene.backtestMetrics?.testBlockWinRates ?? [],
           reason: gene.validationFailureReason,
         }));
