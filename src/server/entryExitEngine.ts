@@ -202,7 +202,8 @@ export class EntryExitEngine {
       actualExitTimeUtc: null,
       actualExitPrice: null,
       confidence: params.confidence,
-      calibrationStatus: params.confidence > 0.82 ? 'OVERCONFIDENT' : params.confidence >= 0.58 ? 'CALIBRATED' : 'UNCALIBRATED',
+      // Confidence is currently a heuristic signal-strength score, not a calibrated probability.
+      calibrationStatus: 'UNCALIBRATED',
       lifecycleState: 'WAITING_FOR_ENTRY',
       lifecycleHistory: initialHistory,
       grossReturnPips: null,
