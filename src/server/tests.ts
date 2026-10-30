@@ -297,6 +297,9 @@ export async function runAllVerificationTests(): Promise<{
   await runTest('RESEARCH', 'Generated strategy remains unvalidated until historical testing', () => {
     const candles = dataFeedEngine.generateRealisticHistoricalCandles('EUR/USD', 100);
     const gene = researchEngine.synthesizeInfiniteNovelStrategy(candles, 'EUR/USD', 99);
+    if (!gene.genome || gene.genome.version !== 1 || !gene.genome.signature || gene.genome.complexity < 1) {
+      throw new Error('Generated candidate must contain a persisted executable symbolic genome.');
+    }
     if (gene.verifiedAccuracy !== 0 || gene.sampleCount !== 0) {
       throw new Error('New candidate must not contain a fabricated accuracy or sample count.');
     }
