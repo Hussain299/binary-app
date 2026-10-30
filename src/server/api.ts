@@ -148,7 +148,7 @@ apiRouter.get('/strategies/synthesized', (_req: Request, res: Response) => {
   res.json({
     strategies: all.map(gene => ({
       ...gene,
-      livePerformance: db.getStrategyPerformance().find(p => p.strategyId === gene.id) || null,
+      forwardPerformance: db.getStrategyPerformance().find(p => p.strategyId === gene.id) || null,
     })),
     promotedCount: promoted.length,
     paperTradingCount: db.getPaperTradingStrategies().filter(gene => gene.status === 'PAPER_TRADING').length,
@@ -281,7 +281,8 @@ apiRouter.get('/evolution/state', (_req: Request, res: Response) => {
 
   res.json({
     currentGeneration: generations.length > 0 ? generations[0].generation : 1,
-    totalExperiments: experiments.length,
+    totalExperiments: historicalExperiments.length,
+    totalForwardObservations: experiments.length - historicalExperiments.length,
     acceptedCount: accepted.length,
     rejectedCount: rejected.length,
     generations,
