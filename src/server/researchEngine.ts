@@ -254,14 +254,19 @@ export class ResearchEngine {
 
     const evaluateSet = (items: typeof dataset, threshold: number) => {
       let trades = 0, correct = 0, tp = 0, fp = 0, tn = 0, fn = 0;
-      let brierSum = 0, calibrationErrorSum = 0, totalPips = 0;
+      let brierSum = 0, totalPips = 0;
+      const calibrationBins = Array.from({ length: 10 }, () => ({ count: 0, probabilitySum: 0, actualSum: 0 }));
       let positivePips = 0, negativePips = 0, wins = 0, losses = 0, scratches = 0;
       let peakPips = 0, maxDrawdown = 0;
       for (const item of items) {
         const probability = predictProbability(item);
         const actual = item.labels[horizonMinutes];
         brierSum += Math.pow(probability - actual, 2);
-        calibrationErrorSum += Math.abs(probability - actual);
+        const calibrationBinIndex = Math.min(9, Math.floor(probability * 10));
+        const calibrationBin = calibrationBins[calibrationBinIndex];
+        calibrationBin.count++;
+        calibrationBin.probabilitySum += probability;
+        calibrationBin.actualSum += actual;
 
         // The validation-selected threshold abstains on low-conviction samples.
         let prediction: number | null = null;
@@ -288,6 +293,12 @@ export class ResearchEngine {
 
       const scoredTrades = wins + losses;
       const denominator = Math.max(1, trades);
+      const expectedCalibrationError = calibrationBins.reduce((sum, bin) => {
+        if (bin.count === 0) return sum;
+        const averageProbability = bin.probabilitySum / bin.count;
+        const observedFrequency = bin.actualSum / bin.count;
+        return sum + (bin.count / Math.max(1, items.length)) * Math.abs(averageProbability - observedFrequency);
+      }, 0);
       const sensitivity = tp / Math.max(1, tp + fn);
       const specificity = tn / Math.max(1, tn + fp);
       const precision = tp / Math.max(1, tp + fp);
@@ -299,7 +310,7 @@ export class ResearchEngine {
         balancedAccuracy: (sensitivity + specificity) / 2,
         precision, recall, f1,
         brierScore: brierSum / Math.max(1, items.length),
-        calibrationError: calibrationErrorSum / Math.max(1, items.length),
+        calibrationError: expectedCalibrationError,
         winRate: wins / Math.max(1, scoredTrades),
         expectedValuePips: totalPips / denominator,
         profitFactor: negativePips > 0 ? positivePips / negativePips : (positivePips > 0 ? 99 : 0),
