@@ -128,7 +128,7 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
                 {(exp.metrics.testAccuracy * 100).toFixed(1)}%
               </span>
               <span className="text-[10px] text-neutral-400 block mt-0.5">
-                95% CI: [{(exp.metrics.confidenceInterval95[0] * 100).toFixed(0)}%,{' '}
+                95% CI (net-positive WR): [{(exp.metrics.confidenceInterval95[0] * 100).toFixed(0)}%,{' '}
                 {(exp.metrics.confidenceInterval95[1] * 100).toFixed(0)}%]
               </span>
             </div>
@@ -174,9 +174,9 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
             <div className="bg-neutral-900/60 border border-neutral-800 rounded p-3 text-xs font-mono">
               <span className="text-neutral-500 text-[10px] block">Max Drawdown</span>
               <span className="text-lg font-bold text-rose-400 tabular-nums">
-                {exp.metrics.maxDrawdownPct}%
+                {exp.metrics.maxDrawdownPips.toFixed(1)} pips
               </span>
-              <span className="text-[10px] text-neutral-400 block mt-0.5">Peak-to-trough</span>
+              <span className="text-[10px] text-neutral-400 block mt-0.5">Net peak-to-trough</span>
             </div>
           </div>
 
@@ -187,7 +187,7 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
                 Chronological Purged Walk-Forward Partitioning
               </h4>
               <span className="text-[11px] text-emerald-400">
-                Purged Embargo: {exp.purgedWindowCandles} Candles (Zero Leakage)
+                Purged Embargo: {exp.purgedWindowCandles} M1 candles
               </span>
             </div>
 
@@ -210,6 +210,7 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
               </div>
             </div>
 
+            <p className="text-[10px] text-neutral-500">Timeline widths are schematic; exact partition sample counts are shown in each segment. Embargoes reduce overlap between forward outcome windows but do not guarantee freedom from every possible research bias.</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-neutral-400 pt-2 text-[11px]">
               <div>
                 <strong className="text-neutral-300">Scaling Isolation:</strong> Means and standard
