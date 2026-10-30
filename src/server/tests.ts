@@ -280,15 +280,18 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
-  await runTest('ML', 'Synthetic candles cannot be used for research claims', () => {
+  await runTest('ML', 'Synthetic and test-fixture candles cannot be used for research claims', () => {
     const synthetic = dataFeedEngine.generateRealisticHistoricalCandles('EUR/USD', 1500);
-    let rejected = false;
-    try {
-      researchEngine.runWalkForwardExperiment('EUR/USD', synthetic, 'momentum_5', 10, 1);
-    } catch (error: any) {
-      rejected = String(error.message).includes('Synthetic and test-fixture candles are not eligible');
+    const testFixture = makeM1TestCandles('EUR/USD', 1500);
+    for (const candles of [synthetic, testFixture]) {
+      let rejected = false;
+      try {
+        researchEngine.runWalkForwardExperiment('EUR/USD', candles, 'momentum_5', 10, 1);
+      } catch (error: any) {
+        rejected = String(error.message).includes('Synthetic and test-fixture candles are not eligible');
+      }
+      if (!rejected) throw new Error('Synthetic or test-fixture candles were not rejected by the backtest engine.');
     }
-    if (!rejected) throw new Error('Synthetic fallback candles were not rejected by the backtest engine.');
   });
 
   await runTest('RESEARCH', 'Generated strategy remains unvalidated until historical testing', () => {
