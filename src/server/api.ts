@@ -23,6 +23,7 @@ interface StrategySearchJob {
   passedHistorical: number;
   insufficientSample: number;
   rejected: number;
+  approvedCount: number;
   startedAt: string;
   finishedAt?: string;
   error?: string;
@@ -35,6 +36,7 @@ interface StrategySearchJob {
     testScoredTrades: number;
     validationWinRate: number;
     expectedValuePips: number;
+    testBlockWinRates: number[];
     reason?: string;
   }>;
 }
@@ -248,6 +250,7 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
       passedHistorical: 0,
       insufficientSample: 0,
       rejected: 0,
+      approvedCount: db.getPromotedActiveStrategies().length,
       startedAt: new Date().toISOString(),
     };
     strategySearchJobs.set(jobId, job);
@@ -266,8 +269,11 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
     ).then(results => {
       job.status = 'COMPLETED';
       job.finishedAt = new Date().toISOString();
+      job.approvedCount = db.getPromotedActiveStrategies().length;
       job.topCandidates = [...results]
         .sort((a, b) =>
+          Number(b.status === 'PAPER_TRADING') - Number(a.status === 'PAPER_TRADING') ||
+          Number((b.backtestMetrics?.testScoredSampleSize ?? 0) >= 300) - Number((a.backtestMetrics?.testScoredSampleSize ?? 0) >= 300) ||
           (b.backtestMetrics?.testWinRate ?? 0) - (a.backtestMetrics?.testWinRate ?? 0) ||
           (b.backtestMetrics?.expectedValuePips ?? 0) - (a.backtestMetrics?.expectedValuePips ?? 0)
         )
@@ -281,6 +287,7 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
           testScoredTrades: gene.backtestMetrics?.testScoredSampleSize ?? 0,
           validationWinRate: gene.backtestMetrics?.validationWinRate ?? 0,
           expectedValuePips: gene.backtestMetrics?.expectedValuePips ?? 0,
+          testBlockWinRates: gene.backtestMetrics?.testBlockWinRates ?? [],
           reason: gene.validationFailureReason,
         }));
     }).catch(error => {
