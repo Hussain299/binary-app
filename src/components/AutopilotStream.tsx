@@ -10,7 +10,7 @@ import {
   ShieldCheck,
   Radio,
 } from 'lucide-react';
-import { AutopilotLog } from '../types/index.js';
+import { AutopilotLog, FOREX_PAIRS } from '../types/index.js';
 
 interface AutopilotStreamProps {
   logs: AutopilotLog[];
@@ -70,7 +70,7 @@ export const AutopilotStream: React.FC<AutopilotStreamProps> = ({
         <div className="flex items-center gap-3 text-[11px] text-neutral-400">
           <span>Continuous Loop: <strong>20s Pulse</strong></span>
           <span>·</span>
-          <span>Sensing: <strong>20 Currency Pairs</strong></span>
+          <span>Sensing: <strong>{FOREX_PAIRS.length} Currency Pairs</strong></span>
           <span>·</span>
           <span>
             Active Signals:{' '}
@@ -83,7 +83,7 @@ export const AutopilotStream: React.FC<AutopilotStreamProps> = ({
       <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
         {logs.length === 0 ? (
           <div className="text-neutral-500 italic py-2">
-            Autonomous intelligence initializing market sense stream...
+            Research coordinator initializing market-data stream...
           </div>
         ) : (
           logs.slice(0, 6).map(log => (
