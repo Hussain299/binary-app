@@ -27,6 +27,9 @@ export interface SignalCreationParams {
   notes?: string;
   strategyName?: string;
   strategyWinRate?: number;
+  strategyHistoricalSampleSize?: number;
+  strategyEvidenceStatus?: 'UNVALIDATED' | 'BACKTESTED';
+  strategyId?: string;
   candleOpenTimeUtc?: string;
   candleCloseTimeUtc?: string;
   confluenceStrategies?: string[];
@@ -176,17 +179,8 @@ export class EntryExitEngine {
         : '30-Min Order Flow Expansion'
     );
 
-    const defaultWinRate = params.strategyWinRate || (
-      params.ruleFamily.includes('momentum')
-        ? 74.8
-        : params.ruleFamily.includes('wick')
-        ? 71.4
-        : params.ruleFamily.includes('mean_reversion')
-        ? 76.2
-        : params.ruleFamily.includes('range')
-        ? 73.5
-        : 78.0
-    );
+    // Never invent a historical win rate for a rule without measured backtest evidence.
+    const defaultWinRate = params.strategyWinRate;
 
     const signal: ResearchSignal = {
       id: `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -208,7 +202,8 @@ export class EntryExitEngine {
       actualExitTimeUtc: null,
       actualExitPrice: null,
       confidence: params.confidence,
-      calibrationStatus: params.confidence > 0.82 ? 'OVERCONFIDENT' : params.confidence >= 0.58 ? 'CALIBRATED' : 'UNCALIBRATED',
+      // Confidence is currently a heuristic signal-strength score, not a calibrated probability.
+      calibrationStatus: 'UNCALIBRATED',
       lifecycleState: 'WAITING_FOR_ENTRY',
       lifecycleHistory: initialHistory,
       grossReturnPips: null,
@@ -220,6 +215,9 @@ export class EntryExitEngine {
       notes: params.notes,
       strategyName: defaultStrategyName,
       strategyWinRate: defaultWinRate,
+      strategyHistoricalSampleSize: params.strategyHistoricalSampleSize,
+      strategyEvidenceStatus: params.strategyEvidenceStatus,
+      strategyId: params.strategyId || `rule:${params.ruleFamily}`,
       advanceNoticeMinutes: 3,
       candleOpenTimeUtc,
       candleCloseTimeUtc,

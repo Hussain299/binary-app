@@ -10,6 +10,17 @@ import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
 
+const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
+  dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
+    const timestampMs = Math.floor(c.timestampMs / 60_000) * 60_000;
+    return {
+      ...c,
+      timestampMs,
+      timestamp: new Date(timestampMs).toISOString(),
+      source: 'test_fixture' as const,
+    };
+  });
+
 export async function runAllVerificationTests(): Promise<{
   summary: { total: number; passed: number; failed: number; durationMs: number };
   results: VerificationTestResult[];
@@ -252,11 +263,14 @@ export async function runAllVerificationTests(): Promise<{
   // 3. ML & RESEARCH PIPELINE TESTS
   // ==========================================
   await runTest('ML', 'Purged Walk-Forward Splits & Embargo Verification', () => {
-    const candles = dataFeedEngine.generateRealisticHistoricalCandles('EUR/USD', 120);
-    const exp = researchEngine.runWalkForwardExperiment('EUR/USD', candles, 'momentum_5', 10, 1);
+    const candles = makeM1TestCandles('EUR/USD', 4000);
+    const exp = researchEngine.runWalkForwardExperiment('EUR/USD', candles, 'momentum_5', 10, 1, { allowTestFixtures: true });
 
-    if (exp.purgedWindowCandles !== 10) {
-      throw new Error(`Purged embargo must match 10m horizon, got ${exp.purgedWindowCandles}`);
+    if (exp.purgedWindowCandles < 10) {
+      throw new Error(`Purged embargo must cover the 10m horizon, got ${exp.purgedWindowCandles} M1 candles.`);
+    }
+    if (exp.metrics.trainSampleSize <= exp.metrics.validationSampleSize || exp.metrics.validationSampleSize <= 0) {
+      throw new Error('Training and validation sample counts are missing or incorrectly ordered.');
     }
     if (Date.parse(exp.valPeriod.start) <= Date.parse(exp.trainPeriod.end)) {
       throw new Error('Validation set must chronologically follow train set after embargo purge');
@@ -266,14 +280,40 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
+  await runTest('ML', 'Synthetic and test-fixture candles cannot be used for research claims', () => {
+    const synthetic = dataFeedEngine.generateRealisticHistoricalCandles('EUR/USD', 1500);
+    const testFixture = makeM1TestCandles('EUR/USD', 1500);
+    for (const candles of [synthetic, testFixture]) {
+      let rejected = false;
+      try {
+        researchEngine.runWalkForwardExperiment('EUR/USD', candles, 'momentum_5', 10, 1);
+      } catch (error: any) {
+        rejected = String(error.message).includes('Synthetic and test-fixture candles are not eligible');
+      }
+      if (!rejected) throw new Error('Synthetic or test-fixture candles were not rejected by the backtest engine.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Generated strategy remains unvalidated until historical testing', () => {
+    const candles = dataFeedEngine.generateRealisticHistoricalCandles('EUR/USD', 100);
+    const gene = researchEngine.synthesizeInfiniteNovelStrategy(candles, 'EUR/USD', 99);
+    if (gene.verifiedAccuracy !== 0 || gene.sampleCount !== 0) {
+      throw new Error('New candidate must not contain a fabricated accuracy or sample count.');
+    }
+    if (gene.status !== 'EXPERIMENTING' || gene.accuracyStatus !== 'UNVALIDATED') {
+      throw new Error('New candidate must remain unvalidated and out of the promoted pool.');
+    }
+  });
+
   await runTest('ML', 'Probabilistic Calibration & Brier Score Calculation', () => {
-    const candles = dataFeedEngine.generateRealisticHistoricalCandles('USD/JPY', 120);
+    const candles = makeM1TestCandles('USD/JPY', 4000);
     const exp = researchEngine.runWalkForwardExperiment(
       'USD/JPY',
       candles,
       'mean_reversion_20',
       5,
-      1
+      1,
+      { allowTestFixtures: true }
     );
 
     if (isNaN(exp.metrics.brierScore) || exp.metrics.brierScore < 0 || exp.metrics.brierScore > 1) {
@@ -285,8 +325,8 @@ export async function runAllVerificationTests(): Promise<{
   });
 
   await runTest('RESEARCH', 'Skeptical Auditor Rejection of Overfitted Candidates', async () => {
-    const candles = dataFeedEngine.generateRealisticHistoricalCandles('EUR/GBP', 120);
-    const exp = researchEngine.runWalkForwardExperiment('EUR/GBP', candles, 'wick_reversal', 15, 1);
+    const candles = makeM1TestCandles('EUR/GBP', 4000);
+    const exp = researchEngine.runWalkForwardExperiment('EUR/GBP', candles, 'wick_reversal', 15, 1, { allowTestFixtures: true });
     const reviews = await researchEngine.generateTrinityReviews(exp);
 
     const auditor = reviews.find(r => r.role === 'SKEPTICAL_AUDITOR');

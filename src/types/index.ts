@@ -58,9 +58,11 @@ export interface MarketSessionInfo {
   istRange: string;
   isActive: boolean;
   winRate: number;
+  hasMeasuredData: boolean;
   totalTrades: number;
   wins: number;
   losses: number;
+  scratches: number;
   netPips: number;
   bestStrategy: string;
 }
@@ -90,7 +92,7 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
-  source: 'biquote' | 'dukascopy' | 'yahoo' | 'synthetic';
+  source: 'biquote' | 'dukascopy' | 'yahoo' | 'synthetic' | 'imported' | 'test_fixture';
 }
 
 export interface ProviderHealth {
@@ -168,7 +170,11 @@ export interface ResearchSignal {
   modelVersion: string;
   notes?: string;
   strategyName?: string;
+  /** Measured historical test win rate only; undefined means not validated. */
   strategyWinRate?: number;
+  strategyHistoricalSampleSize?: number;
+  strategyEvidenceStatus?: 'UNVALIDATED' | 'BACKTESTED';
+  strategyId?: string;
   advanceNoticeMinutes?: number;
   candleOpenTimeUtc?: string;
   candleCloseTimeUtc?: string;
@@ -214,6 +220,51 @@ export interface LossAutopsy {
   timestamp: string;
 }
 
+export interface StrategyBacktestMetrics {
+  trainSampleSize: number;
+  trainScoredSampleSize: number;
+  validationSampleSize: number;
+  validationScoredSampleSize: number;
+  trainWinRate: number;
+  validationWinRate: number;
+  testWinRate: number;
+  testAccuracy: number;
+  testSampleSize: number;
+  testScoredSampleSize: number;
+  testWins: number;
+  testLosses: number;
+  expectedValuePips: number;
+  profitFactor: number;
+  confidenceInterval95: [number, number];
+  trainPeriod: { start: string; end: string };
+  validationPeriod: { start: string; end: string };
+  testPeriod: { start: string; end: string };
+}
+
+export interface StrategyPerformanceRecord {
+  strategyId: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  scratches: number;
+  netPips: number;
+  positivePips: number;
+  negativePips: number;
+  updatedAt: string;
+}
+
+export interface StrategyPaperMetrics {
+  trades: number;
+  scoredTrades: number;
+  wins: number;
+  losses: number;
+  scratches: number;
+  winRate: number;
+  netPips: number;
+  profitFactor: number;
+  confidenceInterval95: [number, number];
+}
+
 export interface SynthesizedStrategyGene {
   id: string;
   name: string;
@@ -223,11 +274,21 @@ export interface SynthesizedStrategyGene {
   parents: string[];
   mutationRate: number;
   nonLinearOperator: 'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion';
+  /** The same coefficients used by the live evaluator and historical backtester. */
+  operatorParameters?: { alpha: number; beta: number; gamma: number; exponent: number; threshold: number };
+  /** Currency pair used to validate this candidate against historical data. */
+  symbol?: ForexSymbol;
   optimalHorizonMinutes: 5 | 10 | 15 | 20 | 25 | 30;
   sessionAffinity: MarketSessionId | 'ALL';
+  /** Measured untouched-test win rate. Zero means no verified result exists. */
   verifiedAccuracy: number;
+  /** Number of out-of-sample test trades, never a generated estimate. */
   sampleCount: number;
-  status: 'PROMOTED_ACTIVE' | 'EXPERIMENTING' | 'MUTATING';
+  accuracyStatus?: 'UNVALIDATED' | 'BACKTESTED';
+  backtestMetrics?: StrategyBacktestMetrics;
+  paperMetrics?: StrategyPaperMetrics;
+  forwardPerformance?: StrategyPerformanceRecord;
+  status: 'PROMOTED_ACTIVE' | 'PAPER_TRADING' | 'EXPERIMENTING' | 'MUTATING' | 'REJECTED';
   scientificHypothesis: string;
   whyHumansMissThis: string;
   createdAt: string;
@@ -243,6 +304,9 @@ export type RuleFamily =
 
 export interface ExperimentMetrics {
   sampleSize: number;
+  scoredTradeSampleSize: number;
+  trainSampleSize: number;
+  validationSampleSize: number;
   trainAccuracy: number;
   valAccuracy: number;
   testAccuracy: number;
@@ -255,7 +319,7 @@ export interface ExperimentMetrics {
   winRate: number;
   expectedValuePips: number;
   profitFactor: number;
-  maxDrawdownPct: number;
+  maxDrawdownPips: number;
   confidenceInterval95: [number, number];
   confusionMatrix: {
     tp: number;
@@ -267,6 +331,10 @@ export interface ExperimentMetrics {
 
 export interface ResearchExperiment {
   id: string;
+  experimentType?: 'BACKTEST' | 'LIVE_TRADE' | 'FORWARD_OBSERVATION';
+  liveOutcome?: 'WIN' | 'LOSS' | 'SCRATCH';
+  /** One forward observation's actual net result; not a model expected value. */
+  observedNetPips?: number;
   generation: number;
   name: string;
   symbol: ForexSymbol;
@@ -326,11 +394,12 @@ export interface AutopilotLog {
 
 export interface SystemHealthState {
   uptimeSeconds: number;
-  dbType: 'SQLite (Server File)' | 'Cloudflare D1';
+  dbType: 'JSON File Store' | 'Cloudflare D1';
   dbPath: string;
   totalCandlesStored: number;
   activeSignalsCount: number;
   totalExperimentsRun: number;
+  totalForwardObservations?: number;
   lastCronRun: string | null;
   nextCronRun: string | null;
   isCronRunning: boolean;

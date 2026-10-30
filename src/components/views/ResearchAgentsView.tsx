@@ -108,15 +108,13 @@ export const ResearchAgentsView: React.FC<ResearchAgentsViewProps> = ({ reviews 
                   {rev.verdict && (
                     <span
                       className={`font-semibold ${
-                        rev.verdict === 'PROCEED' ? 'text-emerald-400' : 'text-rose-400'
+                        rev.verdict === 'PROCEED' ? 'text-emerald-400' : rev.verdict === 'HOLD' ? 'text-amber-400' : 'text-rose-400'
                       }`}
                     >
                       {rev.verdict}
                     </span>
                   )}
-                  {rev.score !== undefined && (
-                    <span className="text-neutral-400 tabular-nums">Score: {rev.score}/100</span>
-                  )}
+
                   <span className="text-[11px] text-neutral-500">
                     {rev.timestamp.substring(11, 19)} UTC
                   </span>

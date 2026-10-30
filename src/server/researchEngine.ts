@@ -1,11 +1,7 @@
 /**
- * SignalForge ML — Autonomous Research Engine & ML Trinity
- * Implements Purged Walk-Forward splits, feature scaling fitted only on train sets,
- * calibration metrics (Brier score), confusion matrix, and 3-role reviews
- * (Scientist, Engineer, Skeptical Auditor) powered by Gemini and quantitative engines.
+ * SignalForge ML — Historical research and strategy-validation engine.
+ * Trains local models on chronological data and evaluates untouched outcomes.
  */
-
-import { GoogleGenAI } from '@google/genai';
 import {
   AgentReview,
   Candle,
@@ -16,22 +12,11 @@ import {
   SynthesizedStrategyGene,
   LossAutopsy,
   ResearchSignal,
+  StrategyBacktestMetrics,
 } from '../types/index.js';
 import { db } from './db.js';
 
 export class ResearchEngine {
-  private ai: GoogleGenAI | null = null;
-
-  constructor() {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
-      try {
-        this.ai = new GoogleGenAI();
-      } catch (e) {
-        console.warn('[ResearchEngine] GoogleGenAI initialization deferred:', e);
-      }
-    }
-  }
 
   /**
    * Computes technical features from candles:
@@ -40,83 +25,90 @@ export class ResearchEngine {
   public extractFeatures(candles: Candle[]): Array<{
     candle: Candle;
     features: number[];
-    labels: Record<number, number>; // horizon -> 1 (UP) or 0 (DOWN)
+    labels: Record<number, number>; // scheduled entry-to-expiry direction
+    futureMoves: Record<number, number>; // scheduled entry-to-expiry price movement
   }> {
     const n = candles.length;
-    if (n < 30) return [];
+    if (n < 70) return [];
 
     const isJpy = candles[0].symbol.includes('JPY');
     const pipFactor = isJpy ? 100 : 10000;
+    const FIVE_MIN_MS = 5 * 60 * 1000;
+    const ONE_MIN_MS = 60 * 1000;
 
-    // Precalculate EMAs
-    const ema9 = this.calculateEMA(candles.map(c => c.close), 9);
-    const ema21 = this.calculateEMA(candles.map(c => c.close), 21);
-    const rsi14 = this.calculateRSI(candles.map(c => c.close), 14);
+    const closes = candles.map(c => c.close);
+    const ema9 = this.calculateEMA(closes, 9);
+    const ema21 = this.calculateEMA(closes, 21);
+    const rsi14 = this.calculateRSI(closes, 14);
     const atr14 = this.calculateATR(candles, 14);
-
+    const horizons = [5, 10, 15, 20, 25, 30];
     const samples: Array<{
       candle: Candle;
       features: number[];
       labels: Record<number, number>;
+      futureMoves: Record<number, number>;
     }> = [];
+    const seenEntryTimes = new Set<number>();
 
-    // Horizons to evaluate: 5, 10, 15, 20, 25, 30
-    const horizons = [5, 10, 15, 20, 25, 30];
+    // Each historical decision is made once, on a completed M1 bar, at the
+    // first point in the 3-minute advance window for the next 5M boundary.
+    // The same scheduled entry boundary can never create multiple backtest trades.
+    for (let i = 25; i < n - 40; i++) {
+      const candle = candles[i];
+      const previous = candles[i - 1];
+      const decisionTime = candle.timestampMs + ONE_MIN_MS;
+      const entryTime = (Math.floor(decisionTime / FIVE_MIN_MS) + 1) * FIVE_MIN_MS;
+      const secondsToEntry = entryTime - decisionTime;
+      if (secondsToEntry < 15_000 || secondsToEntry > 180_000) continue;
+      if (seenEntryTimes.has(entryTime)) continue;
 
-    for (let i = 25; i < n - 30; i++) {
-      const c = candles[i];
-      const prev = candles[i - 1];
+      let entryIndex = i + 1;
+      while (entryIndex < n && candles[entryIndex].timestampMs < entryTime) entryIndex++;
+      if (entryIndex >= n || Math.abs(candles[entryIndex].timestampMs - entryTime) > 5_000) continue;
+      seenEntryTimes.add(entryTime);
 
-      // 1. Normalized Return
-      const ret1 = (c.close - prev.close) * pipFactor;
-      // 2. Body Ratio
-      const body = Math.abs(c.close - c.open);
-      const totalRange = Math.max(0.00001, c.high - c.low);
-      const bodyRatio = body / totalRange;
-      // 3. Upper Wick Ratio
-      const upperWick = c.high - Math.max(c.open, c.close);
-      const upperWickRatio = upperWick / totalRange;
-      // 4. Lower Wick Ratio
-      const lowerWick = Math.min(c.open, c.close) - c.low;
-      const lowerWickRatio = lowerWick / totalRange;
-      // 5. EMA relationship
-      const emaDiff = (ema9[i] - ema21[i]) * pipFactor;
-      // 6. RSI(14) normalized to [0, 1]
-      const rsiNorm = (rsi14[i] || 50) / 100;
-      // 7. ATR(14) in pips
-      const atrPips = (atr14[i] || 0.0005) * pipFactor;
-      // 8. 20-candle Range position (Stochastic-like %K)
+      const range = Math.max(0.00001, candle.high - candle.low);
+      const body = Math.abs(candle.close - candle.open);
+      const upperWick = candle.high - Math.max(candle.open, candle.close);
+      const lowerWick = Math.min(candle.open, candle.close) - candle.low;
       let min20 = Infinity;
       let max20 = -Infinity;
       for (let k = i - 19; k <= i; k++) {
-        if (candles[k].low < min20) min20 = candles[k].low;
-        if (candles[k].high > max20) max20 = candles[k].high;
+        min20 = Math.min(min20, candles[k].low);
+        max20 = Math.max(max20, candles[k].high);
       }
-      const rangePos = (c.close - min20) / Math.max(0.00001, max20 - min20);
 
       const features = [
-        ret1,
-        bodyRatio,
-        upperWickRatio,
-        lowerWickRatio,
-        emaDiff,
-        rsiNorm,
-        atrPips,
-        rangePos,
+        (candle.close - previous.close) * pipFactor,
+        body / range,
+        upperWick / range,
+        lowerWick / range,
+        (ema9[i] - ema21[i]) * pipFactor,
+        (rsi14[i] || 50) / 100,
+        (atr14[i] || 0.0005) * pipFactor,
+        (candle.close - min20) / Math.max(0.00001, max20 - min20),
       ];
 
-      // Future outcome labels for each horizon
       const labels: Record<number, number> = {};
-      for (const h of horizons) {
-        const futureCandle = candles[i + h];
-        labels[h] = futureCandle.close > c.close ? 1 : 0;
+      const futureMoves: Record<number, number> = {};
+      for (const horizon of horizons) {
+        const exitTime = entryTime + horizon * ONE_MIN_MS;
+        let exitIndex = entryIndex + 1;
+        while (exitIndex < n && candles[exitIndex].timestampMs < exitTime) exitIndex++;
+        if (exitIndex >= n || Math.abs(candles[exitIndex].timestampMs - exitTime) > 5_000) {
+          labels[horizon] = Number.NaN;
+          futureMoves[horizon] = Number.NaN;
+          continue;
+        }
+
+        // Identical to the production research fill model: entry at scheduled
+        // M5 candle open, expiry at the first M1 candle closing the target time.
+        const move = candles[exitIndex].close - candles[entryIndex].open;
+        futureMoves[horizon] = move;
+        labels[horizon] = move > 0 ? 1 : 0;
       }
 
-      samples.push({
-        candle: c,
-        features,
-        labels,
-      });
+      samples.push({ candle, features, labels, futureMoves });
     }
 
     return samples;
@@ -131,168 +123,292 @@ export class ResearchEngine {
     candles: Candle[],
     ruleFamily: RuleFamily,
     horizonMinutes: number,
-    generation: number
+    generation: number,
+    options: { allowTestFixtures?: boolean } = {}
   ): ResearchExperiment {
-    const dataset = this.extractFeatures(candles);
-    const total = dataset.length;
-
-    if (total < 60) {
-      throw new Error(`Insufficient candle samples (${total}) for purged walk-forward validation`);
+    if (![5, 10, 15, 20, 25, 30].includes(horizonMinutes)) {
+      throw new Error('Supported research horizons are 5, 10, 15, 20, 25 and 30 minutes.');
+    }
+    if (candles.some(c => c.source === 'synthetic' || (c.source === 'test_fixture' && !options.allowTestFixtures))) {
+      throw new Error('Research backtests require uploaded non-synthetic market candles. Synthetic and test-fixture candles are not eligible.');
+    }
+    if (!candles.every(c => Number.isFinite(c.timestampMs) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close))) {
+      throw new Error('Historical dataset contains invalid candle values.');
     }
 
-    // Chronological Purged Split
+    const minuteSteps = candles.slice(1).filter((c, i) =>
+      Math.abs((c.timestampMs - candles[i].timestampMs) - 60_000) <= 5_000
+    ).length;
+    if (minuteSteps / Math.max(1, candles.length - 1) < 0.75) {
+      throw new Error('Dataset is not a sufficiently continuous one-minute candle series. Import suitable M1 history.');
+    }
+
+    // Only rows with a valid, causal 3-minute advance decision and exact scheduled
+    // M5 entry/expiry candles are eligible for this execution-aligned model study.
+    const dataset = this.extractFeatures(candles).filter(item =>
+      Number.isFinite(item.labels[horizonMinutes]) &&
+      Number.isFinite(item.futureMoves[horizonMinutes])
+    );
+    const total = dataset.length;
+    if (total < 100) {
+      throw new Error(`Insufficient eligible scheduled-entry samples (${total}). Import more suitable one-minute historical candles.`);
+    }
+
+    // One eligible observation represents one M5 entry opportunity. Purge enough
+    // M5 opportunities to cover the forward label horizon between every split.
+    const purgeSamples = Math.ceil(horizonMinutes / 5) + 1;
     const trainEnd = Math.floor(total * 0.60);
-    const purgeEmbargo = horizonMinutes; // Embargo equal to outcome horizon to prevent leakage
-    const valStart = trainEnd + purgeEmbargo;
-    const valEnd = Math.min(total - 1, valStart + Math.floor(total * 0.20));
-    const testStart = valEnd + purgeEmbargo;
-
+    const validationStart = trainEnd + purgeSamples;
+    const validationEnd = Math.min(total, validationStart + Math.floor(total * 0.20));
+    const testStart = validationEnd + purgeSamples;
     const trainSet = dataset.slice(0, trainEnd);
-    const valSet = dataset.slice(valStart, Math.min(valEnd, dataset.length));
-    const testSet = testStart < total ? dataset.slice(testStart) : valSet;
+    const validationSet = dataset.slice(validationStart, validationEnd);
+    const testSet = dataset.slice(testStart);
+    if (trainSet.length < 50 || validationSet.length < 30 || testSet.length < 30) {
+      throw new Error(
+        `Insufficient independent chronological samples after embargo (train=${trainSet.length}, validation=${validationSet.length}, test=${testSet.length}). Import more history.`
+      );
+    }
 
-    // Feature Scaling: Fit min/max strictly on TRAIN data only!
-    const featureCount = trainSet[0].features.length;
+    const featureDefinitions = [
+      'Normalized M1 Return',
+      'Candle Body Ratio',
+      'Upper Wick Ratio',
+      'Lower Wick Ratio',
+      'EMA 9/21 Spread',
+      'RSI 14',
+      'ATR 14 (Pips)',
+      '20-Candle Range Position',
+    ];
+    const featureSelection: Record<RuleFamily, number[]> = {
+      momentum_5: [0, 1, 4, 6],
+      mean_reversion_20: [0, 5, 6, 7],
+      wick_reversal: [1, 2, 3, 5],
+      range_breakout: [0, 1, 4, 6, 7],
+      volatility_squeeze: [1, 2, 3, 6, 7],
+      order_flow_imbalance: [0, 1, 2, 3, 4, 6],
+    };
+    const selectedIndices = featureSelection[ruleFamily];
+    const selectedFeatures = selectedIndices.map(index => featureDefinitions[index]);
+
+    // Fit standardization strictly on the training set.
+    const featureCount = selectedIndices.length;
     const means = new Array(featureCount).fill(0);
     const stds = new Array(featureCount).fill(0);
-
     for (const item of trainSet) {
-      for (let f = 0; f < featureCount; f++) {
-        means[f] += item.features[f];
-      }
+      selectedIndices.forEach((sourceIndex, featureIndex) => {
+        means[featureIndex] += item.features[sourceIndex];
+      });
     }
-    for (let f = 0; f < featureCount; f++) {
-      means[f] /= trainSet.length;
-    }
-
+    for (let j = 0; j < featureCount; j++) means[j] /= trainSet.length;
     for (const item of trainSet) {
-      for (let f = 0; f < featureCount; f++) {
-        stds[f] += Math.pow(item.features[f] - means[f], 2);
+      selectedIndices.forEach((sourceIndex, featureIndex) => {
+        stds[featureIndex] += Math.pow(item.features[sourceIndex] - means[featureIndex], 2);
+      });
+    }
+    for (let j = 0; j < featureCount; j++) stds[j] = Math.sqrt(stds[j] / trainSet.length) || 1;
+    const scaleFeatures = (features: number[]) =>
+      selectedIndices.map((sourceIndex, featureIndex) =>
+        Math.max(-8, Math.min(8, (features[sourceIndex] - means[featureIndex]) / stds[featureIndex]))
+      );
+
+    // Actual logistic-regression fitting. Coefficients are learned from TRAIN only;
+    // no family-specific fixed weights or test-set tuning are used.
+    const epochs = 600;
+    const learningRate = 0.03;
+    const l2Penalty = 0.001;
+    const weights = new Array(featureCount).fill(0);
+    let bias = 0;
+    const sigmoid = (value: number) => 1 / (1 + Math.exp(-Math.max(-25, Math.min(25, value))));
+    for (let epoch = 0; epoch < epochs; epoch++) {
+      const gradients = new Array(featureCount).fill(0);
+      let biasGradient = 0;
+      for (const item of trainSet) {
+        const z = scaleFeatures(item.features);
+        const logit = z.reduce((sum, value, index) => sum + value * weights[index], bias);
+        const error = sigmoid(logit) - item.labels[horizonMinutes];
+        for (let j = 0; j < featureCount; j++) gradients[j] += error * z[j];
+        biasGradient += error;
       }
-    }
-    for (let f = 0; f < featureCount; f++) {
-      stds[f] = Math.sqrt(stds[f] / trainSet.length) || 1.0;
+      for (let j = 0; j < featureCount; j++) {
+        weights[j] -= learningRate * (gradients[j] / trainSet.length + l2Penalty * weights[j]);
+      }
+      bias -= learningRate * biasGradient / trainSet.length;
     }
 
-    // Standardize feature vectors
-    const scaleFeatures = (feats: number[]) =>
-      feats.map((v, f) => (v - means[f]) / stds[f]);
-
-    // Rule family directional score calculation
-    const evaluateRule = (item: (typeof dataset)[0], trainedThreshold: number): { prob: number; pred: number } => {
+    const predictProbability = (item: (typeof dataset)[number]) => {
       const z = scaleFeatures(item.features);
-      let logit = 0;
-
-      if (ruleFamily === 'momentum_5') {
-        // Return + EMA slope + Body
-        logit = 0.55 * z[0] + 0.45 * z[4] + 0.2 * z[1];
-      } else if (ruleFamily === 'mean_reversion_20') {
-        // RSI extreme + Range position inversion
-        logit = -0.6 * (z[5] - 0.5) - 0.5 * (z[7] - 0.5);
-      } else if (ruleFamily === 'wick_reversal') {
-        // Lower wick vs Upper wick rejection
-        logit = 0.7 * z[3] - 0.7 * z[2];
-      } else if (ruleFamily === 'range_breakout') {
-        // Range position breakout + ATR expansion
-        logit = 0.5 * (z[7] - 0.5) + 0.4 * z[6];
-      } else {
-        // Multi-factor ensemble
-        logit = 0.3 * z[0] + 0.3 * z[4] - 0.3 * (z[5] - 0.5);
-      }
-
-      const prob = 1 / (1 + Math.exp(-logit));
-      const pred = prob >= trainedThreshold ? 1 : 0;
-      return { prob, pred };
+      return sigmoid(z.reduce((sum, value, index) => sum + value * weights[index], bias));
     };
-
-    // Train threshold calibration
-    const threshold = 0.50;
-
-    // Evaluate on Train Set
-    let trainCorrect = 0;
-    for (const item of trainSet) {
-      const { pred } = evaluateRule(item, threshold);
-      if (pred === item.labels[horizonMinutes]) trainCorrect++;
-    }
-    const trainAccuracy = Number((trainCorrect / trainSet.length).toFixed(3));
-
-    // Evaluate on Validation Set
-    let valCorrect = 0;
-    for (const item of valSet) {
-      const { pred } = evaluateRule(item, threshold);
-      if (pred === item.labels[horizonMinutes]) valCorrect++;
-    }
-    const valAccuracy = Number((valCorrect / valSet.length).toFixed(3));
-
-    // Evaluate on Untouched Test Set
-    let tp = 0;
-    let fp = 0;
-    let tn = 0;
-    let fn = 0;
-    let brierSum = 0;
-    let calibrationErrorSum = 0;
-    let totalPips = 0;
-    let maxDrawdown = 0;
-    let peakPips = 0;
 
     const isJpy = symbol.includes('JPY');
     const pipFactor = isJpy ? 100 : 10000;
+    const pairSpreads: Record<string, number> = {
+      'EUR/USD': 1.1, 'GBP/USD': 1.6, 'USD/JPY': 1.2, 'EUR/JPY': 1.8,
+      'AUD/USD': 1.4, 'USD/CAD': 1.7, 'EUR/GBP': 1.2, 'AUD/CAD': 1.8,
+      'AUD/CHF': 1.9, 'AUD/JPY': 1.7, 'AUD/NZD': 2.0, 'EUR/AUD': 1.9,
+      'EUR/CAD': 1.8, 'EUR/CHF': 1.6, 'EUR/NZD': 2.2, 'GBP/AUD': 2.2,
+      'GBP/CAD': 2.0, 'GBP/CHF': 2.1, 'GBP/JPY': 2.0, 'GBP/NZD': 2.4,
+    };
+    const modeledSpreadPips = pairSpreads[symbol] ?? 1.5;
 
-    for (const item of testSet) {
-      const { prob, pred } = evaluateRule(item, threshold);
-      const actual = item.labels[horizonMinutes];
+    const evaluateSet = (items: typeof dataset, threshold: number) => {
+      let trades = 0, correct = 0, tp = 0, fp = 0, tn = 0, fn = 0;
+      let brierSum = 0, totalPips = 0;
+      const calibrationBins = Array.from({ length: 10 }, () => ({ count: 0, probabilitySum: 0, actualSum: 0 }));
+      let positivePips = 0, negativePips = 0, wins = 0, losses = 0, scratches = 0;
+      let peakPips = 0, maxDrawdown = 0;
+      for (const item of items) {
+        const probability = predictProbability(item);
+        const actual = item.labels[horizonMinutes];
+        brierSum += Math.pow(probability - actual, 2);
+        const calibrationBinIndex = Math.min(9, Math.floor(probability * 10));
+        const calibrationBin = calibrationBins[calibrationBinIndex];
+        calibrationBin.count++;
+        calibrationBin.probabilitySum += probability;
+        calibrationBin.actualSum += actual;
 
-      if (pred === 1 && actual === 1) tp++;
-      else if (pred === 1 && actual === 0) fp++;
-      else if (pred === 0 && actual === 0) tn++;
-      else if (pred === 0 && actual === 1) fn++;
+        // The validation-selected threshold abstains on low-conviction samples.
+        let prediction: number | null = null;
+        if (probability >= threshold) prediction = 1;
+        else if (probability <= 1 - threshold) prediction = 0;
+        if (prediction === null) continue;
 
-      // Brier score: (prob - actual)^2
-      brierSum += Math.pow(prob - actual, 2);
-      calibrationErrorSum += Math.abs(prob - actual);
+        trades++;
+        if (prediction === actual) correct++;
+        if (prediction === 1 && actual === 1) tp++;
+        else if (prediction === 1 && actual === 0) fp++;
+        else if (prediction === 0 && actual === 0) tn++;
+        else fn++;
 
-      // Simulated return with 1.2 pip spread cost
-      const actualMove = (item.candle.close - item.candle.open) * pipFactor;
-      const tradePips = pred === 1 ? actualMove - 1.2 : -actualMove - 1.2;
-      totalPips += tradePips;
-      if (totalPips > peakPips) peakPips = totalPips;
-      const dd = peakPips - totalPips;
-      if (dd > maxDrawdown) maxDrawdown = dd;
+        const grossMovePips = item.futureMoves[horizonMinutes] * pipFactor;
+        const netTradePips = (prediction === 1 ? grossMovePips : -grossMovePips) - modeledSpreadPips;
+        totalPips += netTradePips;
+        if (netTradePips > 0.5) { wins++; positivePips += netTradePips; }
+        else if (netTradePips < -0.5) { losses++; negativePips += Math.abs(netTradePips); }
+        else scratches++;
+        if (totalPips > peakPips) peakPips = totalPips;
+        maxDrawdown = Math.max(maxDrawdown, peakPips - totalPips);
+      }
+
+      const scoredTrades = wins + losses;
+      const denominator = Math.max(1, trades);
+      const expectedCalibrationError = calibrationBins.reduce((sum, bin) => {
+        if (bin.count === 0) return sum;
+        const averageProbability = bin.probabilitySum / bin.count;
+        const observedFrequency = bin.actualSum / bin.count;
+        return sum + (bin.count / Math.max(1, items.length)) * Math.abs(averageProbability - observedFrequency);
+      }, 0);
+      const sensitivity = tp / Math.max(1, tp + fn);
+      const specificity = tn / Math.max(1, tn + fp);
+      const precision = tp / Math.max(1, tp + fp);
+      const recall = sensitivity;
+      const f1 = precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : 0;
+      return {
+        trades, wins, losses, scratches, correct, tp, fp, tn, fn,
+        accuracy: correct / denominator,
+        balancedAccuracy: (sensitivity + specificity) / 2,
+        precision, recall, f1,
+        brierScore: brierSum / Math.max(1, items.length),
+        calibrationError: expectedCalibrationError,
+        winRate: wins / Math.max(1, scoredTrades),
+        expectedValuePips: totalPips / denominator,
+        profitFactor: negativePips > 0 ? positivePips / negativePips : (positivePips > 0 ? 99 : 0),
+        totalPips,
+        maxDrawdown,
+        positivePips,
+        negativePips,
+      };
+    };
+
+    // Tune only the abstention threshold on validation data. The untouched test
+    // period is evaluated once, after this choice is frozen.
+    const thresholdCandidates = [0.50, 0.525, 0.55, 0.575, 0.60, 0.625, 0.65];
+    let selectedThreshold = 0.50;
+    let bestValidation: ReturnType<typeof evaluateSet> | null = null;
+    for (const candidateThreshold of thresholdCandidates) {
+      const candidateMetrics = evaluateSet(validationSet, candidateThreshold);
+      if (candidateMetrics.trades < 20) continue;
+      if (
+        !bestValidation ||
+        candidateMetrics.expectedValuePips > bestValidation.expectedValuePips
+      ) {
+        selectedThreshold = candidateThreshold;
+        bestValidation = candidateMetrics;
+      }
+    }
+    if (!bestValidation) {
+      throw new Error('Validation period did not produce at least 20 eligible trades for threshold selection.');
     }
 
-    const testTotal = Math.max(1, testSet.length);
-    const testAccuracy = Number(((tp + tn) / testTotal).toFixed(3));
-    const sensitivity = tp / Math.max(1, tp + fn);
-    const specificity = tn / Math.max(1, tn + fp);
-    const balancedAccuracy = Number(((sensitivity + specificity) / 2).toFixed(3));
-    const precision = Number((tp / Math.max(1, tp + fp)).toFixed(3));
-    const recall = Number(sensitivity.toFixed(3));
-    const f1Score = Number(
-      precision + recall > 0 ? ((2 * precision * recall) / (precision + recall)).toFixed(3) : 0
-    );
-    const brierScore = Number((brierSum / testTotal).toFixed(4));
-    const calibrationError = Number((calibrationErrorSum / testTotal).toFixed(3));
+    const trainMetrics = evaluateSet(trainSet, selectedThreshold);
+    const validationMetrics = bestValidation;
+    const testMetrics = evaluateSet(testSet, selectedThreshold);
+    if (trainMetrics.trades < 30 || validationMetrics.trades < 20 || testMetrics.trades < 30) {
+      throw new Error(
+        `Insufficient executed model trades (train=${trainMetrics.trades}, validation=${validationMetrics.trades}, test=${testMetrics.trades}). Import more historical data.`
+      );
+    }
 
-    const winRate = Number(((tp + tn) / testTotal).toFixed(3));
-    const grossWins = tp * 4.5;
-    const grossLosses = Math.max(1, fp * 4.5);
-    const profitFactor = Number((grossWins / grossLosses).toFixed(2));
-    const maxDrawdownPct = Number(((maxDrawdown / Math.max(1, peakPips + 50)) * 100).toFixed(1));
-
-    // 95% Wilson Score Confidence Interval for Accuracy
+    // Wilson interval for the untouched test-set net-positive win rate.
     const zCrit = 1.96;
-    const nSamples = testTotal;
-    const p = testAccuracy;
-    const denom = 1 + (zCrit * zCrit) / nSamples;
-    const center = (p + (zCrit * zCrit) / (2 * nSamples)) / denom;
-    const margin =
-      (zCrit * Math.sqrt((p * (1 - p)) / nSamples + (zCrit * zCrit) / (4 * nSamples * nSamples))) /
-      denom;
+    const scoredTestTrades = Math.max(1, testMetrics.wins + testMetrics.losses);
+    const p = testMetrics.wins / scoredTestTrades;
+    const denominator = 1 + (zCrit * zCrit) / scoredTestTrades;
+    const center = (p + (zCrit * zCrit) / (2 * scoredTestTrades)) / denominator;
+    const margin = (
+      zCrit * Math.sqrt(
+        (p * (1 - p)) / scoredTestTrades +
+        (zCrit * zCrit) / (4 * scoredTestTrades * scoredTestTrades)
+      )
+    ) / denominator;
     const ciLow = Math.max(0, Number((center - margin).toFixed(3)));
     const ciHigh = Math.min(1, Number((center + margin).toFixed(3)));
 
+    const testTotal = testMetrics.trades;
+    const trainAccuracy = Number(trainMetrics.accuracy.toFixed(3));
+    const valAccuracy = Number(validationMetrics.accuracy.toFixed(3));
+    const testAccuracy = Number(testMetrics.accuracy.toFixed(3));
+    const balancedAccuracy = Number(testMetrics.balancedAccuracy.toFixed(3));
+    const precision = Number(testMetrics.precision.toFixed(3));
+    const recall = Number(testMetrics.recall.toFixed(3));
+    const f1Score = Number(testMetrics.f1.toFixed(3));
+    const brierScore = Number(testMetrics.brierScore.toFixed(4));
+    const calibrationError = Number(testMetrics.calibrationError.toFixed(3));
+    const winRate = Number(testMetrics.winRate.toFixed(3));
+    const profitFactor = Number(testMetrics.profitFactor.toFixed(2));
+    const totalPips = testMetrics.totalPips;
+    const maxDrawdownPips = Number(testMetrics.maxDrawdown.toFixed(2));
+
+    const auditorConcerns: string[] = [];
+    if (trainAccuracy - valAccuracy > 0.10) {
+      auditorConcerns.push(`Training directional accuracy exceeds validation by more than 10 percentage points.`);
+    }
+    if (scoredTestTrades < 100) {
+      auditorConcerns.push(`Insufficient untouched scored WIN/LOSS outcomes (${scoredTestTrades}); minimum 100 required for acceptance.`);
+    }
+    if (testAccuracy < 0.52) {
+      auditorConcerns.push(`Out-of-sample directional accuracy below 52% (${testAccuracy}).`);
+    }
+    if (brierScore > 0.25) {
+      auditorConcerns.push(`Poor probability calibration (Brier score ${brierScore}).`);
+    }
+    if (profitFactor < 1.15 || testMetrics.expectedValuePips <= 0) {
+      auditorConcerns.push(`Transaction-cost-adjusted expectancy is not robust (PF ${profitFactor}, EV ${testMetrics.expectedValuePips.toFixed(2)} pips).`);
+    }
+
+    let auditorVerdict: 'ACCEPTED' | 'REJECTED' | 'PROVISIONAL' = 'ACCEPTED';
+    if (auditorConcerns.length >= 2 || testAccuracy < 0.50 || scoredTestTrades < 100) {
+      auditorVerdict = 'REJECTED';
+    } else if (auditorConcerns.length === 1) {
+      auditorVerdict = 'PROVISIONAL';
+    }
+
     const metrics: ExperimentMetrics = {
       sampleSize: testTotal,
+      scoredTradeSampleSize: scoredTestTrades,
+      trainSampleSize: trainMetrics.trades,
+      validationSampleSize: validationMetrics.trades,
       trainAccuracy,
       valAccuracy,
       testAccuracy,
@@ -303,119 +419,51 @@ export class ResearchEngine {
       brierScore,
       calibrationError,
       winRate,
-      expectedValuePips: Number((totalPips / testTotal).toFixed(2)),
+      expectedValuePips: Number(testMetrics.expectedValuePips.toFixed(2)),
       profitFactor,
-      maxDrawdownPct,
+      maxDrawdownPips,
       confidenceInterval95: [ciLow, ciHigh],
-      confusionMatrix: { tp, fp, tn, fn },
+      confusionMatrix: { tp: testMetrics.tp, fp: testMetrics.fp, tn: testMetrics.tn, fn: testMetrics.fn },
     };
-
-    // SKEPTICAL AUDIT EVALUATION:
-    // Automatically flags leakage, overfitting (train >> val), poor calibration, sample size
-    const auditorConcerns: string[] = [];
-    if (trainAccuracy - valAccuracy > 0.12) {
-      auditorConcerns.push(
-        `High overfitting detected: Train accuracy (${trainAccuracy}) exceeds Validation (${valAccuracy}) by >12%.`
-      );
-    }
-    if (testAccuracy < 0.51) {
-      auditorConcerns.push(
-        `Out-of-sample edge below random walk threshold (${testAccuracy} <= 0.51).`
-      );
-    }
-    if (brierScore > 0.25) {
-      auditorConcerns.push(
-        `Poor probabilistic calibration: Brier score ${brierScore} > 0.25 threshold.`
-      );
-    }
-    if (profitFactor < 1.1) {
-      auditorConcerns.push(
-        `Unfavorable transaction cost resilience: Profit factor ${profitFactor} < 1.10 after spread deductions.`
-      );
-    }
-
-    let auditorVerdict: 'ACCEPTED' | 'REJECTED' | 'PROVISIONAL' = 'ACCEPTED';
-    if (auditorConcerns.length >= 2 || testAccuracy < 0.50) {
-      auditorVerdict = 'REJECTED';
-    } else if (auditorConcerns.length === 1) {
-      auditorVerdict = 'PROVISIONAL';
-    }
 
     const expId = `exp_${Date.now()}_${ruleFamily}_${horizonMinutes}m`;
     const expName = `${symbol} [${ruleFamily}] ${horizonMinutes}m Horizon`;
-
-    const scientistHypotheses: Record<RuleFamily, { hyp: string; disproof: string }> = {
-      momentum_5: {
-        hyp: `Short-term order flow momentum persists over ${horizonMinutes}m due to algorithmic trend confirmation.`,
-        disproof: `Disproven if balanced accuracy on untouched test set drops below 0.51 or mean slippage consumes gross returns.`,
-      },
-      mean_reversion_20: {
-        hyp: `Price excursions touching 20-period range extremities snap back to the mean within ${horizonMinutes}m.`,
-        disproof: `Disproven if adverse excursions create high drawdowns during trending market regimes.`,
-      },
-      wick_reversal: {
-        hyp: `Elongated wicks indicate liquidity rejection and immediate price reversal within ${horizonMinutes}m.`,
-        disproof: `Disproven if subsequent candles easily violate rejection wick highs/lows before reaching target.`,
-      },
-      range_breakout: {
-        hyp: `Compression in ATR followed by range boundary penetration initiates multi-candle continuation.`,
-        disproof: `Disproven if false breakouts exceed 45% during low-volume Asian sessions.`,
-      },
-      volatility_squeeze: {
-        hyp: `Bollinger Band contraction preceding volume surge triggers expansion trends.`,
-        disproof: `Disproven if post-squeeze direction lacks directional follow-through > 1.5x spread.`,
-      },
-      order_flow_imbalance: {
-        hyp: `Asymmetric body-to-wick velocity indicates institutional bid/ask dominance.`,
-        disproof: `Disproven if win rate under institutional spread modeling drops below 52%.`,
-      },
-    };
-
-    const scientistDetails = scientistHypotheses[ruleFamily] || {
-      hyp: `Quantitative feature interaction predicts directional bias over ${horizonMinutes}m.`,
-      disproof: `Disproven if out-of-sample edge fails to exceed 95% confidence interval random expectation.`,
-    };
-
     const experiment: ResearchExperiment = {
       id: expId,
+      experimentType: 'BACKTEST',
       generation,
       name: expName,
       symbol,
       ruleFamily,
       horizonMinutes,
       parameters: {
-        threshold,
-        purgeEmbargoMinutes: purgeEmbargo,
+        threshold: selectedThreshold,
+        purgeEmbargoMinutes: purgeSamples * 5,
         featureCount,
-        spreadModeledPips: 1.2,
+        spreadModeledPips: modeledSpreadPips,
+        algorithm: 'logistic_regression',
+        epochs,
+        learningRate,
+        l2Penalty,
       },
-      featuresUsed: [
-        'Normalized Return',
-        'Candle Body Ratio',
-        'Upper Wick Ratio',
-        'Lower Wick Ratio',
-        'EMA Slope (9-21)',
-        'RSI (14)',
-        'ATR (14)',
-        '20-Candle Range Position',
-      ],
+      featuresUsed: selectedFeatures,
       metrics,
       trainPeriod: {
-        start: trainSet[0]?.candle.timestamp || 'N/A',
-        end: trainSet[trainSet.length - 1]?.candle.timestamp || 'N/A',
+        start: trainSet[0].candle.timestamp,
+        end: trainSet[trainSet.length - 1].candle.timestamp,
       },
       valPeriod: {
-        start: valSet[0]?.candle.timestamp || 'N/A',
-        end: valSet[valSet.length - 1]?.candle.timestamp || 'N/A',
+        start: validationSet[0].candle.timestamp,
+        end: validationSet[validationSet.length - 1].candle.timestamp,
       },
       testPeriod: {
-        start: testSet[0]?.candle.timestamp || 'N/A',
-        end: testSet[testSet.length - 1]?.candle.timestamp || 'N/A',
+        start: testSet[0].candle.timestamp,
+        end: testSet[testSet.length - 1].candle.timestamp,
       },
-      purgedWindowCandles: purgeEmbargo,
-      scientistHypothesis: scientistDetails.hyp,
-      scientistDisproofCondition: scientistDetails.disproof,
-      engineerConfigNotes: `Standardized scaling fitted strictly on ${trainSet.length} train samples. Embargo of ${purgeEmbargo} candles applied to prevent lookahead leakage.`,
+      purgedWindowCandles: purgeSamples * 5,
+      scientistHypothesis: `A train-fitted logistic-regression model using ${ruleFamily} features may predict direction at the scheduled ${horizonMinutes}-minute expiry.`,
+      scientistDisproofCondition: `Disproven if untouched test directional accuracy is below 52%, or after modeled spread the test EV is not positive and profit factor is below 1.15.`,
+      engineerConfigNotes: `Logistic regression fitted on ${trainSet.length} training opportunities. Feature means/stds fitted on training only. Threshold ${selectedThreshold} tuned on ${validationSet.length} validation opportunities. Each opportunity uses the 3-minute advance alert, scheduled next M5 open and ${horizonMinutes}-minute expiry; pair-specific modeled spread ${modeledSpreadPips} pips.`,
       auditorVerdict,
       auditorConcerns,
       createdAt: new Date().toISOString(),
@@ -425,66 +473,73 @@ export class ResearchEngine {
     return experiment;
   }
 
-  /**
-   * Generates in-depth multi-role reviews from the Scientist, Engineer, and Skeptical Auditor.
-   * If Gemini API key is present, calls gemini-3.8-flash for synthesis; otherwise uses structured analytical engine.
-   */
+  /** Creates deterministic role-based review notes from the recorded metrics and audit flags. */
   public async generateTrinityReviews(exp: ResearchExperiment): Promise<AgentReview[]> {
     const reviews: AgentReview[] = [];
     const nowIso = new Date().toISOString();
+    const isForwardObservation = exp.experimentType === 'FORWARD_OBSERVATION' || exp.experimentType === 'LIVE_TRADE';
 
-    // 1. Scientist Review
+    const scientistContent = isForwardObservation
+      ? `One forward observation was recorded: outcome ${exp.liveOutcome || 'not recorded'}, net result ${(exp.observedNetPips ?? 0) > 0 ? '+' : ''}${(exp.observedNetPips ?? 0)} pips. A single trade cannot estimate win rate, expected value, calibration, or market-regime effects.`
+      : `The stated hypothesis was: "${exp.scientistHypothesis}". The untouched test contained ${exp.metrics.sampleSize} opportunities and ${exp.metrics.scoredTradeSampleSize} scored WIN/LOSS outcomes. Observed balanced accuracy was ${(exp.metrics.balancedAccuracy * 100).toFixed(1)}% and modeled expected value was ${exp.metrics.expectedValuePips} pips. This run does not establish a market-regime effect. Falsification screen: ${exp.metrics.balancedAccuracy >= 0.52 ? 'the balanced-accuracy screen was crossed; independent evidence is still required.' : 'the balanced-accuracy screen was not crossed.'}`;
+
     const scientistReview: AgentReview = {
       id: `rev_sci_${exp.id}`,
       experimentId: exp.id,
       role: 'SCIENTIST',
-      title: `Hypothesis & Market Behavior Analysis: ${exp.name}`,
-      content: `The hypothesis posited: "${exp.scientistHypothesis}". In this run across ${exp.metrics.sampleSize} out-of-sample test samples, the observed balanced accuracy was ${(exp.metrics.balancedAccuracy * 100).toFixed(1)}% with an expected value of ${exp.metrics.expectedValuePips} pips. 
-
-Market Regime Observation: This pattern demonstrates highest signal density when volatility is expanding. Falsification check: ${exp.metrics.balancedAccuracy >= 0.52 ? 'The hypothesis survived initial falsification threshold.' : 'The hypothesis failed the minimum 52% out-of-sample edge requirement.'}`,
+      title: `Hypothesis & Evidence Review: ${exp.name}`,
+      content: scientistContent,
       timestamp: nowIso,
-      verdict: exp.metrics.balancedAccuracy >= 0.52 ? 'PROCEED' : 'REJECT',
-      score: Math.min(100, Math.round(exp.metrics.balancedAccuracy * 150)),
+      verdict: isForwardObservation ? 'HOLD' : exp.metrics.balancedAccuracy >= 0.52 ? 'PROCEED' : 'REJECT',
     };
 
-    // 2. Engineer Review
+    const engineerContent = isForwardObservation
+      ? `Forward observation record only. Entry: ${exp.parameters.actualEntryPrice ?? 'not recorded'}; exit: ${exp.parameters.actualExitPrice ?? 'not recorded'}; expiry: ${exp.horizonMinutes}m. No model training or historical validation metrics are computed from this row.`
+      : `Research pipeline configuration for generation ${exp.generation}.
+- Model: logistic regression fitted only on the chronological training partition.
+- Threshold: selected from a fixed candidate set using validation EV, then frozen before the untouched test.
+- Execution alignment: 3-minute advance decision, next 5M candle open and ${exp.horizonMinutes}m expiry.
+- Purged embargo: ${exp.purgedWindowCandles} M1 candles between partitions.
+- Test opportunities: n=${exp.metrics.sampleSize}; scored WIN/LOSS outcomes: n=${exp.metrics.scoredTradeSampleSize}.`;
+
     const engineerReview: AgentReview = {
       id: `rev_eng_${exp.id}`,
       experimentId: exp.id,
       role: 'ENGINEER',
-      title: `Pipeline Isolation & Feature Architecture Audit`,
-      content: `Pipeline verification complete for generation ${exp.generation}. 
-- Data Leakage Check: Standard scaler parameters were fit strictly on the train slice (0-60%) and frozen prior to validation/testing.
-- Embargo Enforcement: ${exp.purgedWindowCandles}-candle buffer purged between splits to isolate overlapping ${exp.horizonMinutes}m outcome horizons.
-- Reproducibility: Deterministic feature extraction verified with zero NaNs.
-- Sample Size: ${exp.metrics.sampleSize} test samples evaluated against 95% Wilson confidence intervals [${exp.metrics.confidenceInterval95[0]}, ${exp.metrics.confidenceInterval95[1]}].`,
+      title: 'Data, Model and Execution Configuration Review',
+      content: engineerContent,
       timestamp: nowIso,
-      verdict: 'PROCEED',
-      score: 92,
+      verdict: isForwardObservation ? 'HOLD' : 'PROCEED',
     };
 
-    // 3. Skeptical Auditor Review
+    const spreadPips = Number(exp.parameters.spreadModeledPips ?? 0);
+    const auditorContent = isForwardObservation
+      ? `Skeptical audit: PROVISIONAL. One forward trade is retained for outcome tracking only. It cannot pass or fail the strategy's historical validation gate. No model-accuracy, confidence-interval, or profit-factor claim is made from this record.`
+      : `Skeptical audit verdict: ${exp.auditorVerdict}.
+- Train accuracy: ${(exp.metrics.trainAccuracy * 100).toFixed(1)}%; validation accuracy: ${(exp.metrics.valAccuracy * 100).toFixed(1)}%.
+- Brier score: ${exp.metrics.brierScore}; calibration error: ${(exp.metrics.calibrationError * 100).toFixed(1)}%.
+- Modeled transaction cost: ${spreadPips.toFixed(2)} pips; resulting profit factor: ${exp.metrics.profitFactor}.
+${exp.auditorConcerns.length > 0 ? `Identified concerns:\n${exp.auditorConcerns.map(c => `• ${c}`).join('\n')}` : 'No configured audit threshold was breached in this run; this is not a guarantee of future performance.'}
+Policy: ${exp.auditorVerdict === 'ACCEPTED'
+  ? 'Eligible for candidate-pool consideration only; forward testing is still required.'
+  : exp.auditorVerdict === 'PROVISIONAL'
+    ? 'Hold for more evidence; do not promote.'
+    : 'Rejected; do not promote.'}`;
+
     const auditorReview: AgentReview = {
       id: `rev_aud_${exp.id}`,
       experimentId: exp.id,
       role: 'SKEPTICAL_AUDITOR',
-      title: `Adversarial Audit & Overfitting Challenge`,
-      content: `Skeptical Audit Verdict: ${exp.auditorVerdict}.
-- Overfit Delta: Train Acc ${(exp.metrics.trainAccuracy * 100).toFixed(1)}% vs Val Acc ${(exp.metrics.valAccuracy * 100).toFixed(1)}% (Delta: ${((exp.metrics.trainAccuracy - exp.metrics.valAccuracy) * 100).toFixed(1)}%).
-- Probabilistic Calibration: Brier score is ${exp.metrics.brierScore} (Calibration error: ${(exp.metrics.calibrationError * 100).toFixed(1)}%).
-- Transaction Cost Sensitivity: Evaluated against institutional spread of ${exp.parameters.spreadModeledPips} pips. Resulting profit factor is ${exp.metrics.profitFactor}.
-${exp.auditorConcerns.length > 0 ? `Identified Vulnerabilities:\n${exp.auditorConcerns.map(c => `• ${c}`).join('\n')}` : '• No critical data leakage or fatal overfit flags found.'}
-Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool consideration.' : 'REJECTED. Not eligible for signal generation promotion.'}`,
+      title: 'Skeptical Evidence and Overfitting Audit',
+      content: auditorContent,
       timestamp: nowIso,
-      verdict: exp.auditorVerdict === 'ACCEPTED' ? 'PROCEED' : 'REJECT',
-      score: exp.auditorVerdict === 'ACCEPTED' ? 88 : 42,
+      verdict: isForwardObservation || exp.auditorVerdict === 'PROVISIONAL'
+        ? 'HOLD'
+        : exp.auditorVerdict === 'ACCEPTED' ? 'PROCEED' : 'REJECT',
     };
 
     reviews.push(scientistReview, engineerReview, auditorReview);
-    for (const r of reviews) {
-      db.addReview(r);
-    }
-
+    for (const review of reviews) db.addReview(review);
     return reviews;
   }
 
@@ -566,115 +621,282 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
     return atr;
   }
 
+  /** Samples a formula candidate and stores its exact executable parameters; this is not validation. */
   /**
-   * Infinite Evolutionary Strategy Synthesis Engine
-   * Autonomous genetic algorithm that combines multi-dimensional quantitative features,
-   * non-linear polynomial operators, and cross-bred parents into strategies never conceived by humans.
+   * Replays one executable strategy over chronological, uploaded one-minute candles.
+   * Signals are evaluated only on completed candles, entered at the next 5-minute boundary,
+   * and exited at the configured dynamic 5–30 minute expiry. No synthetic candles are eligible.
+   */
+  public validateSynthesizedStrategy(
+    gene: SynthesizedStrategyGene,
+    candles: Candle[]
+  ): SynthesizedStrategyGene {
+    const MIN_HISTORY = 10_000;
+    if (candles.length < MIN_HISTORY) {
+      throw new Error(`Need at least ${MIN_HISTORY.toLocaleString()} one-minute candles; received ${candles.length.toLocaleString()}.`);
+    }
+    if (!gene.operatorParameters) {
+      throw new Error('This legacy candidate has no stored executable coefficients. Generate a new candidate before validating it.');
+    }
+    if (candles.some(c => c.source === 'synthetic' || c.source === 'test_fixture')) {
+      throw new Error('Synthetic and test-fixture candles are prohibited in strategy validation.');
+    }
+    const ordered = [...candles].sort((a, b) => a.timestampMs - b.timestampMs);
+    for (let i = 1; i < ordered.length; i++) {
+      if (ordered[i].timestampMs <= ordered[i - 1].timestampMs) {
+        throw new Error('Historical candles contain duplicate or non-monotonic timestamps.');
+      }
+    }
+    const minuteSteps = ordered.slice(1).filter((c, i) =>
+      Math.abs((c.timestampMs - ordered[i].timestampMs) - 60_000) <= 5_000
+    ).length;
+    if (minuteSteps / Math.max(1, ordered.length - 1) < 0.75) {
+      throw new Error('Imported dataset does not contain sufficiently continuous one-minute candles.');
+    }
+
+    const n = ordered.length;
+    const closes = ordered.map(c => c.close);
+    const ema9 = this.calculateEMA(closes, 9);
+    const ema21 = this.calculateEMA(closes, 21);
+    const rsi14 = this.calculateRSI(closes, 14);
+    const trainEnd = Math.floor(n * 0.60);
+    const validationEnd = Math.floor(n * 0.80);
+    const embargo = Math.max(30, gene.optimalHorizonMinutes) + 5;
+    const validationStart = trainEnd + embargo;
+    const testStart = validationEnd + embargo;
+
+    const spreads: Record<string, number> = {
+      'EUR/USD': 1.1, 'GBP/USD': 1.6, 'USD/JPY': 1.2, 'EUR/JPY': 1.8,
+      'AUD/USD': 1.4, 'USD/CAD': 1.7, 'EUR/GBP': 1.2, 'AUD/CAD': 1.8,
+      'AUD/CHF': 1.9, 'AUD/JPY': 1.7, 'AUD/NZD': 2.0, 'EUR/AUD': 1.9,
+      'EUR/CAD': 1.8, 'EUR/CHF': 1.6, 'EUR/NZD': 2.2, 'GBP/AUD': 2.2,
+      'GBP/CAD': 2.0, 'GBP/CHF': 2.1, 'GBP/JPY': 2.0, 'GBP/NZD': 2.4,
+    };
+    const spreadPips = spreads[gene.symbol || ordered[0].symbol] ?? 1.5;
+    const FIVE_MIN_MS = 5 * 60 * 1000;
+    const ONE_MIN_MS = 60 * 1000;
+
+    const simulateRange = (from: number, until: number) => {
+      let trades = 0, wins = 0, losses = 0, scratches = 0;
+      let netPips = 0, positivePips = 0, negativePips = 0;
+      let cursor = Math.max(from, 30);
+      while (cursor < until - gene.optimalHorizonMinutes - 2) {
+        const candle = ordered[cursor];
+        const previous = ordered[cursor - 1];
+        if (candle.source === 'synthetic' || previous.source === 'synthetic') { cursor++; continue; }
+
+        // Candle timestamps are minute-open timestamps. The decision is made after the bar closes.
+        const decisionTime = candle.timestampMs + ONE_MIN_MS;
+        const nextEntryTime = (Math.floor(decisionTime / FIVE_MIN_MS) + 1) * FIVE_MIN_MS;
+        const advanceMs = nextEntryTime - decisionTime;
+        if (advanceMs < 15_000 || advanceMs > 180_000) { cursor++; continue; }
+
+        if (gene.sessionAffinity !== 'ALL') {
+          const hour = new Date(candle.timestampMs).getUTCHours();
+          const session = hour >= 12 && hour < 16 ? 'OVERLAP'
+            : hour >= 7 && hour < 12 ? 'LONDON'
+            : hour >= 16 && hour < 21 ? 'NEW_YORK' : 'ASIA';
+          if (session !== gene.sessionAffinity) { cursor++; continue; }
+        }
+
+        const result = this.evaluateSynthesizedGeneSignal(
+          gene,
+          candle,
+          previous,
+          closes.slice(0, cursor + 1),
+          ema9.slice(0, cursor + 1),
+          ema21.slice(0, cursor + 1),
+          rsi14.slice(0, cursor + 1)
+        );
+        if (!result.shouldTrigger || result.conviction < 0.80) { cursor++; continue; }
+
+        // Require an actual one-minute candle at the scheduled entry boundary.
+        let entryIndex = cursor + 1;
+        while (entryIndex < until && ordered[entryIndex].timestampMs < nextEntryTime) entryIndex++;
+        if (entryIndex >= until || Math.abs(ordered[entryIndex].timestampMs - nextEntryTime) > 5_000) {
+          cursor++;
+          continue;
+        }
+
+        const exitTarget = nextEntryTime + gene.optimalHorizonMinutes * ONE_MIN_MS;
+        let exitIndex = entryIndex + 1;
+        while (exitIndex < until && ordered[exitIndex].timestampMs < exitTarget) exitIndex++;
+        if (exitIndex >= until || Math.abs(ordered[exitIndex].timestampMs - exitTarget) > 5_000) {
+          cursor++;
+          continue;
+        }
+
+        const pipFactor = gene.symbol?.includes('JPY') || candle.symbol.includes('JPY') ? 100 : 10000;
+        const entryPrice = ordered[entryIndex].open;
+        const exitPrice = ordered[exitIndex].close;
+        const gross = (result.direction === 'BUY' ? exitPrice - entryPrice : entryPrice - exitPrice) * pipFactor;
+        const net = gross - spreadPips;
+        trades++;
+        netPips += net;
+        if (net > 0.5) { wins++; positivePips += net; }
+        else if (net < -0.5) { losses++; negativePips += Math.abs(net); }
+        else scratches++;
+
+        // One outstanding trade per pair at a time, matching the production scheduler constraint.
+        cursor = exitIndex + 1;
+      }
+      const denominator = Math.max(1, trades);
+      return {
+        trades, wins, losses, scratches,
+        winRate: wins / Math.max(1, wins + losses),
+        netPips,
+        expectedValuePips: netPips / denominator,
+        profitFactor: negativePips > 0 ? positivePips / negativePips : (positivePips > 0 ? 99 : 0),
+      };
+    };
+
+    const train = simulateRange(0, trainEnd);
+    const validation = simulateRange(validationStart, validationEnd);
+    const test = simulateRange(testStart, n);
+    if (train.trades < 50 || validation.trades < 50 || test.trades < 100) {
+      throw new Error(
+        `Insufficient executed trades after realistic entry/expiry simulation (train=${train.trades}, validation=${validation.trades}, test=${test.trades}). Import more historical data or select a more frequent candidate setup.`
+      );
+    }
+
+    // Wilson interval for the untouched test-set win proportion.
+    const z = 1.96, nTest = Math.max(1, test.wins + test.losses), p = test.wins / nTest;
+    const denominator = 1 + z * z / nTest;
+    const center = (p + z * z / (2 * nTest)) / denominator;
+    const margin = z * Math.sqrt((p * (1 - p) / nTest) + (z * z / (4 * nTest * nTest))) / denominator;
+    const interval: [number, number] = [
+      Math.max(0, Number((center - margin).toFixed(4))),
+      Math.min(1, Number((center + margin).toFixed(4))),
+    ];
+
+    const backtestMetrics: StrategyBacktestMetrics = {
+      trainSampleSize: train.trades,
+      trainScoredSampleSize: train.wins + train.losses,
+      validationSampleSize: validation.trades,
+      validationScoredSampleSize: validation.wins + validation.losses,
+      trainWinRate: Number(train.winRate.toFixed(4)),
+      validationWinRate: Number(validation.winRate.toFixed(4)),
+      testWinRate: Number(test.winRate.toFixed(4)),
+      testAccuracy: Number(test.winRate.toFixed(4)),
+      testSampleSize: test.trades,
+      testScoredSampleSize: test.wins + test.losses,
+      testWins: test.wins,
+      testLosses: test.losses,
+      expectedValuePips: Number(test.expectedValuePips.toFixed(2)),
+      profitFactor: Number(test.profitFactor.toFixed(2)),
+      confidenceInterval95: interval,
+      trainPeriod: { start: ordered[Math.max(0, 30)].timestamp, end: ordered[trainEnd - 1].timestamp },
+      validationPeriod: { start: ordered[validationStart].timestamp, end: ordered[validationEnd - 1].timestamp },
+      testPeriod: { start: ordered[testStart].timestamp, end: ordered[n - 1].timestamp },
+    };
+
+    const testScoredTrades = test.wins + test.losses;
+    const validationScoredTrades = validation.wins + validation.losses;
+    const promotionEligible =
+      testScoredTrades >= 200 &&
+      validationScoredTrades >= 100 &&
+      test.winRate >= 0.55 &&
+      validation.winRate >= 0.53 &&
+      test.expectedValuePips > 0 &&
+      test.profitFactor >= 1.15 &&
+      interval[0] > 0.50;
+
+    const updated: SynthesizedStrategyGene = {
+      ...gene,
+      verifiedAccuracy: Number((test.winRate * 100).toFixed(1)),
+      sampleCount: testScoredTrades,
+      accuracyStatus: 'BACKTESTED',
+      backtestMetrics,
+      // Historical validation only qualifies a candidate for forward paper trading.
+      status: promotionEligible ? 'PAPER_TRADING' : 'EXPERIMENTING',
+    };
+    db.updateSynthesizedStrategy(updated);
+    return updated;
+  }
+
+  /**
+   * Generates a candidate formula. Candidate generation is not evidence of an edge:
+   * every new candidate starts UNVALIDATED and cannot enter the production pool.
    */
   public synthesizeInfiniteNovelStrategy(
     candles: Candle[],
     symbol: ForexSymbol,
     generation: number
   ): SynthesizedStrategyGene {
+    // Candidate feature/factor labels are sampled, not learned genetic parents.
     const parentConcepts = [
-      'Fractal Volatility Matrix',
-      'Asymmetric Wick Rejection',
-      'Microstructure Flow',
-      'Logarithmic Liquidity Decay',
-      'Second-Derivative EMA Curvature',
-      'Entropy Harmonic Dispersion',
-      'Non-Linear Band Elasticity',
-      'Sub-Bar Delta Imbalance',
-      'Stochastic Phase Synchronization',
+      'Fractal Volatility Matrix', 'Asymmetric Wick Rejection', 'Microstructure Flow',
+      'Logarithmic Liquidity Decay', 'Second-Derivative EMA Curvature',
+      'Entropy Harmonic Dispersion', 'Non-Linear Band Elasticity',
+      'Sub-Bar Delta Imbalance', 'Stochastic Phase Synchronization',
       'Cross-Regime Momentum Wavelet',
     ];
-
-    // Pick 2 or 3 distinct random parents to cross-breed
     const shuffled = [...parentConcepts].sort(() => 0.5 - Math.random());
     const parents = shuffled.slice(0, Math.random() > 0.4 ? 3 : 2);
-
-    const operators: Array<'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion'> = [
-      'tanh_polynomial',
-      'fractal_power',
-      'exponential_decay',
-      'harmonic_dispersion',
-    ];
+    const operators: Array<'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion'> =
+      ['tanh_polynomial', 'fractal_power', 'exponential_decay', 'harmonic_dispersion'];
     const operator = operators[Math.floor(Math.random() * operators.length)];
-
     const horizons: Array<5 | 10 | 15 | 20 | 25 | 30> = [5, 10, 15, 20, 25, 30];
     const horizon = horizons[Math.floor(Math.random() * horizons.length)];
-
-    const sessions: Array<'ASIA' | 'LONDON' | 'OVERLAP' | 'NEW_YORK' | 'ALL'> = [
-      'ASIA',
-      'LONDON',
-      'OVERLAP',
-      'NEW_YORK',
-      'ALL',
-    ];
+    const sessions: Array<'ASIA' | 'LONDON' | 'OVERLAP' | 'NEW_YORK' | 'ALL'> =
+      ['ASIA', 'LONDON', 'OVERLAP', 'NEW_YORK', 'ALL'];
     const sessionAffinity = sessions[Math.floor(Math.random() * sessions.length)];
-
-    const alpha = (0.8 + Math.random() * 1.5).toFixed(2);
-    const beta = (0.4 + Math.random() * 0.9).toFixed(2);
-    const gamma = (0.15 + Math.random() * 0.45).toFixed(2);
-    const exponent = (1.2 + Math.random() * 0.9).toFixed(2);
+    const alpha = Number((0.8 + Math.random() * 1.5).toFixed(2));
+    const beta = Number((0.4 + Math.random() * 0.9).toFixed(2));
+    const gamma = Number((0.15 + Math.random() * 0.45).toFixed(2));
+    const exponent = Number((1.2 + Math.random() * 0.9).toFixed(2));
+    const threshold = 0.38;
     const mutationRate = Number((0.02 + Math.random() * 0.05).toFixed(3));
+    const params = { alpha, beta, gamma, exponent, threshold };
 
     let formula = '';
     let hypothesis = '';
     let whyHumansMissThis = '';
     let name = '';
-    const codeTag = `GEN${generation}_${operator.toUpperCase().slice(0, 4)}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-
     switch (operator) {
       case 'tanh_polynomial':
-        formula = `f(x) = tanh(${alpha}·Z_Entropy) + ${beta}·(LowerWickRatio)^${exponent} - ${gamma}·Δ_20SMA`;
-        name = `Synth-Gen${generation}: Hyperbolic Tangent Entropy + Power Wick Elasticity`;
-        hypothesis = `Hyperbolic tangent saturation compresses high-noise volatility spikes while polynomial wick exponents detect asymptotic limit-order absorption.`;
-        whyHumansMissThis = `Human eyes look for static hammer candles or 70/30 RSI lines; this formula calculates non-linear asymptotic saturation curves across multi-tick entropy, undetectable on visual charts.`;
+        formula = `tanh(${alpha}·ZEntropy) + ${beta}·(LowerWick^ ${exponent} - UpperWick^ ${exponent}) - ${gamma}·MeanDeviation`;
+        name = `Gen${generation}: Tanh Entropy and Wick Asymmetry`;
+        hypothesis = 'A nonlinear return transform combined with asymmetric wick rejection may improve directional selection.';
+        whyHumansMissThis = 'The candidate combines return scaling, wick imbalance and deviation from a short moving average; its value remains unproven until held-out testing.';
         break;
-
       case 'fractal_power':
-        formula = `f(x) = sign(MicroFlow)·|Δ_20MA|^${exponent} + ${alpha}·RSI_Curvature - ${beta}·Wick_Asymmetry`;
-        name = `Synth-Gen${generation}: Fractal Power Drift + Second-Derivative RSI Acceleration`;
-        hypothesis = `Power-law scaling of price deviation from moving average combined with second-derivative RSI acceleration predicts directional expansion before candlestick close.`;
-        whyHumansMissThis = `Traders cannot visually differentiate velocity from acceleration; this formula tracks second-order curvature of momentum derivatives before price bars close.`;
+        formula = `sign(MicroFlow)·|MeanDeviation|^${exponent} + ${alpha}·RSICurvature - ${beta}·WickAsymmetry - ${gamma}·DeviationPenalty`;
+        name = `Gen${generation}: Fractal Power Drift`;
+        hypothesis = 'Power-scaled deviation and RSI curvature may identify directional drift inflections.';
+        whyHumansMissThis = 'The formula combines nonlinear deviation, RSI curvature and wick asymmetry; empirical value has not yet been established.';
         break;
-
       case 'exponential_decay':
-        formula = `f(x) = σ(${alpha}·EMA_Curvature × Vol_Elasticity) - ${beta}·ln(1 + ATR_harmonic)`;
-        name = `Synth-Gen${generation}: Sigmoidal Wave Curvature × Logarithmic Harmonic Dispersion`;
-        hypothesis = `Sigmoidal activation isolates sharp accelerations in EMA slope multiplied by volume elasticity, while logarithmic harmonic damping filters false whipsaws.`;
-        whyHumansMissThis = `Manual traders rely on linear moving average crosses which suffer heavy lag; this non-linear sigmoid reacts to the rate-of-change of slope within the first 60 seconds of candle formation.`;
+        formula = `2.5·(sigmoid(${alpha}·EMACurvature·VolElasticity)-0.5) - ${beta}·log(1+|MeanDeviation|) - ${gamma}·WickAsymmetry`;
+        name = `Gen${generation}: Exponential Curvature Filter`;
+        hypothesis = 'EMA curvature scaled by candle range may help distinguish directional expansion from noisy movement.';
+        whyHumansMissThis = 'The rule combines acceleration, range scaling and wick imbalance; it is a testable hypothesis, not a verified edge.';
         break;
-
       case 'harmonic_dispersion':
-        formula = `f(x) = (Δ_TickEntropy / √(1 + EMA_Spread)) · cos(π·WickRatio) + ${alpha}·OrderFlow_Z`;
-        name = `Synth-Gen${generation}: Harmonic Wavelet Dispersion + Order-Flow Z-Score`;
-        hypothesis = `Modulating tick entropy by normalized EMA spread and cosine phase harmonic isolates periodic cycle bottoms during institutional market-making phases.`;
-        whyHumansMissThis = `Human intuition assumes trend continuity or support bounces; this formula detects phase-harmonic node cancellations where institutional books are completely unbalanced.`;
+        formula = `${beta}·cos(π·WickRatio) + ${alpha}·BodyFlow - ${gamma}·EMASpread`;
+        name = `Gen${generation}: Harmonic Wick Dispersion`;
+        hypothesis = 'Candle body flow and wick geometry may interact with EMA spread to identify directional imbalance.';
+        whyHumansMissThis = 'The equation compresses wick geometry and body flow into a single score; held-out results determine whether it is useful.';
         break;
     }
-
-    // Run walk-forward empirical validation over available candles
-    let sampleCount = Math.max(80, Math.min(260, Math.floor(candles.length * 1.5) + Math.floor(Math.random() * 40)));
-    // Realist high-conviction accuracy for non-human stacked models
-    const baseAcc = 81.5 + Math.random() * 6.5; // 81.5% - 88.0%
-    const verifiedAccuracy = Number(baseAcc.toFixed(1));
 
     const gene: SynthesizedStrategyGene = {
       id: `synth_gen${generation}_${Date.now().toString(36)}`,
       name,
-      code: codeTag,
+      code: `GEN${generation}_${operator.toUpperCase().slice(0, 4)}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
       generation,
       mathematicalFormula: formula,
       parents,
       mutationRate,
       nonLinearOperator: operator,
+      operatorParameters: params,
+      symbol,
       optimalHorizonMinutes: horizon,
       sessionAffinity,
-      verifiedAccuracy,
-      sampleCount,
-      status: verifiedAccuracy >= 75 ? 'PROMOTED_ACTIVE' : 'EXPERIMENTING',
+      verifiedAccuracy: 0,
+      sampleCount: 0,
+      accuracyStatus: 'UNVALIDATED',
+      status: 'EXPERIMENTING',
       scientificHypothesis: hypothesis,
       whyHumansMissThis,
       createdAt: new Date().toISOString(),
@@ -685,7 +907,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
   }
 
   /**
-   * Evaluates live market conditions against a synthesized non-human strategy gene.
+   * Evaluates current market candles against a stored strategy candidate.
    * Computes the mathematical formula activation f(x) and yields high-conviction setup.
    */
   public evaluateSynthesizedGeneSignal(
@@ -730,56 +952,61 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
     const rsiSlopeCurrent = lastRsi - prevRsi;
     const rsiCurvature = rsiSlopeCurrent / 10;
 
-    // Non-linear evaluation of the formula:
+    // These exact coefficients are persisted with the gene and reused by its backtest.
+    const params = gene.operatorParameters || { alpha: 1.45, beta: 0.68, gamma: 0.28, exponent: 1.8, threshold: 0.38 };
+    const { alpha, beta, gamma, exponent } = params;
+
+    // Non-linear evaluation of the exact persisted candidate formula:
     let activationScore = 0;
 
     switch (gene.nonLinearOperator) {
       case 'tanh_polynomial': {
         const zEntropy = ((candle.close - prevCandle.close) * pipFactor) / 2.0;
-        const wickDelta = Math.pow(lowerWickRatio, 1.8) - Math.pow(upperWickRatio, 1.8);
-        activationScore = Math.tanh(1.45 * zEntropy) + 0.68 * wickDelta - 0.28 * (delta20Pips / 10);
+        const wickDelta = Math.pow(lowerWickRatio, exponent) - Math.pow(upperWickRatio, exponent);
+        activationScore = Math.tanh(alpha * zEntropy) + beta * wickDelta - gamma * (delta20Pips / 10);
         break;
       }
       case 'fractal_power': {
         const microFlow = candle.close > candle.open ? 1 : -1;
-        const powerDrift = microFlow * Math.pow(Math.min(5, Math.abs(delta20Pips) / 4), 1.25);
-        activationScore = powerDrift + 0.54 * rsiCurvature - 0.35 * (upperWickRatio - lowerWickRatio);
+        const powerDrift = microFlow * Math.pow(Math.min(5, Math.abs(delta20Pips) / 4), exponent);
+        activationScore = powerDrift + alpha * rsiCurvature - beta * (upperWickRatio - lowerWickRatio) - gamma * (delta20Pips / 20);
         break;
       }
       case 'exponential_decay': {
         const volElasticity = Math.min(3, range / (range * 0.8 + 0.0001));
-        const sigmoid = 1 / (1 + Math.exp(-Math.max(-5, Math.min(5, 2.1 * emaCurvature * volElasticity))));
-        activationScore = (sigmoid - 0.5) * 2.5;
+        const sigmoid = 1 / (1 + Math.exp(-Math.max(-5, Math.min(5, alpha * emaCurvature * volElasticity))));
+        activationScore = (sigmoid - 0.5) * 2.5 - beta * Math.log1p(Math.abs(delta20Pips)) / 5 - gamma * (upperWickRatio - lowerWickRatio);
         break;
       }
       case 'harmonic_dispersion': {
         const wickRatio = (upperWick + lowerWick) / range;
         const wave = Math.cos(Math.PI * wickRatio);
         const orderFlow = candle.close > candle.open ? 0.6 : -0.6;
-        activationScore = wave * 0.5 + orderFlow;
+        const bodyFlow = (candle.close - candle.open) * pipFactor / Math.max(0.1, range * pipFactor);
+        const emaSpread = (lastEma9 - lastEma21) * pipFactor / 10;
+        activationScore = beta * wave + alpha * bodyFlow - gamma * emaSpread;
         break;
       }
     }
 
-    const threshold = 0.38;
+    const threshold = params.threshold;
     const shouldTrigger = Math.abs(activationScore) > threshold;
     const direction: 'BUY' | 'SELL' = activationScore > 0 ? 'BUY' : 'SELL';
-    const conviction = Number(Math.min(0.94, 0.80 + Math.abs(activationScore) * 0.1).toFixed(2));
+    const conviction = Number(Math.min(0.94, 0.50 + Math.min(0.44, Math.abs(activationScore) * 0.1)).toFixed(2));
 
     return {
       shouldTrigger,
       direction,
       conviction,
-      rationale: `Formula Activation: ${activationScore.toFixed(3)} (Threshold: ±${threshold}). Non-linear operator ${gene.nonLinearOperator} converged on ${direction}.`,
+      rationale: `Signal score: ${activationScore.toFixed(3)} (Threshold: ±${threshold}). Operator ${gene.nonLinearOperator} selected ${direction}; this score is not a win probability.`,
     };
   }
 
   /**
-   * Autonomous AGI Forensic Loss Investigation & Self-Correction Engine
-   * Investigates every losing trade like a human quantitative researcher + AGI,
-   * identifies the root cause (spread friction, premature wick sweep, exhaustion divergence,
-   * session liquidity shift, or operator noise), extracts concrete algorithmic lessons,
-   * and immediately evolves an Antidote Strategy Gene to adaptively counter the failure mode.
+   * Rule-based loss-pattern diagnostics for a completed forward paper observation.
+   * The labels below are hypotheses derived from OHLC and modeled spread thresholds;
+   * they do not prove institutional activity, broker slippage or the true market cause.
+   * Any resulting filter candidate remains unvalidated until independently tested.
    */
   public conductForensicLossAutopsy(
     signal: ResearchSignal,
@@ -801,7 +1028,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
     // 1. Root Cause Autopsy & Forensic Diagnostics
     if (Math.abs(grossReturn) <= spread * 1.2) {
       rootCause = 'SPREAD_EXPANSION_SLIPPAGE';
-      explanation = `Spread friction (${spread} pips) consumed the micro-edge. The gross price movement (${grossReturn > 0 ? '+' : ''}${grossReturn} pips) was in line with expected volatility, but institutional bid-ask spread widened during execution, flipping a marginal win into a net loss.`;
+      explanation = `The modeled net result was dominated by the configured spread assumption (${spread} pips). This is a cost-sensitivity flag, not evidence that a broker spread widened or that slippage occurred.`;
       lessonsLearned = [
         `Enforce strict Dynamic Spread Gate: Reject signals when current pair spread exceeds 25% of expected ATR move.`,
         `Switch to high-liquidity session windows (London/NY Overlap) where spreads compress to sub-pip levels.`,
@@ -812,7 +1039,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
       antidoteName = `Antidote-${signal.symbol}: Dynamic Spread Damping + Harmonic Wavelet`;
     } else if (signal.direction === 'BUY' && (candle.low < (signal.actualEntryPrice || signal.triggerPrice) - 3 * pipScale)) {
       rootCause = 'MICRO_WICK_FALSE_ABSORPTION';
-      explanation = `Premature wick absorption trap. The initial lower wick appeared to absorb selling pressure, but institutional algorithmic stop-runs penetrated below the swing low before directional expansion occurred.`;
+      explanation = `A rule-based adverse-wick pattern was observed: price moved below the reference level by the configured threshold. OHLC candles cannot establish that stop-runs or institutional absorption occurred.`;
       lessonsLearned = [
         `Increase polynomial wick exponent from 1.85 to 2.30 to demand deeper liquidity absorption verification.`,
         `Incorporate sub-tick volume delta confirmation: verify tick volume expands on the rejection wick.`,
@@ -823,7 +1050,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
       antidoteName = `Antidote-${signal.symbol}: Deep Wick Exponent + Polynomial Saturation`;
     } else if (signal.direction === 'SELL' && (candle.high > (signal.actualEntryPrice || signal.triggerPrice) + 3 * pipScale)) {
       rootCause = 'MICRO_WICK_FALSE_ABSORPTION';
-      explanation = `Upper liquidity sweep failure. Price temporarily penetrated the 20-bar high, triggering our PUT setup, but market makers absorbed short liquidity and forced a secondary squeeze.`;
+      explanation = `A rule-based adverse-wick pattern was observed: price moved above the reference level by the configured threshold. OHLC candles cannot establish market-maker activity or a liquidity sweep.`;
       lessonsLearned = [
         `Increase upper wick threshold to >55% of candle range before considering bearish liquidity sweeps.`,
         `Enforce second-derivative RSI deceleration: confirm momentum has stalled before fading the high.`,
@@ -834,7 +1061,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
       antidoteName = `Antidote-${signal.symbol}: Upper Squeeze Neutralizer + RSI Curvature`;
     } else if ((signal.expiryMinutes || 5) >= 15) {
       rootCause = 'SESSION_BOUNDARY_LIQUIDITY_VACUUM';
-      explanation = `Time-horizon decay over extended duration (${signal.expiryMinutes}m). The initial 5-minute directional momentum was valid, but during minutes 10–${signal.expiryMinutes}, session participant turnover introduced order-flow drift that reversed price.`;
+      explanation = `The modeled outcome reversed over the selected ${signal.expiryMinutes}-minute horizon. The session-liquidity explanation is a hypothesis, not a verified cause.`;
       lessonsLearned = [
         `Dynamically compress expiry duration from ${signal.expiryMinutes}m to 5m/10m when trading in transition windows.`,
         `Evaluate session turnover timer: reject >15m expiries within 30 minutes of London or New York close.`,
@@ -845,7 +1072,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
       antidoteName = `Antidote-${signal.symbol}: Dynamic Expiry Compression + Wave Curvature`;
     } else {
       rootCause = 'MOMENTUM_EXHAUSTION_DIVERGENCE';
-      explanation = `Momentum collapsed rapidly within 120 seconds of candle open. The setup candle had strong directional bias, but volume evaporated immediately upon the next candle opening, causing mean reversion.`;
+      explanation = `The forward paper outcome moved against the predicted direction inside the selected horizon. This rule-based label does not establish a volume or order-flow cause.`;
       lessonsLearned = [
         `Filter out low-volume continuation setups where setup candle volume was < 80% of 20-period average.`,
         `Require second-derivative EMA acceleration confirmation (d²E/dt² > 0) rather than simple linear slope.`,
@@ -863,20 +1090,21 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
       code: `ANTIDOTE_${rootCause.slice(0, 4)}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
       generation: 40 + Math.floor(Math.random() * 10),
       mathematicalFormula: formula,
-      parents: [signal.strategyName || 'Baseline Strategy', `Forensic Loss Autopsy (${signal.symbol})`],
+      parents: [signal.strategyName || 'Baseline Strategy', `Rule-based Loss Pattern (${signal.symbol})`],
       mutationRate: 0.065,
       nonLinearOperator: operator,
       optimalHorizonMinutes: (signal.expiryMinutes === 5 ? 10 : 5) as any,
       sessionAffinity: (signal.marketSession || 'ALL') as any,
-      verifiedAccuracy: Number((84.0 + Math.random() * 4.5).toFixed(1)),
-      sampleCount: 185,
-      status: 'PROMOTED_ACTIVE',
-      scientificHypothesis: `Autonomous adaptive counter-measure evolved directly from trade failure: ${lessonsLearned[0]}`,
-      whyHumansMissThis: `Humans repeat emotional mistakes or abandon strategies after a loss; the AGI quantifies the exact failure mode, extracts parameter corrections, and synthesizes a mathematical antidote.`,
+      verifiedAccuracy: 0,
+      sampleCount: 0,
+      accuracyStatus: 'UNVALIDATED',
+      status: 'EXPERIMENTING',
+      scientificHypothesis: `Unvalidated filter hypothesis generated from a rule-based loss tag: ${lessonsLearned[0]}`,
+      whyHumansMissThis: `This filter hypothesis was generated from a rule-based outcome label. It has no measured predictive accuracy until separately validated on untouched historical data and forward paper outcomes.`,
       createdAt: new Date().toISOString(),
     };
 
-    // Promote the newly evolved antidote strategy into the genetic pool
+    // Store the unvalidated filter hypothesis for later research; it is not eligible for signal generation.
     db.addSynthesizedStrategy(antidoteGene);
 
     const autopsy: LossAutopsy = {

@@ -195,9 +195,13 @@ export class DataFeedEngine {
     // Save to persistent database
     db.storeCandles(symbol, validated);
 
+    const containsSynthetic = validated.some(candle => candle.source === 'synthetic');
+    const reportedSource = containsSynthetic
+      ? (activeSource === 'synthetic' ? 'synthetic' : `${activeSource}+synthetic`)
+      : activeSource;
     return {
       candles: validated,
-      source: activeSource,
+      source: reportedSource,
       qualityScore,
     };
   }

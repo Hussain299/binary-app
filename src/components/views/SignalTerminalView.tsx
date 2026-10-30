@@ -27,7 +27,7 @@ import {
   Cpu,
   Microscope,
 } from 'lucide-react';
-import { AutopilotLog, MarketSessionInfo, ResearchSignal, SynthesizedStrategyGene, LossAutopsy } from '../../types/index.js';
+import { AutopilotLog, MarketSessionInfo, ResearchSignal, SynthesizedStrategyGene, LossAutopsy, FOREX_PAIRS, StrategyPerformanceRecord } from '../../types/index.js';
 import { AutopilotStream } from '../AutopilotStream.tsx';
 
 interface SignalTerminalViewProps {
@@ -55,7 +55,12 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
   const [sessionData, setSessionData] = useState<MarketSessionInfo[]>([]);
   const [synthesizedStrategies, setSynthesizedStrategies] = useState<SynthesizedStrategyGene[]>([]);
+  const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformanceRecord[]>([]);
   const [isEvolvingStrategy, setIsEvolvingStrategy] = useState<boolean>(false);
+  const [historyImportPair, setHistoryImportPair] = useState<string>('EUR/USD');
+  const [isImportingHistory, setIsImportingHistory] = useState<boolean>(false);
+  const [historyImportMessage, setHistoryImportMessage] = useState<string>('');
+  const [validatingGeneId, setValidatingGeneId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState<number>(Date.now());
 
   // Real-time 1-second ticking timer for candle countdowns
@@ -90,10 +95,26 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     }
   };
 
+  const fetchStrategyPerformance = async () => {
+    try {
+      const res = await fetch('/api/strategies/performance');
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.strategies) setStrategyPerformance(data.strategies);
+      }
+    } catch (e) {
+      console.warn('Failed to fetch forward strategy performance:', e);
+    }
+  };
+
+  const getForwardPerformance = (strategyId?: string) =>
+    strategyPerformance.find(item => item.strategyId === (strategyId || '')) || null;
+
   useEffect(() => {
     fetchSessions();
     fetchSynthesizedStrategies();
-  }, [signals.length]);
+    fetchStrategyPerformance();
+  }, [signals]);
 
   const handleEvolveStrategy = async () => {
     setIsEvolvingStrategy(true);
@@ -101,7 +122,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
       const res = await fetch('/api/strategies/evolve', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
-        if (data?.strategies) setSynthesizedStrategies(data.strategies);
+        await fetchSynthesizedStrategies();
+        await fetchStrategyPerformance();
         onEvaluateSignals();
       }
     } catch (err) {
@@ -110,6 +132,118 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
       setIsEvolvingStrategy(false);
     }
   };
+
+  const parseCsvLine = (line: string): string[] => {
+    const cells: string[] = [];
+    let value = '';
+    let quoted = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"' && line[i + 1] === '"' && quoted) { value += '"'; i++; }
+      else if (ch === '"') quoted = !quoted;
+      else if (ch === ',' && !quoted) { cells.push(value.trim()); value = ''; }
+      else value += ch;
+    }
+    cells.push(value.trim());
+    return cells;
+  };
+
+  const handleImportHistoricalFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setIsImportingHistory(true);
+    setHistoryImportMessage('');
+    try {
+      const rawText = await file.text();
+      let candles: any[] = [];
+      if (file.name.toLowerCase().endsWith('.json')) {
+        const parsed = JSON.parse(rawText);
+        candles = Array.isArray(parsed) ? parsed : (parsed.candles || parsed.data || []);
+      } else {
+        const lines = rawText.split(/\r?\n/).filter(line => line.trim().length > 0);
+        if (lines.length < 2) throw new Error('CSV must include a header row and at least one candle.');
+        const headers = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase().replace(/[ _-]/g, ''));
+        const indexOf = (...names: string[]) => headers.findIndex(h => names.includes(h));
+        const timeIndex = indexOf('timestamp', 'time', 'date', 'datetime', 'gmttime', 'timestampms');
+        const openIndex = indexOf('open', 'o');
+        const highIndex = indexOf('high', 'h');
+        const lowIndex = indexOf('low', 'l');
+        const closeIndex = indexOf('close', 'c');
+        const volumeIndex = indexOf('volume', 'vol', 'v');
+        if ([timeIndex, openIndex, highIndex, lowIndex, closeIndex].some(i => i < 0)) {
+          throw new Error('CSV headers must contain timestamp/time, open, high, low and close columns.');
+        }
+        candles = lines.slice(1).map(line => {
+          const cells = parseCsvLine(line);
+          return {
+            timestamp: cells[timeIndex],
+            open: Number(cells[openIndex]),
+            high: Number(cells[highIndex]),
+            low: Number(cells[lowIndex]),
+            close: Number(cells[closeIndex]),
+            volume: volumeIndex >= 0 ? Number(cells[volumeIndex]) : 0,
+          };
+        });
+      }
+      if (!candles.length) throw new Error('No candle rows were found in the selected file.');
+      const batchSize = 20_000;
+      let imported = 0;
+      let rejected = 0;
+      let totalStored = 0;
+      for (let offset = 0; offset < candles.length; offset += batchSize) {
+        const batch = candles.slice(offset, offset + batchSize);
+        const res = await fetch('/api/research/candles/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol: historyImportPair, candles: batch }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Historical import failed at row ${offset + 1}.`);
+        imported += data.result.imported;
+        rejected += data.result.rejected;
+        totalStored = data.result.totalStored;
+        setHistoryImportMessage(
+          `Importing ${historyImportPair}: ${Math.min(offset + batch.length, candles.length).toLocaleString()} / ${candles.length.toLocaleString()} rows processed…`
+        );
+      }
+      setHistoryImportMessage(
+        `Imported ${imported.toLocaleString()} valid candles for ${historyImportPair}. Stored total: ${totalStored.toLocaleString()}. Rejected rows: ${rejected}.`
+      );
+    } catch (error: any) {
+      setHistoryImportMessage(error.message || 'Could not import historical candles.');
+    } finally {
+      setIsImportingHistory(false);
+      event.target.value = '';
+    }
+  };
+
+  const handleValidateGene = async (geneId: string, symbol?: string) => {
+    setValidatingGeneId(geneId);
+    setHistoryImportMessage('');
+    try {
+      const res = await fetch('/api/strategies/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ geneId, symbol: symbol || historyImportPair }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Strategy validation failed.');
+      await fetchSynthesizedStrategies();
+      setHistoryImportMessage(
+        `${data.gene.name}: untouched-test win rate ${data.gene.verifiedAccuracy}% from ${data.gene.sampleCount} trades. Status: ${data.gene.status}.`
+      );
+    } catch (error: any) {
+      setHistoryImportMessage(error.message || 'Strategy validation failed.');
+    } finally {
+      setValidatingGeneId(null);
+    }
+  };
+
+  const validatedGenes = synthesizedStrategies.filter(
+    gene => gene.accuracyStatus === 'BACKTESTED' && !!gene.backtestMetrics
+  );
+  const validatedGeneCount = validatedGenes.length;
+  const paperTradingGeneCount = synthesizedStrategies.filter(gene => gene.status === 'PAPER_TRADING').length;
 
   // 5-Minute Candle Synchronization
   const FIVE_MIN_MS = 5 * 60 * 1000;
@@ -150,17 +284,18 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const historySignals = signals.filter(s =>
     ['CLOSED', 'EXPIRED', 'INVALIDATED'].includes(s.lifecycleState)
   );
-  const closedSignals = signals.filter(
-    s => s.lifecycleState === 'CLOSED' && ['WIN', 'LOSS'].includes(s.outcomeResult)
+  const completedSignals = signals.filter(
+    s => s.lifecycleState === 'CLOSED' && ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
   );
+  const closedSignals = completedSignals.filter(s => ['WIN', 'LOSS'].includes(s.outcomeResult));
   const totalWins = closedSignals.filter(s => s.outcomeResult === 'WIN').length;
   const totalLosses = closedSignals.filter(s => s.outcomeResult === 'LOSS').length;
   const calculatedWinRate =
     closedSignals.length > 0
       ? ((totalWins / closedSignals.length) * 100).toFixed(1)
-      : '76.5';
+      : 'No scored forward outcomes';
   const totalNetPips = Number(
-    closedSignals.reduce((acc, s) => acc + (s.netReturnPips || 0), 0).toFixed(1)
+    completedSignals.reduce((acc, s) => acc + (s.netReturnPips || 0), 0).toFixed(1)
   );
 
   const activeSignals = signals.filter(s =>
@@ -250,10 +385,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           <div className="px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-800/80 flex items-center gap-2">
             <Target className="w-3.5 h-3.5 text-emerald-400" />
             <span className="text-xs font-bold text-emerald-300 font-mono">
-              {calculatedWinRate}% Accuracy
+              {closedSignals.length ? `${calculatedWinRate}% Forward signal win rate` : 'No completed forward outcomes'}
             </span>
             <span className="text-[10px] text-neutral-400 font-mono hidden sm:inline">
-              ({totalWins}W / {totalLosses}L)
+              ({totalWins}W / {totalLosses}L · n={closedSignals.length})
             </span>
           </div>
 
@@ -273,15 +408,12 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
       <div className="bg-neutral-900/60 border-b border-neutral-800/80 px-3 sm:px-5 py-1.5 flex items-center justify-between gap-2 overflow-x-auto text-[11px] font-mono scrollbar-none shrink-0">
         <div className="flex items-center gap-2 text-neutral-400 shrink-0">
           <Globe className="w-3.5 h-3.5 text-cyan-400" />
-          <span className="font-bold text-neutral-300 uppercase text-[10px] tracking-wider">Session Accuracy:</span>
+          <span className="font-bold text-neutral-300 uppercase text-[10px] tracking-wider">Forward Session Outcomes:</span>
         </div>
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          {(sessionData.length > 0 ? sessionData : [
-            { id: 'ASIA', shortName: 'Asia', winRate: 74.5, isActive: false, totalTrades: 0 },
-            { id: 'LONDON', shortName: 'London', winRate: 76.8, isActive: false, totalTrades: 0 },
-            { id: 'OVERLAP', shortName: 'Overlap', winRate: 81.2, isActive: true, totalTrades: 0 },
-            { id: 'NEW_YORK', shortName: 'New York', winRate: 75.6, isActive: false, totalTrades: 0 },
-          ]).map(s => (
+          {sessionData.length === 0 ? (
+            <span className="text-neutral-500">No completed forward session outcomes yet</span>
+          ) : sessionData.map(s => (
             <button
               key={s.id}
               onClick={() => setShowSessionsModal(true)}
@@ -298,7 +430,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 </span>
               )}
               <span>{s.shortName}:</span>
-              <strong className={s.isActive ? 'text-emerald-400' : 'text-neutral-200'}>{s.winRate}%</strong>
+              <strong className={s.isActive ? 'text-emerald-400' : 'text-neutral-200'}>{s.hasMeasuredData ? `${s.winRate}%` : '—'}</strong>
+              <span className="text-[9px] text-neutral-500">n={s.totalTrades}</span>
               {s.isActive && <span className="text-[9px] uppercase px-1 rounded bg-emerald-500/20 text-emerald-400">Live</span>}
             </button>
           ))}
@@ -361,13 +494,13 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           <button
             onClick={() => setShowGenesisModal(true)}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-600/80 text-xs text-cyan-200 font-bold transition-all shadow-xs"
-            title="Inspect infinite non-human evolutionary strategies"
+            title="Inspect strategy candidates and validation evidence"
           >
             <Dna className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-            <span className="hidden sm:inline">AI Genesis</span>
-            <span className="sm:hidden">Genesis</span>
+            <span className="hidden sm:inline">Candidates</span>
+            <span className="sm:hidden">Candidates</span>
             <span className="px-1.5 py-0.2 rounded bg-cyan-500/20 text-[10px] text-cyan-300 font-mono font-bold">
-              {synthesizedStrategies.filter(s => s.status === 'PROMOTED_ACTIVE').length || 5}
+              {synthesizedStrategies.filter(s => s.status === 'PROMOTED_ACTIVE').length}
             </span>
           </button>
 
@@ -416,7 +549,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   Closed Trades Performance
                 </span>
                 <div className="text-xl sm:text-2xl font-black font-mono text-white">
-                  {calculatedWinRate}% Verified Win Rate
+                  {closedSignals.length ? `${calculatedWinRate}% forward paper win rate` : 'No completed forward outcomes'}
                 </div>
               </div>
             </div>
@@ -505,7 +638,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                           {sig.isNovelAiSynthesized && (
                             <span className="px-2 py-0.5 rounded-full bg-linear-to-r from-cyan-950 to-emerald-950 border border-cyan-500 text-[10px] font-black text-cyan-300 font-mono shadow-xs flex items-center gap-1">
                               <Dna className="w-2.5 h-2.5 text-cyan-400 animate-pulse" />
-                              AI Non-Human Formula
+                              Formula Candidate
                             </span>
                           )}
                           {sig.isStackedStrategy && !sig.isNovelAiSynthesized && (
@@ -623,7 +756,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                             <div className="flex items-center justify-between">
                               <span className="text-[10px] font-black uppercase text-rose-300 flex items-center gap-1 font-mono">
                                 <Microscope className="w-3.5 h-3.5 text-rose-400" />
-                                AGI Loss Autopsy & Antidote
+                                Loss Diagnostics
                               </span>
                               <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-900/40 text-rose-300 font-mono">
                                 {sig.lossAutopsy ? sig.lossAutopsy.rootCause.replace(/_/g, ' ') : 'Self-Evolved Antidote'}
@@ -635,7 +768,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                                   <strong className="text-amber-400">Lesson:</strong> {sig.lossAutopsy.lessonsLearned[0]}
                                 </div>
                                 <div className="text-cyan-300 truncate">
-                                  <strong className="text-neutral-400">Antidote Strategy:</strong> {sig.lossAutopsy.antidoteStrategyName}
+                                  <strong className="text-neutral-400">Unvalidated Filter Candidate:</strong> {sig.lossAutopsy.antidoteStrategyName}
                                 </div>
                               </div>
                             )}
@@ -685,15 +818,27 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                           </span>
                         </div>
                         <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800/80 font-mono text-[11px] font-bold shrink-0">
-                          {sig.strategyWinRate || '76.5'}% Win Rate
+                          {sig.strategyEvidenceStatus === 'BACKTESTED' && typeof sig.strategyWinRate === 'number' ? `${sig.strategyWinRate.toFixed(1)}% Historical test WR · n=${sig.strategyHistoricalSampleSize || 0}` : 'Historical result not validated'}
                         </span>
                       </div>
+
+                      {(() => {
+                        const forward = getForwardPerformance(sig.strategyId);
+                        const scoredTrades = forward ? forward.wins + forward.losses : 0;
+                        return (
+                          <div className="text-[10px] font-mono text-neutral-400 pt-1">
+                            Forward paper results: {forward && forward.trades > 0
+                              ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored outcomes` : 'No scored outcomes'} · ${forward.scratches} scratches · ${forward.netPips > 0 ? '+' : ''}${forward.netPips.toFixed(1)} modeled net pips`
+                              : 'No completed forward outcomes yet'}
+                          </div>
+                        );
+                      })()}
 
                       {sig.mathematicalFormula && (
                         <div className="mt-1 p-2 rounded-lg bg-cyan-950/40 border border-cyan-800/70 font-mono text-[10px] text-cyan-200 flex items-center justify-between gap-1 overflow-x-auto scrollbar-none">
                           <span className="text-cyan-400 font-bold shrink-0">Equation:</span>
                           <span className="truncate">{sig.mathematicalFormula}</span>
-                          <span className="text-[9px] px-1 py-0.2 bg-cyan-500/20 text-cyan-300 rounded shrink-0 font-bold">Non-Human</span>
+                          <span className="text-[9px] px-1 py-0.2 bg-cyan-500/20 text-cyan-300 rounded shrink-0 font-bold">Formula</span>
                         </div>
                       )}
 
@@ -712,7 +857,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   {/* CARD FOOTER: Tap hint & Confidence */}
                   <div className="pt-2.5 mt-3 border-t border-neutral-800/60 flex items-center justify-between text-[11px] text-neutral-400">
                     <span className="font-mono">
-                      AI Confidence:{' '}
+                      Signal score (not a probability):{' '}
                       <strong className="text-emerald-400">
                         {(sig.confidence * 100).toFixed(0)}%
                       </strong>
@@ -772,10 +917,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-purple-800/80 space-y-2">
                 <span className="font-bold text-purple-400 block text-sm flex items-center gap-1.5">
                   <Layers className="w-4 h-4" />
-                  1. Multi-Strategy Stacking (Eliminating 50% Coin-Flip Setups)
+                  1. Signal Confluence (Strength Score, Not Win Probability)
                 </span>
                 <p>
-                  A single technical indicator often yields a 50% random coin-flip. To ensure an authentic statistical edge, the bot <strong>stacks 2 to 4 independent quantitative models</strong> (e.g. Trend Breakout + Liquidity Wick Sweep + RSI Oversold + Volume Flow). Signals only fire when <strong>multiple strategies confirm the exact same direction</strong>, driving accuracy to 78%–92%.
+                  The current rule-based signal engine combines technical confluences such as trend direction, wick geometry, RSI and range expansion. A larger confluence count is only a signal-strength heuristic; it does not establish a win rate. Performance is calculated separately from uploaded historical tests and completed forward paper outcomes.
                 </p>
               </div>
 
@@ -785,22 +930,17 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   2. Session-Segmented Calibration (Asia / London / Overlap / New York)
                 </span>
                 <p>
-                  Forex market structure shifts drastically between sessions. The bot tracks live accuracy broken down by:
-                  <strong> Asian Session</strong> (05:30 AM - 12:30 PM IST),
-                  <strong> London Session</strong> (12:30 PM - 05:30 PM IST),
-                  <strong> London / NY Overlap</strong> (05:30 PM - 09:30 PM IST), and
-                  <strong> New York Session</strong> (09:30 PM - 02:30 AM IST).
-                  Strategy selection dynamically adapts to the active session's volatility profile.
+                  Completed forward paper outcomes are grouped by their recorded market session. A session with no completed outcomes shows no win rate; a strategy-specific leader is withheld until at least 20 scored forward paper outcomes exist.
                 </p>
               </div>
 
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-emerald-800/80 space-y-2">
                 <span className="font-bold text-emerald-400 block text-sm flex items-center gap-1.5">
                   <Brain className="w-4 h-4" />
-                  3. Every Closed Trade is a Real Empirical Experiment
+                  3. Every Closed Trade Is Forward Paper Evidence
                 </span>
                 <p>
-                  The bot does not just rely on synthetic backtests. When a trade finishes, the engine records an empirical experiment (<code className="text-cyan-300 font-mono text-xs">exp_live_...</code>), updates the online model weights, and calibrates strategy confidence for future trades.
+                  When a trade finishes, its observed result is stored in a per-strategy forward outcome ledger and tagged as a single live-trade record. One trade does not update historical accuracy or qualify a strategy for promotion; performance is reported with its accumulated sample count.
                 </p>
               </div>
 
@@ -817,18 +957,18 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-cyan-800/80 space-y-2">
                 <span className="font-bold text-cyan-300 block text-sm flex items-center gap-1.5">
                   <Dna className="w-4 h-4 text-cyan-400" />
-                  5. Infinite Evolutionary Strategy Discovery (Non-Human Equations)
+                  5. Strategy Candidate Generation and Validation
                 </span>
                 <p>
-                  Humans trade visual heuristics that algorithms front-run. The AI Genesis Engine synthesizes <strong>infinite non-linear equations</strong> combining hyperbolic tangents (<code className="text-cyan-300 font-mono text-xs">tanh</code>), second-derivative EMA curvature, and power-law wick elasticity, cross-breeding parent models across generations to discover non-human mathematical edges.
+                  The candidate generator samples operator families and coefficients and stores the exact executable parameters with each formula. Candidate generation alone provides no evidence of an edge; candidates must pass the untouched historical test and subsequent forward observation before promotion.
                 </p>
               </div>
 
               <div className="bg-emerald-950/40 p-3.5 rounded-xl border border-emerald-800/80 flex items-center justify-between">
                 <div>
-                  <div className="text-xs text-neutral-400">Current Autonomous Accuracy:</div>
+                  <div className="text-xs text-neutral-400">Completed forward paper outcomes:</div>
                   <div className="text-2xl font-extrabold text-emerald-400 font-mono">
-                    {calculatedWinRate}% Verified Win Rate
+                    {closedSignals.length ? `${calculatedWinRate}% forward paper win rate` : 'No completed forward outcomes'}
                   </div>
                 </div>
                 <div className="text-right text-xs text-neutral-300 font-mono">
@@ -874,7 +1014,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     <span className="text-[11px] text-neutral-400">Expiry: 5 Minutes · Best Pairs: EUR/USD, GBP/USD, EUR/JPY</span>
                   </div>
                   <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-bold">
-                    74.8% Win Rate
+                    Not validated
                   </span>
                 </div>
                 <p className="text-xs text-neutral-300 leading-relaxed">
@@ -890,11 +1030,11 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     <span className="text-[11px] text-neutral-400">Expiry: 10 Minutes · Best Pairs: USD/JPY, AUD/USD, AUD/CAD</span>
                   </div>
                   <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-mono font-bold">
-                    72.4% Win Rate
+                    Not validated
                   </span>
                 </div>
                 <p className="text-xs text-neutral-300 leading-relaxed">
-                  Identifies institutional liquidity sweeps where price tested a key high/low and got aggressively rejected with a long wick (&gt;50% of range). Enters on 5M candle open with 10-minute expiry.
+                  Candidate hypothesis: a long rejection wick (more than half the candle range) near a recent high or low may precede a short-term reversal. The configured 5M-open entry and 10-minute expiry are test settings, not proof of an edge.
                 </p>
               </div>
 
@@ -906,11 +1046,11 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     <span className="text-[11px] text-neutral-400">Expiry: 15 Minutes · Best Pairs: EUR/GBP, USD/CAD</span>
                   </div>
                   <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-xs font-mono font-bold">
-                    76.5% Win Rate
+                    Not validated
                   </span>
                 </div>
                 <p className="text-xs text-neutral-300 leading-relaxed">
-                  Triggers when price extends &gt;8 pips away from its 20-period moving average. Enters counter-trend on 5M candle open with a 15-minute dynamic expiry window.
+                  Candidate hypothesis: price more than 8 pips from its 20-period moving average may revert toward the average. This needs historical and forward testing with the configured 5M-open entry and 15-minute expiry.
                 </p>
               </div>
 
@@ -922,11 +1062,11 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     <span className="text-[11px] text-neutral-400">Expiry: 20–30 Minutes · Best Pairs: GBP/USD, EUR/JPY</span>
                   </div>
                   <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40 text-xs font-mono font-bold">
-                    78.4% Win Rate
+                    Not validated
                   </span>
                 </div>
                 <p className="text-xs text-neutral-300 leading-relaxed">
-                  Monitors multi-candle consolidation breakouts. Once verified with purged walk-forward confidence, takes position at 5M candle open for a longer 20m or 30m trend run.
+                  Candidate hypothesis: a break beyond a multi-candle consolidation may continue. It must pass a purged historical test and forward paper observation before it can be approved; configured expiry options are 20 or 30 minutes.
                 </p>
               </div>
             </div>
@@ -1017,9 +1157,20 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   {selectedSignal.strategyName || '5-Min Momentum Breakout'}
                 </span>
                 <span className="text-emerald-400 font-bold">
-                  {selectedSignal.strategyWinRate || '76.5'}% Win Rate
+                  {selectedSignal.strategyEvidenceStatus === 'BACKTESTED' && typeof selectedSignal.strategyWinRate === 'number' ? `${selectedSignal.strategyWinRate.toFixed(1)}% Historical test WR · n=${selectedSignal.strategyHistoricalSampleSize || 0}` : 'Historical result not validated'}
                 </span>
               </div>
+              {(() => {
+                const forward = getForwardPerformance(selectedSignal.strategyId);
+                const scoredTrades = forward ? forward.wins + forward.losses : 0;
+                return (
+                  <div className="text-[11px] text-neutral-400 pt-2">
+                    Forward paper results: {forward && forward.trades > 0
+                      ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored outcomes` : 'No scored outcomes'} · ${forward.scratches} scratches · ${forward.netPips > 0 ? '+' : ''}${forward.netPips.toFixed(1)} modeled net pips`
+                      : 'No completed forward outcomes yet'}
+                  </div>
+                );
+              })()}
               {selectedSignal.confluenceStrategies && selectedSignal.confluenceStrategies.length > 0 && (
                 <div className="pt-2 border-t border-neutral-850 space-y-1">
                   <span className="text-[10px] text-purple-400 font-bold uppercase block">
@@ -1035,16 +1186,16 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 </div>
               )}
 
-              {/* NON-HUMAN MATHEMATICAL FORMULA & WHY HUMANS MISS THIS */}
+              {/* GENERATED STRATEGY CANDIDATE FORMULA */}
               {selectedSignal.mathematicalFormula && (
                 <div className="pt-2 border-t border-neutral-850 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-cyan-400 uppercase font-black tracking-wider flex items-center gap-1.5">
                       <Dna className="w-3.5 h-3.5" />
-                      NOVEL NON-HUMAN MATHEMATICAL FORMULA
+                      GENERATED STRATEGY CANDIDATE FORMULA
                     </span>
                     <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono text-[9px] font-bold">
-                      Evolved AI Genesis
+                      Evolved Strategy Candidates
                     </span>
                   </div>
                   <div className="p-2.5 rounded-lg bg-cyan-950/40 font-mono text-cyan-200 text-xs border border-cyan-800/70 overflow-x-auto">
@@ -1052,7 +1203,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   </div>
                   {selectedSignal.whyHumansMissThis && (
                     <div className="text-[11px] text-neutral-300 leading-relaxed bg-neutral-900/80 p-2.5 rounded-lg border border-neutral-800">
-                      <strong className="text-amber-400 block mb-0.5">Why Humans Miss This:</strong>
+                      <strong className="text-amber-400 block mb-0.5">Candidate Design Rationale:</strong>
                       {selectedSignal.whyHumansMissThis}
                     </div>
                   )}
@@ -1061,18 +1212,18 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
               {selectedSignal.lifecycleState === 'CLOSED' && (
                 <div className="pt-2 border-t border-neutral-850 flex justify-between items-center text-[10px] text-neutral-400">
-                  <span>Live Empirical Experiment:</span>
+                  <span>Forward Signal Observation:</span>
                   <span className="text-cyan-300 font-mono">exp_live_{selectedSignal.id}</span>
                 </div>
               )}
 
-              {/* FORENSIC LOSS AUTOPSY & ADAPTIVE AGI LEARNING */}
+              {/* RULE-BASED LOSS DIAGNOSTICS */}
               {selectedSignal.lossAutopsy && (
                 <div className="pt-2 border-t border-rose-900/60 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-rose-400 uppercase font-black tracking-wider flex items-center gap-1.5 font-mono">
                       <Microscope className="w-3.5 h-3.5 text-rose-400" />
-                      FORENSIC LOSS AUTOPSY & SELF-CORRECTION
+                      RULE-BASED LOSS DIAGNOSTICS
                     </span>
                     <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono text-[9px] font-bold">
                       {selectedSignal.lossAutopsy.rootCause.replace(/_/g, ' ')}
@@ -1080,7 +1231,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   </div>
                   <div className="p-3 rounded-xl bg-rose-950/30 border border-rose-900/60 text-xs text-neutral-300 space-y-2">
                     <div>
-                      <strong className="text-rose-300 block mb-1 text-[11px]">Causal Diagnostic Analysis:</strong>
+                      <strong className="text-rose-300 block mb-1 text-[11px]">Rule-based Diagnostic:</strong>
                       <p className="leading-relaxed text-[11px] text-neutral-300">
                         {selectedSignal.lossAutopsy.rootCauseExplanation}
                       </p>
@@ -1171,8 +1322,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="flex items-center gap-2">
                 <Globe className="w-6 h-6 text-cyan-400" />
                 <div>
-                  <h3 className="text-lg font-bold text-white">Market Sessions Accuracy Matrix</h3>
-                  <p className="text-xs text-neutral-400">Institutional session segmentation & verified live performance</p>
+                  <h3 className="text-lg font-bold text-white">Forward Market Session Outcomes</h3>
+                  <p className="text-xs text-neutral-400">Session grouping of completed forward paper outcomes</p>
                 </div>
               </div>
               <button
@@ -1184,16 +1335,15 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </div>
 
             <p className="text-xs text-neutral-300 leading-relaxed">
-              Forex accuracy varies by session liquidity and participant behavior. The bot evaluates and optimizes strategy confluence separately across all 4 market regimes:
+              Closed paper outcomes are grouped by the session recorded at entry. This is a descriptive breakdown; it does not prove that a session causes better performance or that the model optimizes separately by session:
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {(sessionData.length > 0 ? sessionData : [
-                { id: 'ASIA', name: 'Asian Session (Tokyo/Sydney)', shortName: 'Asia', utcRange: '00:00 - 07:00 UTC', istRange: '05:30 AM - 12:30 PM IST', winRate: 74.5, totalTrades: 0, wins: 0, losses: 0, netPips: 0, bestStrategy: '15-Min Mean Reversion + RSI Extreme', isActive: false },
-                { id: 'LONDON', name: 'London Session (European Open)', shortName: 'London', utcRange: '07:00 - 12:00 UTC', istRange: '12:30 PM - 05:30 PM IST', winRate: 76.8, totalTrades: 0, wins: 0, losses: 0, netPips: 0, bestStrategy: '5-Min Momentum Breakout + EMA Cross', isActive: false },
-                { id: 'OVERLAP', name: 'London / New York Overlap (Peak Volatility)', shortName: 'Overlap', utcRange: '12:00 - 16:00 UTC', istRange: '05:30 PM - 09:30 PM IST', winRate: 81.2, totalTrades: 0, wins: 0, losses: 0, netPips: 0, bestStrategy: '10-Min Liquidity Wick Reversal + Squeeze', isActive: true },
-                { id: 'NEW_YORK', name: 'New York Session (US Afternoon)', shortName: 'New York', utcRange: '16:00 - 21:00 UTC', istRange: '09:30 PM - 02:30 AM IST', winRate: 75.6, totalTrades: 0, wins: 0, losses: 0, netPips: 0, bestStrategy: '20-Min Volatility Range Breakout', isActive: false },
-              ]).map(sess => (
+              {sessionData.length === 0 ? (
+                <div className="col-span-2 p-5 rounded-xl border border-neutral-800 bg-neutral-950 text-sm text-neutral-400">
+                  No completed forward outcomes are available yet. Session win rates appear only after a paper signal reaches its modeled expiry.
+                </div>
+              ) : sessionData.map(sess => (
                 <div
                   key={sess.id}
                   className={`p-3.5 rounded-xl border flex flex-col justify-between space-y-2.5 ${
@@ -1224,14 +1374,14 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   <div className="grid grid-cols-2 gap-2 pt-2 border-t border-neutral-800/80 text-xs font-mono">
                     <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
                       <span className="text-[10px] text-neutral-400 block uppercase">Win Rate</span>
-                      <span className="text-base font-extrabold text-emerald-400">{sess.winRate}%</span>
+                      <span className="text-base font-extrabold text-emerald-400">{sess.hasMeasuredData ? `${sess.winRate}%` : "No data"}</span>
                     </div>
                     <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
-                      <span className="text-[10px] text-neutral-400 block uppercase">Verified PnL</span>
+                      <span className="text-[10px] text-neutral-400 block uppercase">Observed Paper Net Pips</span>
                       <span className={`text-sm font-bold ${sess.netPips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {sess.netPips > 0 ? '+' : ''}{sess.netPips} Pips
                       </span>
-                      <span className="text-[9px] text-neutral-500 block">({sess.wins}W / {sess.losses}L)</span>
+                      <span className="text-[9px] text-neutral-500 block">({sess.wins}W / {sess.losses}L / {sess.scratches} scratches · {sess.totalTrades} total)</span>
                     </div>
                   </div>
 
@@ -1255,7 +1405,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
         </div>
       )}
 
-      {/* MODAL 6: AI STRATEGY GENESIS (INFINITE COMBINATIONS) */}
+      {/* MODAL 6: STRATEGY CANDIDATE RESEARCH */}
       {showGenesisModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-neutral-900 border border-neutral-700 rounded-2xl max-w-3xl w-full p-5 sm:p-6 text-neutral-200 space-y-4 max-h-[90vh] overflow-y-auto shadow-2xl">
@@ -1266,13 +1416,13 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 </div>
                 <div>
                   <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                    <span>AI Strategy Genesis</span>
+                    <span>Strategy Candidate Research</span>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-mono">
-                      Infinite Non-Human Combinations
+                      Candidate formula search
                     </span>
                   </h3>
                   <p className="text-xs text-neutral-400">
-                    Evolutionary genetic cross-breeding of quantitative equations beyond human perception
+                    Randomized formula candidates with historical validation and forward paper-trading evidence
                   </p>
                 </div>
               </div>
@@ -1289,10 +1439,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="space-y-0.5">
                   <span className="text-xs font-bold text-white uppercase tracking-wider block">
-                    Autonomous Genetic Engine
+                    Candidate Formula Generator
                   </span>
                   <p className="text-[11px] text-neutral-400">
-                    Mutates, tests, and promotes non-human formulas into live 5-minute trade execution
+                    Generates candidate formulas. Validation and promotion require out-of-sample evidence from uploaded historical candles.
                   </p>
                 </div>
                 <button
@@ -1305,9 +1455,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-neutral-850 text-xs font-mono">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2 border-t border-neutral-850 text-xs font-mono">
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
-                  <span className="text-[10px] text-neutral-400 block uppercase">Promoted Live</span>
+                  <span className="text-[10px] text-neutral-400 block uppercase">Forward Approved</span>
                   <span className="text-sm font-extrabold text-cyan-400">
                     {synthesizedStrategies.filter(s => s.status === 'PROMOTED_ACTIVE').length} Strategies
                   </span>
@@ -1315,19 +1465,16 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
                   <span className="text-[10px] text-neutral-400 block uppercase">Generation</span>
                   <span className="text-sm font-extrabold text-white">
-                    Gen-{synthesizedStrategies[0]?.generation || 33}+
+                    {synthesizedStrategies[0]?.generation ? `Gen-${synthesizedStrategies[0].generation}+` : '—'}
                   </span>
                 </div>
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
-                  <span className="text-[10px] text-neutral-400 block uppercase">Verified Edge</span>
-                  <span className="text-sm font-extrabold text-emerald-400">
-                    {synthesizedStrategies.length > 0
-                      ? (
-                          synthesizedStrategies.reduce((a, b) => a + b.verifiedAccuracy, 0) /
-                          synthesizedStrategies.length
-                        ).toFixed(1)
-                      : '83.8'}% Acc
-                  </span>
+                  <span className="text-[10px] text-neutral-400 block uppercase">Backtested Candidates</span>
+                  <span className="text-sm font-extrabold text-emerald-400">{validatedGeneCount}</span>
+                </div>
+                <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
+                  <span className="text-[10px] text-neutral-400 block uppercase">Paper Trading</span>
+                  <span className="text-sm font-extrabold text-amber-300">{paperTradingGeneCount} Candidates</span>
                 </div>
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
                   <span className="text-[10px] text-neutral-400 block uppercase">Operators</span>
@@ -1338,15 +1485,35 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               </div>
             </div>
 
-            {/* WHY NON-HUMAN FORMULAS BEAT 50% COIN-FLIPS */}
+            <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-4 space-y-3">
+              <div>
+                <h4 className="text-sm font-bold text-white">Import externally sourced historical candles</h4>
+                <p className="text-[11px] text-neutral-400 mt-1">Upload 1-minute CSV or JSON candles. Validation requires at least 10,000 structurally valid M1 rows. Synthetic fallback candles are rejected. The app checks OHLC and timestamps but cannot independently authenticate an uploaded file's provider or contents; import only genuine broker/provider exports.</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={historyImportPair}
+                  onChange={e => setHistoryImportPair(e.target.value)}
+                  className="bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-xs text-white"
+                >
+                  {FOREX_PAIRS.map(pair => <option key={pair} value={pair}>{pair}</option>)}
+                </select>
+                <label className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs text-white cursor-pointer">
+                  {isImportingHistory ? 'Importing…' : 'Choose CSV / JSON'}
+                  <input type="file" accept=".csv,.json,application/json,text/csv" className="hidden" disabled={isImportingHistory} onChange={handleImportHistoricalFile} />
+                </label>
+              </div>
+              {historyImportMessage && <p className="text-[11px] text-cyan-200 break-words">{historyImportMessage}</p>}
+            </div>
+
+            {/* CANDIDATE VALIDATION POLICY */}
             <div className="p-3.5 rounded-xl bg-cyan-950/20 border border-cyan-800/40 text-xs text-neutral-300 space-y-1.5 leading-relaxed">
               <strong className="text-cyan-300 font-bold flex items-center gap-1.5">
                 <Cpu className="w-4 h-4 text-cyan-400" />
-                Why Human Trading Strategies Produce ~50% Coin-Flips:
+                How candidates become forward-approved:
               </strong>
               <p>
-                Human chartists rely on simple visual heuristics (candlestick wick shapes, 70/30 RSI lines, EMA crossovers) that modern institutional high-frequency algorithms routinely exploit. 
-                The <strong>AI Genesis Engine</strong> synthesizes non-human equations using hyperbolic tangents (<code className="text-cyan-300 font-mono">tanh</code>), second-derivative curvature acceleration, and logarithmic harmonic damping to detect institutional limit absorptions before directional 5-minute candle expansion.
+                The generator samples four executable operator families and stores the exact coefficients used by the live evaluator. A generated equation is only a candidate: it starts unvalidated, must pass a chronological historical test using the scheduled entry/expiry model, and then must accumulate at least 200 scored forward paper outcomes before it can be marked forward-approved.
               </p>
             </div>
 
@@ -1354,13 +1521,14 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <div className="space-y-3">
               <div className="flex items-center justify-between text-xs font-mono text-neutral-400">
                 <span className="uppercase font-bold tracking-wider">
-                  Active Synthesized Genetic Pool ({synthesizedStrategies.length})
+                  Strategy Candidate Pool ({synthesizedStrategies.length})
                 </span>
-                <span className="text-[11px] text-emerald-400">Promoted &gt;75% Win Rate</span>
+                <span className="text-[11px] text-neutral-400">Promotion requires untouched-test evidence</span>
               </div>
 
               {synthesizedStrategies.map((gene, idx) => {
                 const isPromoted = gene.status === 'PROMOTED_ACTIVE';
+                const isPaperTrading = gene.status === 'PAPER_TRADING';
                 return (
                   <div
                     key={gene.id || idx}
@@ -1386,17 +1554,24 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
                       <div className="flex items-center gap-2">
                         {isPromoted ? (
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-bold flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                            PROMOTED (LIVE)
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-bold">
+                            FORWARD APPROVED
+                          </span>
+                        ) : isPaperTrading ? (
+                          <span className="px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800 text-xs font-mono font-bold">
+                            PAPER TRADING
+                          </span>
+                        ) : gene.status === 'REJECTED' ? (
+                          <span className="px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800 text-xs font-mono">
+                            REJECTED
                           </span>
                         ) : (
                           <span className="px-2 py-0.5 rounded bg-neutral-800 text-neutral-400 text-xs font-mono">
-                            EXPERIMENTING
+                            UNVALIDATED / RESEARCH
                           </span>
                         )}
                         <span className="px-2.5 py-0.5 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-800/80 text-xs font-mono font-black">
-                          {gene.verifiedAccuracy}% Win Rate
+                          {gene.backtestMetrics ? `${(gene.backtestMetrics.testWinRate * 100).toFixed(1)}% Test WR · scored n=${gene.backtestMetrics.testScoredSampleSize}` : 'UNVALIDATED'}
                         </span>
                       </div>
                     </div>
@@ -1413,6 +1588,34 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                         {gene.mathematicalFormula}
                       </div>
                     </div>
+
+                    {gene.backtestMetrics && (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono bg-neutral-900/60 border border-neutral-800 rounded-lg p-3">
+                        <div><span className="text-neutral-500 block">Train · scored n={gene.backtestMetrics.trainScoredSampleSize} / total n={gene.backtestMetrics.trainSampleSize}</span><strong className="text-neutral-200">{(gene.backtestMetrics.trainWinRate * 100).toFixed(1)}%</strong></div>
+                        <div><span className="text-neutral-500 block">Validation · scored n={gene.backtestMetrics.validationScoredSampleSize} / total n={gene.backtestMetrics.validationSampleSize}</span><strong className="text-neutral-200">{(gene.backtestMetrics.validationWinRate * 100).toFixed(1)}%</strong></div>
+                        <div><span className="text-neutral-500 block">Untouched test · scored n={gene.backtestMetrics.testScoredSampleSize} / total n={gene.backtestMetrics.testSampleSize}</span><strong className="text-emerald-300">{(gene.backtestMetrics.testWinRate * 100).toFixed(1)}%</strong></div>
+                        <div><span className="text-neutral-500 block">EV / Profit factor</span><strong className="text-neutral-200">{gene.backtestMetrics.expectedValuePips.toFixed(2)} pips · {gene.backtestMetrics.profitFactor.toFixed(2)}</strong></div>
+                        <div className="col-span-2 sm:col-span-4 text-neutral-500">95% Wilson interval for net-positive WR: {(gene.backtestMetrics.confidenceInterval95[0] * 100).toFixed(1)}%–{(gene.backtestMetrics.confidenceInterval95[1] * 100).toFixed(1)}%</div>
+                      </div>
+                    )}
+                    {gene.forwardPerformance && (
+                      <div className="text-[11px] font-mono text-neutral-300 bg-neutral-900/60 border border-neutral-800 rounded-lg p-3">
+                        Forward paper results: {gene.forwardPerformance.wins}W / {gene.forwardPerformance.losses}L / {gene.forwardPerformance.scratches} scratches · {gene.forwardPerformance.trades} completed trades · {gene.forwardPerformance.netPips > 0 ? '+' : ''}{gene.forwardPerformance.netPips.toFixed(1)} net pips
+                      </div>
+                    )}
+                    {gene.accuracyStatus !== 'BACKTESTED' && (
+                      gene.operatorParameters ? (
+                        <button
+                          onClick={() => handleValidateGene(gene.id, gene.symbol)}
+                          disabled={validatingGeneId === gene.id}
+                          className="px-3 py-2 rounded-lg bg-cyan-900/60 border border-cyan-700 text-cyan-200 text-[11px] font-semibold disabled:opacity-50"
+                        >
+                          {validatingGeneId === gene.id ? 'Validating against imported history…' : `Validate against ${gene.symbol || historyImportPair} history`}
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-neutral-500">Legacy candidate has no stored executable coefficients. Generate a new candidate to validate it.</span>
+                      )
+                    )}
 
                     {/* Parents & Lineage */}
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">

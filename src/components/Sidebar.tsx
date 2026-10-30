@@ -55,7 +55,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'terminal', label: '5M Trading Signals', icon: Zap, count: activeSignalsCount, badge: 'LIVE' },
     { id: 'strategy', label: 'Discovered Strategies', icon: Lightbulb, count: 3 },
     { id: 'agents', label: 'What AI Is Learning', icon: Brain },
-    { id: 'analytics', label: 'Win Rate & Accuracy', icon: BarChart3 },
+    { id: 'analytics', label: 'Performance & PnL', icon: BarChart3 },
     { id: 'explorer', label: 'Live Forex Charts', icon: LineChart },
     { id: 'monitor', label: '5M Entry/Exit Clocks', icon: Target },
     { id: 'modellab', label: 'Model Laboratory', icon: Compass },
@@ -136,8 +136,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="text-emerald-400 font-bold">Strict 5M Open</span>
         </div>
         <div className="flex justify-between">
-          <span>Accuracy</span>
-          <span className="text-emerald-400 font-bold">76.5% Verified</span>
+          <span>Performance evidence</span>
+          <span className="text-emerald-400 font-bold">Measured outcomes</span>
         </div>
       </div>
     </div>

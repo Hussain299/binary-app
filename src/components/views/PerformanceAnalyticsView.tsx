@@ -1,5 +1,5 @@
 import React from 'react';
-import { BarChart3, TrendingUp, AlertTriangle, DollarSign, Activity } from 'lucide-react';
+import { BarChart3, TrendingUp, Activity, AlertTriangle } from 'lucide-react';
 import { ResearchExperiment, ResearchSignal } from '../../types/index.js';
 
 interface PerformanceAnalyticsViewProps {
@@ -11,126 +11,126 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
   experiments,
   signals,
 }) => {
-  const closedSignals = signals.filter(s => s.lifecycleState === 'CLOSED');
-  const wins = closedSignals.filter(s => s.outcomeResult === 'WIN').length;
-  const losses = closedSignals.filter(s => s.outcomeResult === 'LOSS').length;
-  const totalClosed = wins + losses || 1;
-  const winRate = Number(((wins / totalClosed) * 100).toFixed(1));
+  const completedSignals = signals.filter(
+    signal => signal.lifecycleState === 'CLOSED' &&
+      ['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult)
+  );
+  const scoredSignals = completedSignals.filter(
+    signal => signal.outcomeResult === 'WIN' || signal.outcomeResult === 'LOSS'
+  );
+  const wins = scoredSignals.filter(signal => signal.outcomeResult === 'WIN').length;
+  const losses = scoredSignals.filter(signal => signal.outcomeResult === 'LOSS').length;
+  const scratches = completedSignals.filter(signal => signal.outcomeResult === 'SCRATCH').length;
+  const winRate = scoredSignals.length > 0 ? (wins / scoredSignals.length) * 100 : null;
+  const totalNetPips = completedSignals.reduce((sum, signal) => sum + (signal.netReturnPips || 0), 0);
+  const avgNetPips = completedSignals.length > 0 ? totalNetPips / completedSignals.length : null;
 
-  const totalNetPips = closedSignals.reduce((acc, s) => acc + (s.netReturnPips || 0), 0);
-  const avgNetPips = closedSignals.length > 0 ? Number((totalNetPips / closedSignals.length).toFixed(2)) : 0;
-
-  // Spread sensitivity analysis
-  const spreadScenarios = [
-    { spread: 0.8, name: 'Institutional Prime (Ecn)', pfMult: 1.18, netAdj: '+14%' },
-    { spread: 1.2, name: 'Standard Retail Raw', pfMult: 1.0, netAdj: 'Base (Modeled)' },
-    { spread: 1.8, name: 'High Volatility Session', pfMult: 0.84, netAdj: '-19%' },
-    { spread: 2.5, name: 'Asian Off-Hours Spread', pfMult: 0.69, netAdj: '-35%' },
-  ];
+  const backtests = experiments
+    .filter(experiment => experiment.experimentType !== 'LIVE_TRADE' && experiment.experimentType !== 'FORWARD_OBSERVATION')
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  const latestBacktest = backtests[0] || null;
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-y-auto bg-neutral-950 p-6 space-y-6">
       <div className="pb-4 border-b border-neutral-800">
         <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
           <BarChart3 className="w-4 h-4 text-emerald-400" />
-          <span>Performance Analytics & Friction Sensitivity</span>
+          <span>Performance Analytics & Evidence</span>
         </h3>
         <p className="text-xs text-neutral-400 font-mono mt-1">
-          Rigorous statistical accounting of real signals and walk-forward test models after transaction costs and spread deductions.
+          Candle-based forward paper outcomes and historical out-of-sample experiments are reported separately; broker fills are not connected.
         </p>
       </div>
 
-      {/* Primary KPI Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono text-xs">
         <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-          <span className="text-neutral-500 text-[10px] block uppercase">Closed Signals Win Rate</span>
-          <span className="text-2xl font-bold text-emerald-400 tabular-nums">{winRate}%</span>
+          <span className="text-neutral-500 text-[10px] block uppercase">Forward Signal Win Rate</span>
+          <span className="text-2xl font-bold text-emerald-400 tabular-nums">
+            {winRate === null ? 'No data' : `${winRate.toFixed(1)}%`}
+          </span>
           <span className="text-[10px] text-neutral-400 block mt-1">
-            {wins} Wins / {losses} Losses ({closedSignals.length} closed)
+            {wins}W / {losses}L · n={scoredSignals.length} · {scratches} scratches
           </span>
         </div>
 
         <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-          <span className="text-neutral-500 text-[10px] block uppercase">Cumulative Net Pips</span>
-          <span
-            className={`text-2xl font-bold tabular-nums ${
-              totalNetPips >= 0 ? 'text-emerald-400' : 'text-rose-400'
-            }`}
-          >
-            {totalNetPips >= 0 ? '+' : ''}
-            {totalNetPips.toFixed(1)}
+          <span className="text-neutral-500 text-[10px] block uppercase">Cumulative Forward Net Pips</span>
+          <span className={`text-2xl font-bold tabular-nums ${totalNetPips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {completedSignals.length === 0 ? 'No data' : `${totalNetPips >= 0 ? '+' : ''}${totalNetPips.toFixed(1)}`}
           </span>
           <span className="text-[10px] text-neutral-400 block mt-1">
-            Avg: {avgNetPips > 0 ? '+' : ''}
-            {avgNetPips} pips/trade
+            {avgNetPips === null ? 'No completed outcomes' : `${avgNetPips > 0 ? '+' : ''}${avgNetPips.toFixed(2)} pips per completed forward outcome`}
           </span>
         </div>
 
         <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-          <span className="text-neutral-500 text-[10px] block uppercase">Avg Model Profit Factor</span>
+          <span className="text-neutral-500 text-[10px] block uppercase">Historical Experiments</span>
+          <span className="text-2xl font-bold text-white tabular-nums">{backtests.length}</span>
+          <span className="text-[10px] text-neutral-400 block mt-1">Historical backtests only · forward observations excluded</span>
+        </div>
+
+        <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
+          <span className="text-neutral-500 text-[10px] block uppercase">Latest Untouched Test</span>
           <span className="text-2xl font-bold text-white tabular-nums">
-            {(
-              experiments.reduce((a, e) => a + e.metrics.profitFactor, 0) /
-                Math.max(1, experiments.length) || 1.35
-            ).toFixed(2)}
+            {latestBacktest ? `${(latestBacktest.metrics.testAccuracy * 100).toFixed(1)}%` : 'No data'}
           </span>
-          <span className="text-[10px] text-neutral-400 block mt-1">Spread-deducted</span>
-        </div>
-
-        <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-          <span className="text-neutral-500 text-[10px] block uppercase">Mean Drawdown Risk</span>
-          <span className="text-2xl font-bold text-rose-400 tabular-nums">
-            {(
-              experiments.reduce((a, e) => a + e.metrics.maxDrawdownPct, 0) /
-                Math.max(1, experiments.length) || 7.2
-            ).toFixed(1)}
-            %
+          <span className="text-[10px] text-neutral-400 block mt-1">
+            {latestBacktest ? `n=${latestBacktest.metrics.sampleSize} · ${latestBacktest.symbol} · ${latestBacktest.horizonMinutes}m` : 'Import historical candles and run a test'}
           </span>
-          <span className="text-[10px] text-neutral-400 block mt-1">Across all horizons</span>
         </div>
       </div>
 
-      {/* Spread Sensitivity Matrix */}
-      <div className="bg-neutral-900/60 border border-neutral-800 rounded p-5 font-mono text-xs space-y-3">
-        <h4 className="text-sm font-semibold text-white">
-          Broker Spread & Slippage Sensitivity Matrix
+      <div className="bg-neutral-900/60 border border-neutral-800 rounded p-5 space-y-3">
+        <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+          <TrendingUp className="w-4 h-4 text-emerald-400" />
+          Latest Historical Backtest
         </h4>
-        <p className="text-neutral-400 text-[11px]">
-          Simulating strategy viability across shifting market liquidity tiers. Shows how edge erodes when retail spreads widen.
-        </p>
+        {latestBacktest ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
+            <div className="bg-neutral-950 rounded border border-neutral-800 p-3">
+              <span className="text-neutral-500 block text-[10px]">Test directional accuracy</span>
+              <strong className="text-white text-lg">{(latestBacktest.metrics.testAccuracy * 100).toFixed(1)}%</strong>
+              <span className="text-neutral-500 block">scored n={latestBacktest.metrics.scoredTradeSampleSize} / total n={latestBacktest.metrics.sampleSize}</span>
+            </div>
+            <div className="bg-neutral-950 rounded border border-neutral-800 p-3">
+              <span className="text-neutral-500 block text-[10px]">Net-positive trade rate</span>
+              <strong className="text-emerald-300 text-lg">{(latestBacktest.metrics.winRate * 100).toFixed(1)}%</strong>
+              <span className="text-neutral-500 block">After modeled spread · scored n={latestBacktest.metrics.scoredTradeSampleSize}</span>
+            </div>
+            <div className="bg-neutral-950 rounded border border-neutral-800 p-3">
+              <span className="text-neutral-500 block text-[10px]">Expected value</span>
+              <strong className="text-white text-lg">{latestBacktest.metrics.expectedValuePips.toFixed(2)}</strong>
+              <span className="text-neutral-500 block">Pips per sample</span>
+            </div>
+            <div className="bg-neutral-950 rounded border border-neutral-800 p-3">
+              <span className="text-neutral-500 block text-[10px]">Profit factor</span>
+              <strong className="text-white text-lg">{latestBacktest.metrics.profitFactor.toFixed(2)}</strong>
+              <span className="text-neutral-500 block">Spread-adjusted simulation</span>
+            </div>
+            <div className="col-span-2 md:col-span-4 text-neutral-400">
+              {latestBacktest.name} · Test period: {latestBacktest.testPeriod.start} – {latestBacktest.testPeriod.end}
+              <br />
+              95% CI for net-positive rate (scored n={latestBacktest.metrics.scoredTradeSampleSize}): {(latestBacktest.metrics.confidenceInterval95[0] * 100).toFixed(1)}%–{(latestBacktest.metrics.confidenceInterval95[1] * 100).toFixed(1)}%.
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-neutral-400">No historical experiment has completed yet. Synthetic fallback data is not eligible for research results.</p>
+        )}
+      </div>
 
-        <div className="border border-neutral-800 rounded overflow-hidden">
-          <table className="w-full text-left font-mono text-xs">
-            <thead className="bg-neutral-950 border-b border-neutral-800 text-neutral-400 uppercase text-[10px]">
-              <tr>
-                <th className="py-2.5 px-4">Spread Tier</th>
-                <th className="py-2.5 px-4">Spread (Pips)</th>
-                <th className="py-2.5 px-4">Relative Profit Factor</th>
-                <th className="py-2.5 px-4">Net Edge Impact</th>
-                <th className="py-2.5 px-4 text-center">Viability Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-neutral-850 bg-neutral-950/60">
-              {spreadScenarios.map((sc, i) => (
-                <tr key={i} className="hover:bg-neutral-900/50">
-                  <td className="py-2.5 px-4 text-white font-semibold">{sc.name}</td>
-                  <td className="py-2.5 px-4 text-neutral-300 tabular-nums">{sc.spread} pips</td>
-                  <td className="py-2.5 px-4 text-emerald-400 tabular-nums">{sc.pfMult}x</td>
-                  <td className="py-2.5 px-4 text-neutral-300">{sc.netAdj}</td>
-                  <td className="py-2.5 px-4 text-center">
-                    <span
-                      className={`font-semibold ${
-                        sc.pfMult >= 1.0 ? 'text-emerald-400' : 'text-amber-400'
-                      }`}
-                    >
-                      {sc.pfMult >= 1.0 ? 'VIABLE' : 'FRAGILE'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div className="bg-amber-950/20 border border-amber-900/50 rounded-lg p-4 flex gap-3 text-xs text-neutral-300">
+        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+        <div>
+          <strong className="text-amber-300">Cost-model limitation:</strong> Historical results use configured spread assumptions, not tick-by-tick broker bid/ask quotes, variable slippage or commission. They are research estimates, not guaranteed execution results. Always compare them with the forward paper outcome ledger.
         </div>
+      </div>
+
+      <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4 text-xs text-neutral-400">
+        <div className="flex items-center gap-2 text-neutral-300 font-semibold mb-1">
+          <Activity className="w-4 h-4 text-cyan-400" />
+          Evidence policy
+        </div>
+        Forward paper win rate excludes scratches from the win/loss denominator but includes their net pips in cumulative PnL. Every rate is displayed with its scored sample count; total predictions and scratches are also reported. A single winning trade is never treated as proof that a strategy is validated.
       </div>
     </div>
   );

@@ -72,7 +72,7 @@ export const ConfigurationView: React.FC = () => {
             <span>Settings, Quality Assurance & Data Export</span>
           </h3>
           <p className="text-xs text-neutral-400 font-mono mt-1">
-            SignalForge ML runs 100% self-contained right here. Zero Cloudflare accounts or external services are required.
+            SignalForge runs its research server locally, while live prices still depend on its configured public market-data providers.
           </p>
         </div>
 
@@ -86,16 +86,14 @@ export const ConfigurationView: React.FC = () => {
         </button>
       </div>
 
-      {/* Zero Setup Reassurance Card */}
+      {/* Local storage and feed requirements */}
       <div className="bg-neutral-900/60 border border-emerald-900/40 rounded p-4 font-mono text-xs space-y-2">
         <div className="flex items-center gap-2 text-emerald-400 font-semibold">
           <CheckCircle2 className="w-4 h-4" />
-          <span>Zero Setup Required — Active & Fully Operational Right Here</span>
+          <span>Local JSON persistence · Public market-data feeds</span>
         </div>
         <p className="text-neutral-300 leading-relaxed text-[11px]">
-          You do <strong>not</strong> need to configure Cloudflare, enter API tokens, or manage any external accounts. 
-          The backend runs its own self-contained database engine storing all 8 forex pairs, causal signals, and ML experiments directly on this server.
-          The Cloudflare D1 exports at the bottom are purely optional for future external use.
+          Cloudflare D1 is optional. Live prices still depend on the configured public market-data providers. Historical research requires imported one-minute candles; these are stored locally in monthly JSON partitions, separately from the rolling live-feed cache. The configured universe contains 20 currency pairs.
         </p>
       </div>
 

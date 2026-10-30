@@ -13,58 +13,58 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
     {
       id: 'momentum_5',
       name: '5-Minute Momentum Breakout',
-      rank: '#1 BEST FAST PERFORMER',
-      winRate: '74.8%',
-      accuracyLabel: '74.8% Verified Accuracy',
+      rank: 'CANDIDATE · NOT VALIDATED',
+      winRate: '—',
+      accuracyLabel: 'No verified historical result',
       pairs: 'EUR/USD, GBP/USD, EUR/JPY',
       timeframe: '5-Minute Dynamic Expiry',
       entryRule: 'Alerted 3 minutes in advance. Enters strictly at 5M candle open (:00, :05, :10, :15, etc.).',
       exitRule: 'Closes 5 minutes later at candle close.',
-      spreadCost: '1.2 pips deducted (Net profitable)',
+      spreadCost: '1.2-pip research cost assumption; profitability not established',
       description:
-        'When institutional order flow pushes a candle to close near its high or low with strong body dominance (>60%), the algorithm emits a 3-minute advance signal and enters on the 5M candle open.',
+        'Candidate hypothesis: a candle closing near its high or low with a relatively strong body may precede continuation. The configured 3-minute alert and exact 5M-open entry schedule remains unchanged; performance still requires testing.',
     },
     {
       id: 'wick_reversal',
       name: '10-Minute Liquidity Wick Reversal',
-      rank: '#2 HIGH WIN RATE',
-      winRate: '72.4%',
-      accuracyLabel: '72.4% Verified Accuracy',
+      rank: 'CANDIDATE · NOT VALIDATED',
+      winRate: '—',
+      accuracyLabel: 'No verified historical result',
       pairs: 'USD/JPY, AUD/USD, AUD/CAD',
       timeframe: '10-Minute Dynamic Expiry',
       entryRule: 'Alerted 3 minutes in advance. Enters on 5M candle open after liquidity rejection.',
       exitRule: 'Closes 10 minutes later (across 2 full 5-minute candles).',
-      spreadCost: '1.4 pips deducted (Net profitable)',
+      spreadCost: '1.2-pip research cost assumption; profitability not established',
       description:
-        'Exploits aggressive rejection wicks where smart money absorbs retail stops. When price spikes past a level but snaps back, the bot alerts 3m early and enters reversal at the 5M candle open.',
+        'Candidate hypothesis: a long rejection wick near a recent high or low may precede a short-term reversal. This needs pair-by-pair historical and forward validation.',
     },
     {
       id: 'mean_reversion_20',
       name: '15-Minute Statistical Mean Reversion',
-      rank: '#3 STABLE ACCURACY',
-      winRate: '76.5%',
-      accuracyLabel: '76.5% Verified Accuracy',
+      rank: 'CANDIDATE · NOT VALIDATED',
+      winRate: '—',
+      accuracyLabel: 'No verified historical result',
       pairs: 'EUR/GBP, USD/CAD',
       timeframe: '15-Minute Dynamic Expiry',
       entryRule: 'Alerted 3 minutes in advance when price stretches >8 pips from 20-period mean.',
       exitRule: 'Closes 15 minutes later (across 3 full 5-minute candles).',
-      spreadCost: '1.5 pips deducted (Net profitable)',
+      spreadCost: '1.2-pip research cost assumption; profitability not established',
       description:
-        'During consolidated or range-bound market hours, extended price spikes quickly revert back to the volume-weighted average. The bot captures this 15-minute normalization effect.',
+        'Candidate hypothesis: an unusually extended move during a range may revert toward its recent average. The claimed edge and selected expiry must be measured, not assumed.',
     },
     {
       id: 'range_breakout',
       name: '20-to-30 Minute Volatility Breakout',
-      rank: '#4 MACRO TREND',
-      winRate: '78.4%',
-      accuracyLabel: '78.4% Verified Accuracy',
+      rank: 'CANDIDATE · NOT VALIDATED',
+      winRate: '—',
+      accuracyLabel: 'No verified historical result',
       pairs: 'GBP/USD, EUR/JPY, AUD/CAD',
       timeframe: '20m to 30m Dynamic Expiry',
       entryRule: 'Alerted 3 minutes before candle open when multi-candle consolidation breaks.',
       exitRule: 'Closes 20 or 30 minutes later at the corresponding 5M candle close.',
-      spreadCost: '1.7 pips deducted (Net profitable)',
+      spreadCost: '1.2-pip research cost assumption; profitability not established',
       description:
-        'Monitors multi-candle consolidations. When volume breaks past the 20-period range, the bot enters at the 5M candle open for a longer 20m or 30m trend trade.',
+        'Candidate hypothesis: a break beyond a recent multi-candle range may continue. The 20–30 minute expiry remains a configured option; it is not evidence of profitability.',
     },
   ];
 
@@ -101,10 +101,10 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
       <div className="pb-3 border-b border-neutral-800">
         <h3 className="text-base font-bold text-white flex items-center gap-2">
           <Lightbulb className="w-5 h-5 text-amber-400" />
-          <span>Top 3 Strategies Found by the Machine Learning Bot</span>
+          <span>Strategy Rule Families · Validation Pending</span>
         </h3>
         <p className="text-xs text-neutral-400 mt-1">
-          Backtested on 1,000+ five-minute candles with real broker spread deductions.
+          These are candidate rule families, not measured performance results. Import historical candles and validate before promotion.
         </p>
       </div>
 
@@ -188,7 +188,7 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
         <div className="p-3.5 bg-neutral-950 rounded-xl border border-neutral-800 flex items-center justify-between text-xs font-mono">
           <div className="flex items-center gap-2 text-neutral-300">
             <Shield className="w-4 h-4 text-emerald-400" />
-            <span>Broker Spread Realism:</span>
+            <span>Modeled transaction cost:</span>
           </div>
           <span className="text-emerald-400 font-bold">{current.spreadCost}</span>
         </div>

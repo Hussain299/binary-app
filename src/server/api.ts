@@ -12,6 +12,7 @@ import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
 import { autonomousScheduler } from './scheduler.js';
 import { runAllVerificationTests } from './tests.js';
+import { historicalDataStore } from './historicalData.js';
 
 export const apiRouter = Router();
 
@@ -49,7 +50,7 @@ apiRouter.get('/forex-candles', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/scan — Market scan across all 8 forex pairs
+// GET /api/scan — Market scan across all configured forex pairs
 apiRouter.get('/scan', async (_req: Request, res: Response) => {
   try {
     const scanResults: Array<{
@@ -99,14 +100,21 @@ apiRouter.post('/analyze', async (req: Request, res: Response) => {
     const horizon = Number(req.body.horizon) || 10;
     const ruleFamily = (req.body.ruleFamily as RuleFamily) || 'momentum_5';
 
-    const { candles, source, qualityScore } = await dataFeedEngine.fetchCandles(symbol, 120);
+    const candles = historicalDataStore.getCandles(symbol);
+    if (candles.length < 10_000) {
+      return res.status(409).json({
+        error: `Insufficient uploaded historical data for research. Import at least 10,000 one-minute candles for ${symbol}; currently stored: ${candles.length}.`,
+        symbol,
+        storedCandles: candles.length,
+        requiredCandles: 10_000,
+      });
+    }
     const exp = researchEngine.runWalkForwardExperiment(symbol, candles, ruleFamily, horizon, 1);
     const reviews = await researchEngine.generateTrinityReviews(exp);
 
     res.json({
       symbol,
-      source,
-      qualityScore,
+      source: 'historical-import',
       experiment: exp,
       reviews,
     });
@@ -124,7 +132,7 @@ apiRouter.get('/signals', (_req: Request, res: Response) => {
   });
 });
 
-// GET /api/sessions/accuracy — Verified performance breakdown by trading session
+// GET /api/sessions/accuracy — Observed forward-outcome breakdown by trading session
 apiRouter.get('/sessions/accuracy', (_req: Request, res: Response) => {
   res.json({
     sessions: db.getSessionAccuracyBreakdown(),
@@ -132,16 +140,56 @@ apiRouter.get('/sessions/accuracy', (_req: Request, res: Response) => {
   });
 });
 
-// GET /api/strategies/synthesized — Infinite Non-Human Genetic Strategies Pool
+// GET /api/strategies/synthesized — Candidate, paper-trading and forward-approved strategy pool
 apiRouter.get('/strategies/synthesized', (_req: Request, res: Response) => {
   const all = db.getSynthesizedStrategies();
   const promoted = db.getPromotedActiveStrategies();
   res.json({
-    strategies: all,
+    strategies: all.map(gene => ({
+      ...gene,
+      forwardPerformance: db.getStrategyPerformance().find(p => p.strategyId === gene.id) || null,
+    })),
     promotedCount: promoted.length,
+    paperTradingCount: db.getPaperTradingStrategies().filter(gene => gene.status === 'PAPER_TRADING').length,
     totalCount: all.length,
     generationsCount: db.getGenerations().length,
   });
+});
+
+// Historical market-data import and audit endpoints. Files are kept outside the rolling live cache.
+apiRouter.post('/research/candles/import', (req: Request, res: Response) => {
+  try {
+    const rawSymbol = String(req.body.symbol || '').toUpperCase();
+    const symbol = FOREX_PAIRS.find(p => p.replace('/', '') === rawSymbol.replace('/', ''));
+    if (!symbol) return res.status(400).json({ error: 'Unknown or unsupported forex pair.' });
+    const result = historicalDataStore.importCandles(symbol, req.body.candles);
+    res.json({ success: true, result, nextStep: 'Validate candidate strategies for this pair.' });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+apiRouter.get('/research/candles/status', (_req: Request, res: Response) => {
+  res.json({ pairs: FOREX_PAIRS.map(pair => historicalDataStore.getStats(pair)) });
+});
+
+apiRouter.get('/strategies/performance', (_req: Request, res: Response) => {
+  res.json({ strategies: db.getStrategyPerformance() });
+});
+
+// Validate one generated candidate against its pair's uploaded historical candles.
+apiRouter.post('/strategies/validate', (req: Request, res: Response) => {
+  try {
+    const gene = db.getSynthesizedStrategyById(String(req.body.geneId || ''));
+    if (!gene) return res.status(404).json({ error: 'Strategy candidate not found.' });
+    const symbol = gene.symbol || FOREX_PAIRS.find(p => p.replace('/', '') === String(req.body.symbol || '').toUpperCase().replace('/', ''));
+    if (!symbol) return res.status(400).json({ error: 'The candidate has no currency pair. Supply a valid symbol.' });
+    const candles = historicalDataStore.getCandles(symbol);
+    const validated = researchEngine.validateSynthesizedStrategy({ ...gene, symbol }, candles);
+    res.json({ success: true, gene: validated });
+  } catch (err: any) {
+    res.status(409).json({ error: err.message });
+  }
 });
 
 // POST /api/strategies/evolve — Trigger immediate evolutionary synthesis of a novel strategy
@@ -158,6 +206,7 @@ apiRouter.post('/strategies/evolve', async (_req: Request, res: Response) => {
       gene: newGene,
       strategies: db.getSynthesizedStrategies(),
       promotedCount: db.getPromotedActiveStrategies().length,
+      paperTradingCount: db.getPaperTradingStrategies().filter(gene => gene.status === 'PAPER_TRADING').length,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -180,8 +229,20 @@ apiRouter.post('/signals/evaluate', async (_req: Request, res: Response) => {
   try {
     const candlesMap: Record<ForexSymbol, any> = {} as any;
     for (const pair of FOREX_PAIRS) {
-      const { candles } = await dataFeedEngine.fetchCandles(pair, 60);
-      candlesMap[pair] = candles;
+      const { candles, source } = await dataFeedEngine.fetchCandles(pair, 60);
+      const newest = candles[candles.length - 1];
+      const ageMs = newest ? Date.now() - newest.timestampMs : Infinity;
+      const hasFreshRealData =
+        source !== 'synthetic' &&
+        !!newest &&
+        newest.source !== 'synthetic' &&
+        ['biquote', 'dukascopy', 'yahoo', 'imported'].includes(newest.source) &&
+        ageMs >= -60_000 &&
+        ageMs <= 120_000;
+      // Do not settle a pending trade using random continuity candles or stale data.
+      candlesMap[pair] = hasFreshRealData
+        ? candles.filter(c => c.source !== 'synthetic')
+        : [];
     }
 
     const updated = entryExitEngine.evaluateSignals(candlesMap);
@@ -213,12 +274,14 @@ apiRouter.post('/evolution/run', async (_req: Request, res: Response) => {
 apiRouter.get('/evolution/state', (_req: Request, res: Response) => {
   const generations = db.getGenerations();
   const experiments = db.getExperiments();
-  const accepted = experiments.filter(e => e.auditorVerdict === 'ACCEPTED');
-  const rejected = experiments.filter(e => e.auditorVerdict === 'REJECTED');
+  const historicalExperiments = experiments.filter(e => e.experimentType !== 'LIVE_TRADE' && e.experimentType !== 'FORWARD_OBSERVATION');
+  const accepted = historicalExperiments.filter(e => e.auditorVerdict === 'ACCEPTED');
+  const rejected = historicalExperiments.filter(e => e.auditorVerdict === 'REJECTED');
 
   res.json({
     currentGeneration: generations.length > 0 ? generations[0].generation : 1,
-    totalExperiments: experiments.length,
+    totalExperiments: historicalExperiments.length,
+    totalForwardObservations: experiments.length - historicalExperiments.length,
     acceptedCount: accepted.length,
     rejectedCount: rejected.length,
     generations,
@@ -256,11 +319,12 @@ apiRouter.get('/system/health', (_req: Request, res: Response) => {
   const cron = db.getCronState();
   res.json({
     uptimeSeconds: Math.floor(process.uptime()),
-    dbType: 'SQLite (Server File)',
+    dbType: 'JSON File Store',
     dbPath: 'data/signalforge.db.json',
     totalCandlesStored: db.getTotalCandlesCount(),
     activeSignalsCount: db.getActiveSignals().length,
-    totalExperimentsRun: db.getExperiments().length,
+    totalExperimentsRun: db.getExperiments().filter(e => e.experimentType !== 'LIVE_TRADE' && e.experimentType !== 'FORWARD_OBSERVATION').length,
+    totalForwardObservations: db.getExperiments().filter(e => e.experimentType === 'LIVE_TRADE' || e.experimentType === 'FORWARD_OBSERVATION').length,
     lastCronRun: cron.lastRun,
     nextCronRun: cron.nextRun,
     isCronRunning: cron.isRunning,
@@ -304,10 +368,10 @@ apiRouter.get('/autopilot/logs', (_req: Request, res: Response) => {
 apiRouter.get('/autopilot/status', (_req: Request, res: Response) => {
   res.json({
     status: 'ACTIVE_AUTOPILOT',
-    mode: 'AUTONOMOUS_AGI_RESEARCH',
+    mode: 'AUTOMATED_SIGNAL_AND_RESEARCH',
     activeSignalsCount: db.getActiveSignals().length,
     totalCandles: db.getTotalCandlesCount(),
-    pairsMonitored: 8,
+    pairsMonitored: FOREX_PAIRS.length,
     intervalSeconds: 20,
     timestamp: new Date().toISOString(),
   });
