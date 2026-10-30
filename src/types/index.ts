@@ -321,6 +321,7 @@ export interface ResearchExperiment {
   id: string;
   experimentType?: 'BACKTEST' | 'LIVE_TRADE';
   experimentType?: 'BACKTEST' | 'LIVE_TRADE';
+  liveOutcome?: 'WIN' | 'LOSS' | 'SCRATCH';
   generation: number;
   name: string;
   symbol: ForexSymbol;
