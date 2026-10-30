@@ -6,6 +6,7 @@ import {
   AgentReview,
   Candle,
   ExperimentMetrics,
+  MarketSessionId,
   ForexSymbol,
   ResearchExperiment,
   RuleFamily,
@@ -13,8 +14,39 @@ import {
   LossAutopsy,
   ResearchSignal,
   StrategyBacktestMetrics,
+  StrategyExpressionNode,
+  StrategyFeatureName,
+  StrategyGenome,
 } from '../types/index.js';
 import { db } from './db.js';
+
+type StrategyHorizon = 5 | 10 | 15 | 20 | 25 | 30;
+type GeneFeatureVector = Record<StrategyFeatureName, number>;
+
+interface GeneResearchRow {
+  decisionIndex: number;
+  candle: Candle;
+  previousCandle: Candle;
+  entryIndex: number;
+  entryTimeMs: number;
+  exitIndices: Record<number, number>;
+  features: GeneFeatureVector;
+  session: MarketSessionId;
+}
+
+interface PreparedGeneResearchData {
+  candles: Candle[];
+  closes: number[];
+  ema9: number[];
+  ema21: number[];
+  rsi14: number[];
+  rows: GeneResearchRow[];
+  trainEndMs: number;
+  validationStartMs: number;
+  validationEndMs: number;
+  testStartMs: number;
+  spreadPips: number;
+}
 
 export class ResearchEngine {
 
@@ -622,24 +654,258 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
   }
 
   /** Samples a formula candidate and stores its exact executable parameters; this is not validation. */
-  /**
-   * Replays one executable strategy over chronological, uploaded one-minute candles.
-   * Signals are evaluated only on completed candles, entered at the next 5-minute boundary,
-   * and exited at the configured dynamic 5–30 minute expiry. No synthetic candles are eligible.
-   */
-  public validateSynthesizedStrategy(
-    gene: SynthesizedStrategyGene,
-    candles: Candle[]
-  ): SynthesizedStrategyGene {
-    const MIN_HISTORY = 10_000;
-    if (candles.length < MIN_HISTORY) {
-      throw new Error(`Need at least ${MIN_HISTORY.toLocaleString()} one-minute candles; received ${candles.length.toLocaleString()}.`);
+  private clamp(value: number, min = -8, max = 8): number {
+    return Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : 0;
+  }
+
+  private readonly genomeFeatures: StrategyFeatureName[] = [
+    'return_1', 'return_3', 'return_5', 'return_13',
+    'body_direction', 'body_ratio', 'wick_imbalance', 'close_location',
+    'ema_spread', 'ema_curvature', 'rsi_centered', 'rsi_momentum',
+    'range_position_13', 'range_position_34', 'volatility_ratio',
+    'directional_efficiency', 'return_autocorrelation',
+    'wick_pressure_change', 'range_expansion',
+  ];
+
+  private buildGeneFeatureVector(
+    candle: Candle,
+    previous: Candle,
+    closes: number[],
+    ema9: number[],
+    ema21: number[],
+    rsi14: number[],
+    index: number
+  ): GeneFeatureVector {
+    const pipFactor = candle.symbol.includes('JPY') ? 100 : 10000;
+    const close = closes[index] ?? candle.close;
+    const safeRange = Math.max(1e-8, candle.high - candle.low);
+    const body = candle.close - candle.open;
+    const upperWick = candle.high - Math.max(candle.open, candle.close);
+    const lowerWick = Math.min(candle.open, candle.close) - candle.low;
+    const wickImbalance = (lowerWick - upperWick) / safeRange;
+    const currentEmaSpread = ((ema9[index] ?? close) - (ema21[index] ?? close)) * pipFactor;
+    const previousEmaSpread = ((ema9[Math.max(0, index - 1)] ?? close) - (ema21[Math.max(0, index - 1)] ?? close)) * pipFactor;
+    const currentRsi = rsi14[index] || 50;
+    const previousRsi = rsi14[Math.max(0, index - 3)] || currentRsi;
+
+    const absReturns: number[] = [];
+    const returns: number[] = [];
+    for (let i = Math.max(1, index - 60); i <= index; i++) {
+      const change = (closes[i] - closes[i - 1]) * pipFactor;
+      returns.push(change);
+      absReturns.push(Math.abs(change));
     }
-    if (!gene.operatorParameters) {
-      throw new Error('This legacy candidate has no stored executable coefficients. Generate a new candidate before validating it.');
+    const meanAbs = absReturns.length
+      ? absReturns.reduce((sum, value) => sum + value, 0) / absReturns.length
+      : 0.1;
+    const scale = Math.max(0.05, meanAbs * 1.5);
+
+    const normalizedReturn = (lookback: number) => {
+      const prior = closes[Math.max(0, index - lookback)] ?? close;
+      return Math.tanh(((close - prior) * pipFactor) / (scale * Math.sqrt(lookback) * 2.5));
+    };
+    const rangePosition = (lookback: number) => {
+      const start = Math.max(0, index - lookback + 1);
+      let low = Infinity, high = -Infinity;
+      for (let i = start; i <= index; i++) {
+        low = Math.min(low, closes[i]);
+        high = Math.max(high, closes[i]);
+      }
+      const width = Math.max(1e-8, high - low);
+      return this.clamp(((close - low) / width) * 2 - 1, -1, 1);
+    };
+    const volatility = (period: number) => {
+      const values = returns.slice(-period);
+      if (values.length < 2) return 0;
+      const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+      const variance = values.reduce((sum, value) => sum + Math.pow(value - mean, 2), 0) / values.length;
+      return Math.sqrt(Math.max(0, variance));
+    };
+    const shortVol = volatility(5);
+    const longVol = Math.max(0.01, volatility(21));
+    const efficiencyWindow = Math.min(13, index);
+    let pathLength = 0;
+    for (let i = index - efficiencyWindow + 1; i <= index; i++) {
+      if (i > 0) pathLength += Math.abs((closes[i] - closes[i - 1]) * pipFactor);
+    }
+    const directionalEfficiency = pathLength > 0
+      ? ((close - (closes[index - efficiencyWindow] ?? close)) * pipFactor) / pathLength
+      : 0;
+
+    const corrReturns = returns.slice(-21);
+    let autocorrelation = 0;
+    if (corrReturns.length >= 4) {
+      const left = corrReturns.slice(1);
+      const right = corrReturns.slice(0, -1);
+      const leftMean = left.reduce((sum, value) => sum + value, 0) / left.length;
+      const rightMean = right.reduce((sum, value) => sum + value, 0) / right.length;
+      let numerator = 0, leftVariance = 0, rightVariance = 0;
+      for (let i = 0; i < left.length; i++) {
+        const x = left[i] - leftMean;
+        const y = right[i] - rightMean;
+        numerator += x * y;
+        leftVariance += x * x;
+        rightVariance += y * y;
+      }
+      autocorrelation = leftVariance > 0 && rightVariance > 0
+        ? numerator / Math.sqrt(leftVariance * rightVariance)
+        : 0;
+    }
+
+    const previousRange = Math.max(1e-8, previous.high - previous.low);
+    const previousWick = (
+      Math.min(previous.open, previous.close) - previous.low -
+      (previous.high - Math.max(previous.open, previous.close))
+    ) / previousRange;
+    const rangeExpansion = (safeRange * pipFactor) / Math.max(0.05, meanAbs * 8);
+
+    return {
+      return_1: normalizedReturn(1),
+      return_3: normalizedReturn(3),
+      return_5: normalizedReturn(5),
+      return_13: normalizedReturn(13),
+      body_direction: this.clamp(body / safeRange, -1, 1),
+      body_ratio: this.clamp(Math.abs(body) / safeRange, 0, 1) * 2 - 1,
+      wick_imbalance: this.clamp(wickImbalance, -1, 1),
+      close_location: this.clamp(((candle.close - candle.low) / safeRange) * 2 - 1, -1, 1),
+      ema_spread: Math.tanh(currentEmaSpread / Math.max(0.1, scale * 8)),
+      ema_curvature: Math.tanh((currentEmaSpread - previousEmaSpread) / Math.max(0.1, scale * 2)),
+      rsi_centered: this.clamp((currentRsi - 50) / 50, -1, 1),
+      rsi_momentum: Math.tanh((currentRsi - previousRsi) / 12),
+      range_position_13: rangePosition(13),
+      range_position_34: rangePosition(34),
+      volatility_ratio: Math.tanh((shortVol / longVol) - 1),
+      directional_efficiency: this.clamp(directionalEfficiency, -1, 1),
+      return_autocorrelation: this.clamp(autocorrelation, -1, 1),
+      wick_pressure_change: this.clamp(wickImbalance - previousWick, -1, 1),
+      range_expansion: Math.tanh(rangeExpansion - 1),
+    };
+  }
+
+  private evaluateGenomeExpression(node: StrategyExpressionNode, features: GeneFeatureVector): number {
+    if (node.kind === 'feature') return this.clamp(features[node.feature]);
+    if (node.kind === 'constant') return this.clamp(node.value);
+    if (node.kind === 'unary') {
+      const value = this.evaluateGenomeExpression(node.input, features);
+      switch (node.operator) {
+        case 'tanh': return Math.tanh(value);
+        case 'abs': return Math.abs(value);
+        case 'signed_power': return Math.sign(value) * Math.pow(Math.abs(value), Math.max(0.5, Math.min(2.5, node.exponent || 1)));
+        case 'log_abs': return Math.sign(value) * Math.log1p(Math.abs(value));
+        case 'sin': return Math.sin(value * Math.PI);
+        case 'cos': return Math.cos(value * Math.PI);
+        case 'sqrt_abs': return Math.sign(value) * Math.sqrt(Math.abs(value));
+        case 'negate': return -value;
+      }
+    }
+    const left = this.evaluateGenomeExpression(node.left, features);
+    const right = this.evaluateGenomeExpression(node.right, features);
+    let result = 0;
+    switch (node.operator) {
+      case 'add': result = left + right; break;
+      case 'subtract': result = left - right; break;
+      case 'multiply': result = left * right; break;
+      case 'protected_divide': result = left / (Math.abs(right) < 0.08 ? (right < 0 ? -0.08 : 0.08) : right); break;
+      case 'max': result = Math.max(left, right); break;
+      case 'min': result = Math.min(left, right); break;
+      case 'hypot': result = Math.hypot(left, right) / Math.SQRT2; break;
+      case 'atan2': result = Math.atan2(left, right) / Math.PI; break;
+    }
+    return this.clamp(result);
+  }
+
+  private expressionToFormula(node: StrategyExpressionNode): string {
+    if (node.kind === 'feature') return node.feature;
+    if (node.kind === 'constant') return node.value.toFixed(2);
+    if (node.kind === 'unary') return `${node.operator}(${this.expressionToFormula(node.input)}${node.operator === 'signed_power' ? `, ${node.exponent.toFixed(2)}` : ''})`;
+    const operators: Record<string, string> = {
+      add: '+', subtract: '−', multiply: '×', protected_divide: '÷',
+      max: 'max', min: 'min', hypot: 'hypot', atan2: 'atan2',
+    };
+    return `${operators[node.operator]}(${this.expressionToFormula(node.left)}, ${this.expressionToFormula(node.right)})`;
+  }
+
+  private countExpressionNodes(node: StrategyExpressionNode): number {
+    if (node.kind === 'feature' || node.kind === 'constant') return 1;
+    if (node.kind === 'unary') return 1 + this.countExpressionNodes(node.input);
+    return 1 + this.countExpressionNodes(node.left) + this.countExpressionNodes(node.right);
+  }
+
+  private randomGenomeExpression(depth: number): StrategyExpressionNode {
+    const unary = ['tanh', 'abs', 'signed_power', 'log_abs', 'sin', 'cos', 'sqrt_abs', 'negate'] as const;
+    const binary = ['add', 'subtract', 'multiply', 'protected_divide', 'max', 'min', 'hypot', 'atan2'] as const;
+    if (depth <= 0 || Math.random() < 0.28) {
+      if (Math.random() < 0.08) return { kind: 'constant', value: Number((Math.random() * 1.2 - 0.6).toFixed(3)) };
+      return { kind: 'feature', feature: this.genomeFeatures[Math.floor(Math.random() * this.genomeFeatures.length)] };
+    }
+    if (Math.random() < 0.34) {
+      return {
+        kind: 'unary',
+        operator: unary[Math.floor(Math.random() * unary.length)],
+        exponent: Number((0.7 + Math.random() * 1.3).toFixed(2)),
+        input: this.randomGenomeExpression(depth - 1),
+      };
+    }
+    return {
+      kind: 'binary',
+      operator: binary[Math.floor(Math.random() * binary.length)],
+      left: this.randomGenomeExpression(depth - 1),
+      right: this.randomGenomeExpression(depth - 1),
+    };
+  }
+
+  private mutateGenomeExpression(node: StrategyExpressionNode, depth = 2): StrategyExpressionNode {
+    if (depth <= 0 || Math.random() < 0.24) return this.randomGenomeExpression(2);
+    if (node.kind === 'feature') {
+      return Math.random() < 0.5
+        ? { kind: 'feature', feature: this.genomeFeatures[Math.floor(Math.random() * this.genomeFeatures.length)] }
+        : { kind: 'unary', operator: 'signed_power', exponent: Number((0.7 + Math.random() * 1.4).toFixed(2)), input: node };
+    }
+    if (node.kind === 'constant') {
+      return { kind: 'constant', value: Number((node.value + (Math.random() - 0.5) * 0.8).toFixed(3)) };
+    }
+    if (node.kind === 'unary') {
+      const operators = ['tanh', 'abs', 'signed_power', 'log_abs', 'sin', 'cos', 'sqrt_abs', 'negate'] as const;
+      return {
+        ...node,
+        operator: Math.random() < 0.35 ? operators[Math.floor(Math.random() * operators.length)] : node.operator,
+        exponent: Number((0.7 + Math.random() * 1.4).toFixed(2)),
+        input: this.mutateGenomeExpression(node.input, depth - 1),
+      };
+    }
+    const operators = ['add', 'subtract', 'multiply', 'protected_divide', 'max', 'min', 'hypot', 'atan2'] as const;
+    const mutateLeft = Math.random() < 0.5;
+    return {
+      ...node,
+      operator: Math.random() < 0.35 ? operators[Math.floor(Math.random() * operators.length)] : node.operator,
+      left: mutateLeft ? this.mutateGenomeExpression(node.left, depth - 1) : node.left,
+      right: mutateLeft ? node.right : this.mutateGenomeExpression(node.right, depth - 1),
+    };
+  }
+
+  private geneSession(candle: Candle): MarketSessionId {
+    const hour = new Date(candle.timestampMs).getUTCHours();
+    if (hour >= 12 && hour < 16) return 'OVERLAP';
+    if (hour >= 7 && hour < 12) return 'LONDON';
+    if (hour >= 16 && hour < 21) return 'NEW_YORK';
+    return 'ASIA';
+  }
+
+  private prepareGeneResearchData(candles: Candle[]): PreparedGeneResearchData {
+    const MIN_HISTORY = 30_000;
+    if (candles.length < MIN_HISTORY) {
+      throw new Error(`Need at least ${MIN_HISTORY.toLocaleString()} real one-minute candles to support the 300-trade test gate; received ${candles.length.toLocaleString()}.`);
     }
     if (candles.some(c => c.source === 'synthetic' || c.source === 'test_fixture')) {
-      throw new Error('Synthetic and test-fixture candles are prohibited in strategy validation.');
+      throw new Error('Synthetic and test-fixture candles are prohibited in candidate validation.');
+    }
+    if (!candles.every(c =>
+      Number.isFinite(c.timestampMs) &&
+      [c.open, c.high, c.low, c.close].every(Number.isFinite) &&
+      c.high >= Math.max(c.open, c.close, c.low) &&
+      c.low <= Math.min(c.open, c.close, c.high)
+    )) {
+      throw new Error('Historical dataset contains invalid OHLC values.');
     }
     const ordered = [...candles].sort((a, b) => a.timestampMs - b.timestampMs);
     for (let i = 1; i < ordered.length; i++) {
@@ -654,242 +920,355 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       throw new Error('Imported dataset does not contain sufficiently continuous one-minute candles.');
     }
 
-    const n = ordered.length;
     const closes = ordered.map(c => c.close);
     const ema9 = this.calculateEMA(closes, 9);
     const ema21 = this.calculateEMA(closes, 21);
     const rsi14 = this.calculateRSI(closes, 14);
-    const trainEnd = Math.floor(n * 0.60);
-    const validationEnd = Math.floor(n * 0.80);
-    const embargo = Math.max(30, gene.optimalHorizonMinutes) + 5;
-    const validationStart = trainEnd + embargo;
-    const testStart = validationEnd + embargo;
+    const timestampIndex = new Map<number, number>();
+    ordered.forEach((candle, index) => timestampIndex.set(candle.timestampMs, index));
 
-    const spreads: Record<string, number> = {
+    const FIVE_MIN_MS = 5 * 60 * 1000;
+    const ONE_MIN_MS = 60 * 1000;
+    const rows: GeneResearchRow[] = [];
+    const horizons: StrategyHorizon[] = [5, 10, 15, 20, 25, 30];
+
+    // One causal decision per five-minute slot: exactly three minutes before
+    // the next 5M open. Entry uses that M1 candle's open; expiry uses the M1
+    // candle that closes at the target time (its timestamp is target - 1 minute).
+    for (let i = 60; i < ordered.length - 40; i++) {
+      const candle = ordered[i];
+      const decisionTime = candle.timestampMs + ONE_MIN_MS;
+      const entryTime = (Math.floor(decisionTime / FIVE_MIN_MS) + 1) * FIVE_MIN_MS;
+      if (Math.abs((entryTime - decisionTime) - 180_000) > 5_000) continue;
+      const entryIndex = timestampIndex.get(entryTime);
+      if (entryIndex === undefined) continue;
+      const exitIndices: Record<number, number> = {};
+      for (const horizon of horizons) {
+        const exitIndex = timestampIndex.get(entryTime + horizon * ONE_MIN_MS - ONE_MIN_MS);
+        if (exitIndex !== undefined) exitIndices[horizon] = exitIndex;
+      }
+      if (Object.keys(exitIndices).length !== horizons.length) continue;
+      rows.push({
+        decisionIndex: i,
+        candle,
+        previousCandle: ordered[i - 1],
+        entryIndex,
+        entryTimeMs: entryTime,
+        exitIndices,
+        features: this.buildGeneFeatureVector(candle, ordered[i - 1], closes, ema9, ema21, rsi14, i),
+        session: this.geneSession(candle),
+      });
+    }
+
+    const trainEndMs = ordered[Math.floor(ordered.length * 0.45)]?.timestampMs ?? ordered[0].timestampMs;
+    const validationStartMs = trainEndMs + 35 * ONE_MIN_MS;
+    const validationEndMs = ordered[Math.floor(ordered.length * 0.65)]?.timestampMs ?? ordered[ordered.length - 1].timestampMs;
+    const testStartMs = validationEndMs + 35 * ONE_MIN_MS;
+    const spreadMap: Record<string, number> = {
       'EUR/USD': 1.1, 'GBP/USD': 1.6, 'USD/JPY': 1.2, 'EUR/JPY': 1.8,
       'AUD/USD': 1.4, 'USD/CAD': 1.7, 'EUR/GBP': 1.2, 'AUD/CAD': 1.8,
       'AUD/CHF': 1.9, 'AUD/JPY': 1.7, 'AUD/NZD': 2.0, 'EUR/AUD': 1.9,
       'EUR/CAD': 1.8, 'EUR/CHF': 1.6, 'EUR/NZD': 2.2, 'GBP/AUD': 2.2,
       'GBP/CAD': 2.0, 'GBP/CHF': 2.1, 'GBP/JPY': 2.0, 'GBP/NZD': 2.4,
     };
-    const spreadPips = spreads[gene.symbol || ordered[0].symbol] ?? 1.5;
-    const FIVE_MIN_MS = 5 * 60 * 1000;
-    const ONE_MIN_MS = 60 * 1000;
-
-    const simulateRange = (from: number, until: number) => {
-      let trades = 0, wins = 0, losses = 0, scratches = 0;
-      let netPips = 0, positivePips = 0, negativePips = 0;
-      let cursor = Math.max(from, 30);
-      while (cursor < until - gene.optimalHorizonMinutes - 2) {
-        const candle = ordered[cursor];
-        const previous = ordered[cursor - 1];
-        if (candle.source === 'synthetic' || previous.source === 'synthetic') { cursor++; continue; }
-
-        // Candle timestamps are minute-open timestamps. The decision is made after the bar closes.
-        const decisionTime = candle.timestampMs + ONE_MIN_MS;
-        const nextEntryTime = (Math.floor(decisionTime / FIVE_MIN_MS) + 1) * FIVE_MIN_MS;
-        const advanceMs = nextEntryTime - decisionTime;
-        if (advanceMs < 15_000 || advanceMs > 180_000) { cursor++; continue; }
-
-        if (gene.sessionAffinity !== 'ALL') {
-          const hour = new Date(candle.timestampMs).getUTCHours();
-          const session = hour >= 12 && hour < 16 ? 'OVERLAP'
-            : hour >= 7 && hour < 12 ? 'LONDON'
-            : hour >= 16 && hour < 21 ? 'NEW_YORK' : 'ASIA';
-          if (session !== gene.sessionAffinity) { cursor++; continue; }
-        }
-
-        const result = this.evaluateSynthesizedGeneSignal(
-          gene,
-          candle,
-          previous,
-          closes.slice(0, cursor + 1),
-          ema9.slice(0, cursor + 1),
-          ema21.slice(0, cursor + 1),
-          rsi14.slice(0, cursor + 1)
-        );
-        if (!result.shouldTrigger || result.conviction < 0.80) { cursor++; continue; }
-
-        // Require an actual one-minute candle at the scheduled entry boundary.
-        let entryIndex = cursor + 1;
-        while (entryIndex < until && ordered[entryIndex].timestampMs < nextEntryTime) entryIndex++;
-        if (entryIndex >= until || Math.abs(ordered[entryIndex].timestampMs - nextEntryTime) > 5_000) {
-          cursor++;
-          continue;
-        }
-
-        const exitTarget = nextEntryTime + gene.optimalHorizonMinutes * ONE_MIN_MS;
-        let exitIndex = entryIndex + 1;
-        while (exitIndex < until && ordered[exitIndex].timestampMs < exitTarget) exitIndex++;
-        if (exitIndex >= until || Math.abs(ordered[exitIndex].timestampMs - exitTarget) > 5_000) {
-          cursor++;
-          continue;
-        }
-
-        const pipFactor = gene.symbol?.includes('JPY') || candle.symbol.includes('JPY') ? 100 : 10000;
-        const entryPrice = ordered[entryIndex].open;
-        const exitPrice = ordered[exitIndex].close;
-        const gross = (result.direction === 'BUY' ? exitPrice - entryPrice : entryPrice - exitPrice) * pipFactor;
-        const net = gross - spreadPips;
-        trades++;
-        netPips += net;
-        if (net > 0.5) { wins++; positivePips += net; }
-        else if (net < -0.5) { losses++; negativePips += Math.abs(net); }
-        else scratches++;
-
-        // One outstanding trade per pair at a time, matching the production scheduler constraint.
-        cursor = exitIndex + 1;
-      }
-      const denominator = Math.max(1, trades);
-      return {
-        trades, wins, losses, scratches,
-        winRate: wins / Math.max(1, wins + losses),
-        netPips,
-        expectedValuePips: netPips / denominator,
-        profitFactor: negativePips > 0 ? positivePips / negativePips : (positivePips > 0 ? 99 : 0),
-      };
+    return {
+      candles: ordered, closes, ema9, ema21, rsi14, rows,
+      trainEndMs, validationStartMs, validationEndMs, testStartMs,
+      spreadPips: spreadMap[ordered[0].symbol] ?? 1.5,
     };
+  }
 
-    const train = simulateRange(0, trainEnd);
-    const validation = simulateRange(validationStart, validationEnd);
-    const test = simulateRange(testStart, n);
-    if (train.trades < 50 || validation.trades < 50 || test.trades < 100) {
-      throw new Error(
-        `Insufficient executed trades after realistic entry/expiry simulation (train=${train.trades}, validation=${validation.trades}, test=${test.trades}). Import more historical data or select a more frequent candidate setup.`
-      );
+  private simulateGeneRows(
+    gene: SynthesizedStrategyGene,
+    rows: GeneResearchRow[],
+    data: PreparedGeneResearchData
+  ) {
+    let trades = 0, wins = 0, losses = 0, scratches = 0;
+    let netPips = 0, positivePips = 0, negativePips = 0;
+    let busyUntil = -Infinity;
+    const scoredOutcomes: Array<'WIN' | 'LOSS'> = [];
+    const horizon = gene.optimalHorizonMinutes;
+    const triggerThreshold = Math.max(0.682, gene.genome?.activationThreshold ?? gene.operatorParameters?.threshold ?? 0.682);
+    for (const row of rows) {
+      if (row.entryTimeMs < busyUntil) continue;
+      if (gene.sessionAffinity !== 'ALL' && gene.sessionAffinity !== row.session) continue;
+      const activation = gene.genome
+        ? Math.tanh(this.evaluateGenomeExpression(gene.genome.expression, row.features) / 2)
+        : (() => {
+            const result = this.evaluateSynthesizedGeneSignal(
+              gene, row.candle, row.previousCandle,
+              data.closes, data.ema9, data.ema21, data.rsi14, row.decisionIndex
+            );
+            return result.shouldTrigger && result.conviction >= 0.80
+              ? (result.direction === 'BUY' ? 1 : -1) * Math.max(triggerThreshold, 0.683)
+              : 0;
+          })();
+      if (Math.abs(activation) < triggerThreshold) continue;
+      const exitIndex = row.exitIndices[horizon];
+      if (exitIndex === undefined) continue;
+      const entryPrice = data.candles[row.entryIndex].open;
+      const exitPrice = data.candles[exitIndex].close;
+      const isJpy = gene.symbol?.includes('JPY') || row.candle.symbol.includes('JPY');
+      const pipFactor = isJpy ? 100 : 10000;
+      const gross = (activation > 0 ? exitPrice - entryPrice : entryPrice - exitPrice) * pipFactor;
+      const net = gross - data.spreadPips;
+      trades++;
+      netPips += net;
+      if (net > 0.5) {
+        wins++;
+        positivePips += net;
+        scoredOutcomes.push('WIN');
+      } else if (net < -0.5) {
+        losses++;
+        negativePips += Math.abs(net);
+        scoredOutcomes.push('LOSS');
+      } else {
+        scratches++;
+      }
+      busyUntil = row.entryTimeMs + horizon * 60_000;
     }
+    const scoredTrades = wins + losses;
+    return {
+      trades, wins, losses, scratches, scoredTrades,
+      winRate: scoredTrades ? wins / scoredTrades : 0,
+      netPips,
+      expectedValuePips: trades ? netPips / trades : 0,
+      profitFactor: negativePips > 0 ? positivePips / negativePips : (positivePips > 0 ? 99 : 0),
+      scoredOutcomes,
+    };
+  }
 
-    // Wilson interval for the untouched test-set win proportion.
-    const z = 1.96, nTest = Math.max(1, test.wins + test.losses), p = test.wins / nTest;
-    const denominator = 1 + z * z / nTest;
-    const center = (p + z * z / (2 * nTest)) / denominator;
-    const margin = z * Math.sqrt((p * (1 - p) / nTest) + (z * z / (4 * nTest * nTest))) / denominator;
-    const interval: [number, number] = [
+  private wilsonInterval(wins: number, scoredTrades: number): [number, number] {
+    const n = Math.max(1, scoredTrades);
+    const p = wins / n;
+    const z = 1.96;
+    const denominator = 1 + (z * z) / n;
+    const center = (p + (z * z) / (2 * n)) / denominator;
+    const margin = z * Math.sqrt((p * (1 - p) / n) + (z * z / (4 * n * n))) / denominator;
+    return [
       Math.max(0, Number((center - margin).toFixed(4))),
       Math.min(1, Number((center + margin).toFixed(4))),
     ];
+  }
+
+  private getThreeBlockWinRates(outcomes: Array<'WIN' | 'LOSS'>): number[] {
+    if (outcomes.length < 300) return [];
+    const recent = outcomes.slice(-300);
+    return [0, 1, 2].map(block => {
+      const start = block * 100;
+      const wins = recent.slice(start, start + 100).filter(value => value === 'WIN').length;
+      return Number((wins / 100).toFixed(4));
+    });
+  }
+
+  private validateGeneAgainstPreparedData(
+    gene: SynthesizedStrategyGene,
+    data: PreparedGeneResearchData
+  ): SynthesizedStrategyGene {
+    if (!gene.genome && !gene.operatorParameters) {
+      throw new Error('This legacy candidate has no stored executable genome or coefficients. Generate a new symbolic candidate.');
+    }
+    const trainRows = data.rows.filter(row => row.candle.timestampMs < data.trainEndMs);
+    const validationRows = data.rows.filter(row =>
+      row.candle.timestampMs >= data.validationStartMs &&
+      row.candle.timestampMs < data.validationEndMs
+    );
+    const testRows = data.rows.filter(row => row.candle.timestampMs >= data.testStartMs);
+    const train = this.simulateGeneRows(gene, trainRows, data);
+    const validation = this.simulateGeneRows(gene, validationRows, data);
+    const test = this.simulateGeneRows(gene, testRows, data);
+    const interval = this.wilsonInterval(test.wins, test.scoredTrades);
+    const blockRates = this.getThreeBlockWinRates(test.scoredOutcomes);
+    const enoughTrades = test.scoredTrades >= 300 && validation.scoredTrades >= 150 && train.scoredTrades >= 150;
+    const passed =
+      enoughTrades &&
+      test.winRate >= 0.70 &&
+      validation.winRate >= 0.70 &&
+      blockRates.length === 3 &&
+      blockRates.every(rate => rate >= 0.65) &&
+      test.netPips > 0 &&
+      test.profitFactor >= 1.15 &&
+      interval[0] >= 0.60;
+
+    let failureReason = '';
+    if (test.scoredTrades < 300) failureReason = `Insufficient independent test outcomes: ${test.scoredTrades}/300.`;
+    else if (validation.scoredTrades < 150 || train.scoredTrades < 150) failureReason = `Insufficient train/validation outcomes (train ${train.scoredTrades}, validation ${validation.scoredTrades}; require 150 each).`;
+    else if (validation.winRate < 0.70) failureReason = `Validation win rate ${(validation.winRate * 100).toFixed(1)}% is below 70%.`;
+    else if (test.winRate < 0.70) failureReason = `Untouched test win rate ${(test.winRate * 100).toFixed(1)}% is below 70%.`;
+    else if (blockRates.length !== 3 || blockRates.some(rate => rate < 0.65)) failureReason = 'One or more consecutive 100-trade test blocks fell below 65%.';
+    else if (test.netPips <= 0 || test.profitFactor < 1.15) failureReason = 'Net return or profit factor failed after modeled spread costs.';
+    else if (interval[0] < 0.60) failureReason = 'The 95% Wilson lower bound is below 60%.';
 
     const backtestMetrics: StrategyBacktestMetrics = {
       trainSampleSize: train.trades,
-      trainScoredSampleSize: train.wins + train.losses,
+      trainScoredSampleSize: train.scoredTrades,
       validationSampleSize: validation.trades,
-      validationScoredSampleSize: validation.wins + validation.losses,
+      validationScoredSampleSize: validation.scoredTrades,
       trainWinRate: Number(train.winRate.toFixed(4)),
       validationWinRate: Number(validation.winRate.toFixed(4)),
       testWinRate: Number(test.winRate.toFixed(4)),
       testAccuracy: Number(test.winRate.toFixed(4)),
       testSampleSize: test.trades,
-      testScoredSampleSize: test.wins + test.losses,
+      testScoredSampleSize: test.scoredTrades,
       testWins: test.wins,
       testLosses: test.losses,
       expectedValuePips: Number(test.expectedValuePips.toFixed(2)),
       profitFactor: Number(test.profitFactor.toFixed(2)),
       confidenceInterval95: interval,
-      trainPeriod: { start: ordered[Math.max(0, 30)].timestamp, end: ordered[trainEnd - 1].timestamp },
-      validationPeriod: { start: ordered[validationStart].timestamp, end: ordered[validationEnd - 1].timestamp },
-      testPeriod: { start: ordered[testStart].timestamp, end: ordered[n - 1].timestamp },
+      testBlockWinRates: blockRates,
+      trainPeriod: { start: data.candles[60].timestamp, end: data.candles[Math.max(60, Math.floor(data.candles.length * 0.45) - 1)].timestamp },
+      validationPeriod: { start: new Date(data.validationStartMs).toISOString(), end: new Date(data.validationEndMs).toISOString() },
+      testPeriod: { start: new Date(data.testStartMs).toISOString(), end: data.candles[data.candles.length - 1].timestamp },
     };
-
-    const testScoredTrades = test.wins + test.losses;
-    const validationScoredTrades = validation.wins + validation.losses;
-    const promotionEligible =
-      testScoredTrades >= 200 &&
-      validationScoredTrades >= 100 &&
-      test.winRate >= 0.55 &&
-      validation.winRate >= 0.53 &&
-      test.expectedValuePips > 0 &&
-      test.profitFactor >= 1.15 &&
-      interval[0] > 0.50;
-
+    const accuracyStatus = test.scoredTrades >= 300 ? 'BACKTESTED' : 'INSUFFICIENT_SAMPLE';
     const updated: SynthesizedStrategyGene = {
       ...gene,
       verifiedAccuracy: Number((test.winRate * 100).toFixed(1)),
-      sampleCount: testScoredTrades,
-      accuracyStatus: 'BACKTESTED',
+      sampleCount: test.scoredTrades,
+      accuracyStatus,
       backtestMetrics,
-      // Historical validation only qualifies a candidate for forward paper trading.
-      status: promotionEligible ? 'PAPER_TRADING' : 'EXPERIMENTING',
+      validationFailureReason: passed ? undefined : failureReason || 'Historical evidence did not satisfy every approval gate.',
+      status: passed ? 'PAPER_TRADING' : (test.scoredTrades >= 300 ? 'REJECTED' : 'EXPERIMENTING'),
     };
     db.updateSynthesizedStrategy(updated);
     return updated;
   }
 
+  public validateSynthesizedStrategy(
+    gene: SynthesizedStrategyGene,
+    candles: Candle[]
+  ): SynthesizedStrategyGene {
+    const data = this.prepareGeneResearchData(candles);
+    return this.validateGeneAgainstPreparedData(gene, data);
+  }
+
+  public async runNovelStrategySearchBatch(
+    symbol: ForexSymbol,
+    candles: Candle[],
+    searchBatchId: string,
+    baseGeneration: number,
+    onProgress: (progress: { completed: number; passedHistorical: number; insufficientSample: number; rejected: number }) => void
+  ): Promise<SynthesizedStrategyGene[]> {
+    const data = this.prepareGeneResearchData(candles);
+    // Freeze parents before this run. The same batch's 300 candidates do not breed
+    // from one another's held-out results, avoiding a feedback loop on this dataset.
+    const parentPool = db.getSynthesizedStrategies()
+      .filter(gene => !!gene.genome && gene.accuracyStatus === 'BACKTESTED' && gene.status !== 'REJECTED')
+      .sort((a, b) =>
+        (b.backtestMetrics?.validationWinRate ?? 0) - (a.backtestMetrics?.validationWinRate ?? 0)
+      ).slice(0, 30);
+    const results: SynthesizedStrategyGene[] = [];
+    const signatures = new Set<string>();
+    let passedHistorical = 0, insufficientSample = 0, rejected = 0;
+    for (let i = 0; i < 300; i++) {
+      let gene = this.synthesizeInfiniteNovelStrategy(candles, symbol, baseGeneration + i, parentPool, searchBatchId);
+      let attempts = 0;
+      while (signatures.has(gene.genome?.signature || '') && attempts < 20) {
+        gene = this.synthesizeInfiniteNovelStrategy(candles, symbol, baseGeneration + 300 + i + attempts, parentPool, searchBatchId);
+        attempts++;
+      }
+      if (gene.genome) signatures.add(gene.genome.signature);
+      const validated = this.validateGeneAgainstPreparedData(gene, data);
+      if (validated.status === 'PAPER_TRADING') passedHistorical++;
+      else if (validated.accuracyStatus === 'INSUFFICIENT_SAMPLE') insufficientSample++;
+      else rejected++;
+      results.push(validated);
+      onProgress({ completed: i + 1, passedHistorical, insufficientSample, rejected });
+      // Yield so the API can expose progress while the CPU-bound candidate tests run.
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+    }
+    return results;
+  }
+
   /**
-   * Generates a candidate formula. Candidate generation is not evidence of an edge:
-   * every new candidate starts UNVALIDATED and cannot enter the production pool.
+   * Generates a machine-searchable symbolic candidate. The grammar evolves
+   * executable expressions over causal price/volatility features; no accuracy
+   * is assigned until the untouched historical test is run.
    */
   public synthesizeInfiniteNovelStrategy(
-    candles: Candle[],
+    _candles: Candle[],
     symbol: ForexSymbol,
-    generation: number
+    generation: number,
+    parentPool?: SynthesizedStrategyGene[],
+    searchBatchId?: string
   ): SynthesizedStrategyGene {
-    // Candidate feature/factor labels are sampled, not learned genetic parents.
-    const parentConcepts = [
-      'Fractal Volatility Matrix', 'Asymmetric Wick Rejection', 'Microstructure Flow',
-      'Logarithmic Liquidity Decay', 'Second-Derivative EMA Curvature',
-      'Entropy Harmonic Dispersion', 'Non-Linear Band Elasticity',
-      'Sub-Bar Delta Imbalance', 'Stochastic Phase Synchronization',
-      'Cross-Regime Momentum Wavelet',
-    ];
-    const shuffled = [...parentConcepts].sort(() => 0.5 - Math.random());
-    const parents = shuffled.slice(0, Math.random() > 0.4 ? 3 : 2);
-    const operators: Array<'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion'> =
-      ['tanh_polynomial', 'fractal_power', 'exponential_decay', 'harmonic_dispersion'];
-    const operator = operators[Math.floor(Math.random() * operators.length)];
-    const horizons: Array<5 | 10 | 15 | 20 | 25 | 30> = [5, 10, 15, 20, 25, 30];
-    const horizon = horizons[Math.floor(Math.random() * horizons.length)];
-    const sessions: Array<'ASIA' | 'LONDON' | 'OVERLAP' | 'NEW_YORK' | 'ALL'> =
-      ['ASIA', 'LONDON', 'OVERLAP', 'NEW_YORK', 'ALL'];
-    const sessionAffinity = sessions[Math.floor(Math.random() * sessions.length)];
-    const alpha = Number((0.8 + Math.random() * 1.5).toFixed(2));
-    const beta = Number((0.4 + Math.random() * 0.9).toFixed(2));
-    const gamma = Number((0.15 + Math.random() * 0.45).toFixed(2));
-    const exponent = Number((1.2 + Math.random() * 0.9).toFixed(2));
-    const threshold = 0.38;
-    const mutationRate = Number((0.02 + Math.random() * 0.05).toFixed(3));
-    const params = { alpha, beta, gamma, exponent, threshold };
+    const eligibleParents = (parentPool || db.getSynthesizedStrategies())
+      .filter(gene => !!gene.genome && gene.accuracyStatus === 'BACKTESTED')
+      .slice(0, 30);
+    const parentA = eligibleParents.length
+      ? eligibleParents[Math.floor(Math.random() * eligibleParents.length)]
+      : undefined;
+    const parentB = eligibleParents.length > 1
+      ? eligibleParents[Math.floor(Math.random() * eligibleParents.length)]
+      : undefined;
 
-    let formula = '';
-    let hypothesis = '';
-    let whyHumansMissThis = '';
-    let name = '';
-    switch (operator) {
-      case 'tanh_polynomial':
-        formula = `tanh(${alpha}·ZEntropy) + ${beta}·(LowerWick^ ${exponent} - UpperWick^ ${exponent}) - ${gamma}·MeanDeviation`;
-        name = `Gen${generation}: Tanh Entropy and Wick Asymmetry`;
-        hypothesis = 'A nonlinear return transform combined with asymmetric wick rejection may improve directional selection.';
-        whyHumansMissThis = 'The candidate combines return scaling, wick imbalance and deviation from a short moving average; its value remains unproven until held-out testing.';
-        break;
-      case 'fractal_power':
-        formula = `sign(MicroFlow)·|MeanDeviation|^${exponent} + ${alpha}·RSICurvature - ${beta}·WickAsymmetry - ${gamma}·DeviationPenalty`;
-        name = `Gen${generation}: Fractal Power Drift`;
-        hypothesis = 'Power-scaled deviation and RSI curvature may identify directional drift inflections.';
-        whyHumansMissThis = 'The formula combines nonlinear deviation, RSI curvature and wick asymmetry; empirical value has not yet been established.';
-        break;
-      case 'exponential_decay':
-        formula = `2.5·(sigmoid(${alpha}·EMACurvature·VolElasticity)-0.5) - ${beta}·log(1+|MeanDeviation|) - ${gamma}·WickAsymmetry`;
-        name = `Gen${generation}: Exponential Curvature Filter`;
-        hypothesis = 'EMA curvature scaled by candle range may help distinguish directional expansion from noisy movement.';
-        whyHumansMissThis = 'The rule combines acceleration, range scaling and wick imbalance; it is a testable hypothesis, not a verified edge.';
-        break;
-      case 'harmonic_dispersion':
-        formula = `${beta}·cos(π·WickRatio) + ${alpha}·BodyFlow - ${gamma}·EMASpread`;
-        name = `Gen${generation}: Harmonic Wick Dispersion`;
-        hypothesis = 'Candle body flow and wick geometry may interact with EMA spread to identify directional imbalance.';
-        whyHumansMissThis = 'The equation compresses wick geometry and body flow into a single score; held-out results determine whether it is useful.';
-        break;
+    let expression: StrategyExpressionNode;
+    if (parentA?.genome && parentB?.genome && Math.random() < 0.58) {
+      const binary = ['add', 'subtract', 'multiply', 'protected_divide', 'max', 'min', 'hypot', 'atan2'] as const;
+      expression = {
+        kind: 'binary',
+        operator: binary[Math.floor(Math.random() * binary.length)],
+        left: JSON.parse(JSON.stringify(parentA.genome.expression)) as StrategyExpressionNode,
+        right: JSON.parse(JSON.stringify(parentB.genome.expression)) as StrategyExpressionNode,
+      };
+      expression = this.mutateGenomeExpression(expression, 2);
+    } else if (parentA?.genome) {
+      expression = this.mutateGenomeExpression(
+        JSON.parse(JSON.stringify(parentA.genome.expression)) as StrategyExpressionNode,
+        3
+      );
+    } else {
+      expression = this.randomGenomeExpression(3);
     }
 
+    let complexity = this.countExpressionNodes(expression);
+    while (complexity > 24) {
+      expression = this.randomGenomeExpression(2);
+      complexity = this.countExpressionNodes(expression);
+    }
+    const activationThreshold = Number((0.64 + Math.random() * 0.20).toFixed(3));
+    const signature = JSON.stringify({ expression, activationThreshold });
+    const genome: StrategyGenome = {
+      version: 1,
+      expression,
+      activationThreshold,
+      signature,
+      complexity,
+    };
+    const formula = `tanh((${this.expressionToFormula(expression)}) / 2); |score| ≥ ${activationThreshold.toFixed(3)}`;
+    const featuresUsed = [...new Set(
+      this.genomeFeatures.filter(feature => JSON.stringify(expression).includes(feature))
+    )];
+    const selectedHorizon: StrategyHorizon[] = [5, 10, 15, 20, 25, 30];
+    const horizon = selectedHorizon[Math.floor(Math.random() * selectedHorizon.length)];
+    const sessions: Array<MarketSessionId | 'ALL'> = ['ASIA', 'LONDON', 'OVERLAP', 'NEW_YORK', 'ALL'];
+    const sessionAffinity = sessions[Math.floor(Math.random() * sessions.length)];
+    const operatorOptions: SynthesizedStrategyGene['nonLinearOperator'][] = [
+      'tanh_polynomial', 'fractal_power', 'exponential_decay', 'harmonic_dispersion',
+    ];
+    const operator = operatorOptions[Math.floor(Math.random() * operatorOptions.length)];
+    const parents = [parentA, parentB]
+      .filter((gene): gene is SynthesizedStrategyGene => !!gene)
+      .map(gene => gene.id);
+    const code = `SYM_${generation}_${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
     const gene: SynthesizedStrategyGene = {
-      id: `synth_gen${generation}_${Date.now().toString(36)}`,
-      name,
-      code: `GEN${generation}_${operator.toUpperCase().slice(0, 4)}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+      id: `synth_${symbol.replace('/', '')}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      name: `Symbolic Gen ${generation} · ${featuresUsed.slice(0, 3).join(' / ') || 'Nonlinear Feature Mix'}`,
+      code,
       generation,
       mathematicalFormula: formula,
-      parents,
-      mutationRate,
+      parents: parents.length ? parents : ['Random symbolic seed'],
+      mutationRate: Number((0.08 + Math.random() * 0.22).toFixed(3)),
       nonLinearOperator: operator,
-      operatorParameters: params,
+      operatorParameters: {
+        alpha: 1,
+        beta: 1,
+        gamma: 1,
+        exponent: 1,
+        threshold: activationThreshold,
+      },
+      genome,
+      searchBatchId,
       symbol,
       optimalHorizonMinutes: horizon,
       sessionAffinity,
@@ -897,11 +1276,10 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       sampleCount: 0,
       accuracyStatus: 'UNVALIDATED',
       status: 'EXPERIMENTING',
-      scientificHypothesis: hypothesis,
-      whyHumansMissThis,
+      scientificHypothesis: `Machine-generated symbolic hypothesis combining ${featuresUsed.join(', ') || 'causal market features'} through nonlinear expression search. No predictive edge is assumed before testing.`,
+      whyHumansMissThis: 'Generated by symbolic expression search and genetic mutation/crossover. Novelty describes this generated expression, not proof that no human has used a similar idea.',
       createdAt: new Date().toISOString(),
     };
-
     db.addSynthesizedStrategy(gene);
     return gene;
   }
@@ -917,48 +1295,49 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     closes: number[],
     ema9: number[],
     ema21: number[],
-    rsi14: number[]
+    rsi14: number[],
+    index: number = closes.length - 1
   ): { shouldTrigger: boolean; direction: 'BUY' | 'SELL'; conviction: number; rationale: string } {
+    if (gene.genome) {
+      const features = this.buildGeneFeatureVector(candle, prevCandle, closes, ema9, ema21, rsi14, index);
+      const rawScore = this.evaluateGenomeExpression(gene.genome.expression, features);
+      const activationScore = Math.tanh(rawScore / 2);
+      const threshold = Math.max(0.682, gene.genome.activationThreshold);
+      const shouldTrigger = Math.abs(activationScore) >= threshold;
+      const direction: 'BUY' | 'SELL' = activationScore >= 0 ? 'BUY' : 'SELL';
+      const conviction = Number(Math.min(0.94, 0.50 + Math.abs(activationScore) * 0.44).toFixed(2));
+      return {
+        shouldTrigger,
+        direction,
+        conviction,
+        rationale: `Symbolic genome score ${activationScore.toFixed(3)}; activation threshold ${threshold.toFixed(3)}. Score is a rule activation, not a win probability.`,
+      };
+    }
+
     const isJpy = candle.symbol.includes('JPY');
     const pipFactor = isJpy ? 100 : 10000;
-
     const range = Math.max(0.00005, candle.high - candle.low);
     const body = Math.abs(candle.close - candle.open);
     const upperWick = candle.high - Math.max(candle.open, candle.close);
     const lowerWick = Math.min(candle.open, candle.close) - candle.low;
-
     const upperWickRatio = upperWick / range;
     const lowerWickRatio = lowerWick / range;
-    const bodyRatio = body / range;
-
-    const idx = closes.length - 1;
+    const idx = index;
     const lastEma9 = ema9[idx] || candle.close;
     const lastEma21 = ema21[idx] || candle.close;
-    const prevEma9 = ema9[idx - 1] || lastEma9;
-    const prevEma21 = ema21[idx - 1] || lastEma21;
+    const prevEma9 = ema9[Math.max(0, idx - 1)] || lastEma9;
+    const prevEma21 = ema21[Math.max(0, idx - 1)] || lastEma21;
     const lastRsi = rsi14[idx] || 50;
-    const prevRsi = rsi14[idx - 1] || 50;
-
-    // Moving average deviation
-    const sma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / Math.max(1, Math.min(20, closes.length));
+    const prevRsi = rsi14[Math.max(0, idx - 1)] || 50;
+    const start = Math.max(0, idx - 19);
+    const recentCloses = closes.slice(start, idx + 1);
+    const sma20 = recentCloses.reduce((a, b) => a + b, 0) / Math.max(1, recentCloses.length);
     const delta20Pips = (candle.close - sma20) * pipFactor;
-
-    // Second derivative of EMA (Curvature acceleration)
-    const emaSlopeCurrent = lastEma9 - lastEma21;
-    const emaSlopePrev = prevEma9 - prevEma21;
-    const emaCurvature = (emaSlopeCurrent - emaSlopePrev) * pipFactor;
-
-    // RSI Curvature
-    const rsiSlopeCurrent = lastRsi - prevRsi;
-    const rsiCurvature = rsiSlopeCurrent / 10;
-
-    // These exact coefficients are persisted with the gene and reused by its backtest.
+    const emaCurvature = ((lastEma9 - lastEma21) - (prevEma9 - prevEma21)) * pipFactor;
+    const rsiCurvature = (lastRsi - prevRsi) / 10;
     const params = gene.operatorParameters || { alpha: 1.45, beta: 0.68, gamma: 0.28, exponent: 1.8, threshold: 0.38 };
     const { alpha, beta, gamma, exponent } = params;
-
-    // Non-linear evaluation of the exact persisted candidate formula:
     let activationScore = 0;
-
     switch (gene.nonLinearOperator) {
       case 'tanh_polynomial': {
         const zEntropy = ((candle.close - prevCandle.close) * pipFactor) / 2.0;
@@ -981,24 +1360,21 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       case 'harmonic_dispersion': {
         const wickRatio = (upperWick + lowerWick) / range;
         const wave = Math.cos(Math.PI * wickRatio);
-        const orderFlow = candle.close > candle.open ? 0.6 : -0.6;
         const bodyFlow = (candle.close - candle.open) * pipFactor / Math.max(0.1, range * pipFactor);
         const emaSpread = (lastEma9 - lastEma21) * pipFactor / 10;
         activationScore = beta * wave + alpha * bodyFlow - gamma * emaSpread;
         break;
       }
     }
-
     const threshold = params.threshold;
     const shouldTrigger = Math.abs(activationScore) > threshold;
     const direction: 'BUY' | 'SELL' = activationScore > 0 ? 'BUY' : 'SELL';
     const conviction = Number(Math.min(0.94, 0.50 + Math.min(0.44, Math.abs(activationScore) * 0.1)).toFixed(2));
-
     return {
       shouldTrigger,
       direction,
       conviction,
-      rationale: `Signal score: ${activationScore.toFixed(3)} (Threshold: ±${threshold}). Operator ${gene.nonLinearOperator} selected ${direction}; this score is not a win probability.`,
+      rationale: `Signal score: ${activationScore.toFixed(3)} (Threshold: ±${threshold}). Legacy operator score is not a win probability.`,
     };
   }
 
