@@ -397,6 +397,7 @@ export class ResearchEngine {
 
     const metrics: ExperimentMetrics = {
       sampleSize: testTotal,
+      scoredTradeSampleSize: scoredTestTrades,
       trainSampleSize: trainMetrics.trades,
       validationSampleSize: validationMetrics.trades,
       trainAccuracy,
@@ -764,6 +765,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
       testWinRate: Number(test.winRate.toFixed(4)),
       testAccuracy: Number(test.winRate.toFixed(4)),
       testSampleSize: test.trades,
+      testScoredSampleSize: test.wins + test.losses,
       testWins: test.wins,
       testLosses: test.losses,
       expectedValuePips: Number(test.expectedValuePips.toFixed(2)),
