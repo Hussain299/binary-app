@@ -695,6 +695,7 @@ class DatabaseService {
       ];
       gene.paperMetrics = {
         trades: existing.trades,
+        scoredTrades,
         wins: existing.wins,
         losses: existing.losses,
         scratches: existing.scratches,
