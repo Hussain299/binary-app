@@ -60,7 +60,7 @@ class HistoricalDataStore {
       const row = raw as Record<string, unknown>;
       const time = row.timestampMs ?? row.timestamp ?? row.time ?? row.date;
       const timeString = String(time ?? '').trim();
-      const numericTime = /^\\d+(\\.\\d+)?$/.test(timeString) ? Number(timeString) : NaN;
+      const numericTime = /^\d+(\.\d+)?$/.test(timeString) ? Number(timeString) : NaN;
       const timestampMs = typeof time === 'number'
         ? (time < 10_000_000_000 ? time * 1000 : time)
         : Number.isFinite(numericTime)
