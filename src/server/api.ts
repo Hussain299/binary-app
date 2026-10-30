@@ -230,8 +230,20 @@ apiRouter.post('/signals/evaluate', async (_req: Request, res: Response) => {
   try {
     const candlesMap: Record<ForexSymbol, any> = {} as any;
     for (const pair of FOREX_PAIRS) {
-      const { candles } = await dataFeedEngine.fetchCandles(pair, 60);
-      candlesMap[pair] = candles;
+      const { candles, source } = await dataFeedEngine.fetchCandles(pair, 60);
+      const newest = candles[candles.length - 1];
+      const ageMs = newest ? Date.now() - newest.timestampMs : Infinity;
+      const hasFreshRealData =
+        source !== 'synthetic' &&
+        !!newest &&
+        newest.source !== 'synthetic' &&
+        ['biquote', 'dukascopy', 'yahoo', 'imported'].includes(newest.source) &&
+        ageMs >= -60_000 &&
+        ageMs <= 120_000;
+      // Do not settle a pending trade using random continuity candles or stale data.
+      candlesMap[pair] = hasFreshRealData
+        ? candles.filter(c => c.source !== 'synthetic')
+        : [];
     }
 
     const updated = entryExitEngine.evaluateSignals(candlesMap);
