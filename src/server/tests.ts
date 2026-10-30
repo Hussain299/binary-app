@@ -346,7 +346,7 @@ export async function runAllVerificationTests(): Promise<{
   });
 
   await runTest('ML', 'Probabilistic Calibration & Brier Score Calculation', () => {
-    const candles = makeM1TestCandles('USD/JPY', 4000);
+    const candles = makeM1TestCandles('USD/JPY', 12000);
     const exp = researchEngine.runWalkForwardExperiment(
       'USD/JPY',
       candles,
