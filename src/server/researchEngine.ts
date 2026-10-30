@@ -767,9 +767,11 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
       testPeriod: { start: ordered[testStart].timestamp, end: ordered[n - 1].timestamp },
     };
 
+    const testScoredTrades = test.wins + test.losses;
+    const validationScoredTrades = validation.wins + validation.losses;
     const promotionEligible =
-      test.trades >= 200 &&
-      validation.trades >= 100 &&
+      testScoredTrades >= 200 &&
+      validationScoredTrades >= 100 &&
       test.winRate >= 0.55 &&
       validation.winRate >= 0.53 &&
       test.expectedValuePips > 0 &&
@@ -779,7 +781,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
     const updated: SynthesizedStrategyGene = {
       ...gene,
       verifiedAccuracy: Number((test.winRate * 100).toFixed(1)),
-      sampleCount: test.trades,
+      sampleCount: testScoredTrades,
       accuracyStatus: 'BACKTESTED',
       backtestMetrics,
       // Historical validation only qualifies a candidate for forward paper trading.
