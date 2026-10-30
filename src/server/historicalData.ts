@@ -58,9 +58,13 @@ class HistoricalDataStore {
       if (!raw || typeof raw !== 'object') { rejected++; continue; }
       const row = raw as Record<string, unknown>;
       const time = row.timestampMs ?? row.timestamp ?? row.time ?? row.date;
+      const timeString = String(time ?? '').trim();
+      const numericTime = /^\\d+(\\.\\d+)?$/.test(timeString) ? Number(timeString) : NaN;
       const timestampMs = typeof time === 'number'
         ? (time < 10_000_000_000 ? time * 1000 : time)
-        : Date.parse(String(time ?? ''));
+        : Number.isFinite(numericTime)
+          ? (numericTime < 10_000_000_000 ? numericTime * 1000 : numericTime)
+          : Date.parse(timeString);
       const open = Number(row.open ?? row.o);
       const high = Number(row.high ?? row.h);
       const low = Number(row.low ?? row.l);
