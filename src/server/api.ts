@@ -103,7 +103,7 @@ apiRouter.post('/analyze', async (req: Request, res: Response) => {
     const candles = historicalDataStore.getCandles(symbol);
     if (candles.length < 10_000) {
       return res.status(409).json({
-        error: `Insufficient genuine historical data for research. Import at least 10,000 one-minute candles for ${symbol}; currently stored: ${candles.length}.`,
+        error: `Insufficient uploaded historical data for research. Import at least 10,000 one-minute candles for ${symbol}; currently stored: ${candles.length}.`,
         symbol,
         storedCandles: candles.length,
         requiredCandles: 10_000,
@@ -178,7 +178,7 @@ apiRouter.get('/strategies/performance', (_req: Request, res: Response) => {
   res.json({ strategies: db.getStrategyPerformance() });
 });
 
-// Validate one generated candidate against its pair's imported genuine historical candles.
+// Validate one generated candidate against its pair's uploaded historical candles.
 apiRouter.post('/strategies/validate', (req: Request, res: Response) => {
   try {
     const gene = db.getSynthesizedStrategyById(String(req.body.geneId || ''));
