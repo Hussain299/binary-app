@@ -41,88 +41,90 @@ export class ResearchEngine {
   public extractFeatures(candles: Candle[]): Array<{
     candle: Candle;
     features: number[];
-    labels: Record<number, number>; // horizon -> 1 (UP) or 0 (DOWN)
-    futureMoves: Record<number, number>;
+    labels: Record<number, number>; // scheduled entry-to-expiry direction
+    futureMoves: Record<number, number>; // scheduled entry-to-expiry price movement
   }> {
     const n = candles.length;
-    if (n < 30) return [];
+    if (n < 70) return [];
 
     const isJpy = candles[0].symbol.includes('JPY');
     const pipFactor = isJpy ? 100 : 10000;
+    const FIVE_MIN_MS = 5 * 60 * 1000;
+    const ONE_MIN_MS = 60 * 1000;
 
-    // Precalculate EMAs
-    const ema9 = this.calculateEMA(candles.map(c => c.close), 9);
-    const ema21 = this.calculateEMA(candles.map(c => c.close), 21);
-    const rsi14 = this.calculateRSI(candles.map(c => c.close), 14);
+    const closes = candles.map(c => c.close);
+    const ema9 = this.calculateEMA(closes, 9);
+    const ema21 = this.calculateEMA(closes, 21);
+    const rsi14 = this.calculateRSI(closes, 14);
     const atr14 = this.calculateATR(candles, 14);
-
+    const horizons = [5, 10, 15, 20, 25, 30];
     const samples: Array<{
       candle: Candle;
       features: number[];
       labels: Record<number, number>;
       futureMoves: Record<number, number>;
     }> = [];
+    const seenEntryTimes = new Set<number>();
 
-    // Horizons to evaluate: 5, 10, 15, 20, 25, 30
-    const horizons = [5, 10, 15, 20, 25, 30];
+    // Each historical decision is made once, on a completed M1 bar, at the
+    // first point in the 3-minute advance window for the next 5M boundary.
+    // The same scheduled entry boundary can never create multiple backtest trades.
+    for (let i = 25; i < n - 40; i++) {
+      const candle = candles[i];
+      const previous = candles[i - 1];
+      const decisionTime = candle.timestampMs + ONE_MIN_MS;
+      const entryTime = Math.ceil(decisionTime / FIVE_MIN_MS) * FIVE_MIN_MS;
+      const secondsToEntry = entryTime - decisionTime;
+      if (secondsToEntry < 15_000 || secondsToEntry > 180_000) continue;
+      if (seenEntryTimes.has(entryTime)) continue;
 
-    for (let i = 25; i < n - 30; i++) {
-      const c = candles[i];
-      const prev = candles[i - 1];
+      let entryIndex = i + 1;
+      while (entryIndex < n && candles[entryIndex].timestampMs < entryTime) entryIndex++;
+      if (entryIndex >= n || Math.abs(candles[entryIndex].timestampMs - entryTime) > 5_000) continue;
+      seenEntryTimes.add(entryTime);
 
-      // 1. Normalized Return
-      const ret1 = (c.close - prev.close) * pipFactor;
-      // 2. Body Ratio
-      const body = Math.abs(c.close - c.open);
-      const totalRange = Math.max(0.00001, c.high - c.low);
-      const bodyRatio = body / totalRange;
-      // 3. Upper Wick Ratio
-      const upperWick = c.high - Math.max(c.open, c.close);
-      const upperWickRatio = upperWick / totalRange;
-      // 4. Lower Wick Ratio
-      const lowerWick = Math.min(c.open, c.close) - c.low;
-      const lowerWickRatio = lowerWick / totalRange;
-      // 5. EMA relationship
-      const emaDiff = (ema9[i] - ema21[i]) * pipFactor;
-      // 6. RSI(14) normalized to [0, 1]
-      const rsiNorm = (rsi14[i] || 50) / 100;
-      // 7. ATR(14) in pips
-      const atrPips = (atr14[i] || 0.0005) * pipFactor;
-      // 8. 20-candle Range position (Stochastic-like %K)
+      const range = Math.max(0.00001, candle.high - candle.low);
+      const body = Math.abs(candle.close - candle.open);
+      const upperWick = candle.high - Math.max(candle.open, candle.close);
+      const lowerWick = Math.min(candle.open, candle.close) - candle.low;
       let min20 = Infinity;
       let max20 = -Infinity;
       for (let k = i - 19; k <= i; k++) {
-        if (candles[k].low < min20) min20 = candles[k].low;
-        if (candles[k].high > max20) max20 = candles[k].high;
+        min20 = Math.min(min20, candles[k].low);
+        max20 = Math.max(max20, candles[k].high);
       }
-      const rangePos = (c.close - min20) / Math.max(0.00001, max20 - min20);
 
       const features = [
-        ret1,
-        bodyRatio,
-        upperWickRatio,
-        lowerWickRatio,
-        emaDiff,
-        rsiNorm,
-        atrPips,
-        rangePos,
+        (candle.close - previous.close) * pipFactor,
+        body / range,
+        upperWick / range,
+        lowerWick / range,
+        (ema9[i] - ema21[i]) * pipFactor,
+        (rsi14[i] || 50) / 100,
+        (atr14[i] || 0.0005) * pipFactor,
+        (candle.close - min20) / Math.max(0.00001, max20 - min20),
       ];
 
-      // Future outcome labels for each horizon
       const labels: Record<number, number> = {};
       const futureMoves: Record<number, number> = {};
-      for (const h of horizons) {
-        const futureCandle = candles[i + h];
-        labels[h] = futureCandle.close > c.close ? 1 : 0;
-        futureMoves[h] = futureCandle.close - c.close;
+      for (const horizon of horizons) {
+        const exitTime = entryTime + horizon * ONE_MIN_MS;
+        let exitIndex = entryIndex + 1;
+        while (exitIndex < n && candles[exitIndex].timestampMs < exitTime) exitIndex++;
+        if (exitIndex >= n || Math.abs(candles[exitIndex].timestampMs - exitTime) > 5_000) {
+          labels[horizon] = Number.NaN;
+          futureMoves[horizon] = Number.NaN;
+          continue;
+        }
+
+        // Identical to the production research fill model: entry at scheduled
+        // M5 candle open, expiry at the first M1 candle closing the target time.
+        const move = candles[exitIndex].close - candles[entryIndex].open;
+        futureMoves[horizon] = move;
+        labels[horizon] = move > 0 ? 1 : 0;
       }
 
-      samples.push({
-        candle: c,
-        features,
-        labels,
-        futureMoves,
-      });
+      samples.push({ candle, features, labels, futureMoves });
     }
 
     return samples;
