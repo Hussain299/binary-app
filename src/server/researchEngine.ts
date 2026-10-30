@@ -16,6 +16,7 @@ import {
   SynthesizedStrategyGene,
   LossAutopsy,
   ResearchSignal,
+  StrategyBacktestMetrics,
 } from '../types/index.js';
 import { db } from './db.js';
 
@@ -598,110 +599,265 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
    * Autonomous genetic algorithm that combines multi-dimensional quantitative features,
    * non-linear polynomial operators, and cross-bred parents into strategies never conceived by humans.
    */
+  /**
+   * Replays one executable strategy over chronological, genuine one-minute market data.
+   * Signals are evaluated only on completed candles, entered at the next 5-minute boundary,
+   * and exited at the configured dynamic 5–30 minute expiry. No synthetic candles are eligible.
+   */
+  public validateSynthesizedStrategy(
+    gene: SynthesizedStrategyGene,
+    candles: Candle[]
+  ): SynthesizedStrategyGene {
+    const MIN_HISTORY = 10_000;
+    if (candles.length < MIN_HISTORY) {
+      throw new Error(`Need at least ${MIN_HISTORY.toLocaleString()} genuine one-minute candles; received ${candles.length.toLocaleString()}.`);
+    }
+    if (candles.some(c => c.source === 'synthetic')) {
+      throw new Error('Synthetic candles are prohibited in strategy validation.');
+    }
+    const ordered = [...candles].sort((a, b) => a.timestampMs - b.timestampMs);
+    for (let i = 1; i < ordered.length; i++) {
+      if (ordered[i].timestampMs <= ordered[i - 1].timestampMs) {
+        throw new Error('Historical candles contain duplicate or non-monotonic timestamps.');
+      }
+    }
+
+    const n = ordered.length;
+    const closes = ordered.map(c => c.close);
+    const ema9 = this.calculateEMA(closes, 9);
+    const ema21 = this.calculateEMA(closes, 21);
+    const rsi14 = this.calculateRSI(closes, 14);
+    const trainEnd = Math.floor(n * 0.60);
+    const validationEnd = Math.floor(n * 0.80);
+    const embargo = Math.max(30, gene.optimalHorizonMinutes) + 5;
+    const validationStart = trainEnd + embargo;
+    const testStart = validationEnd + embargo;
+
+    const spreads: Record<string, number> = {
+      'EUR/USD': 1.1, 'GBP/USD': 1.6, 'USD/JPY': 1.2, 'EUR/JPY': 1.8,
+      'AUD/USD': 1.4, 'USD/CAD': 1.7, 'EUR/GBP': 1.2, 'AUD/CAD': 1.8,
+      'AUD/CHF': 1.9, 'AUD/JPY': 1.7, 'AUD/NZD': 2.0, 'EUR/AUD': 1.9,
+      'EUR/CAD': 1.8, 'EUR/CHF': 1.6, 'EUR/NZD': 2.2, 'GBP/AUD': 2.2,
+      'GBP/CAD': 2.0, 'GBP/CHF': 2.1, 'GBP/JPY': 2.0, 'GBP/NZD': 2.4,
+    };
+    const spreadPips = spreads[gene.symbol || ordered[0].symbol] ?? 1.5;
+    const FIVE_MIN_MS = 5 * 60 * 1000;
+    const ONE_MIN_MS = 60 * 1000;
+
+    const simulateRange = (from: number, until: number) => {
+      let trades = 0, wins = 0, losses = 0, scratches = 0;
+      let netPips = 0, positivePips = 0, negativePips = 0;
+      let cursor = Math.max(from, 30);
+      while (cursor < until - gene.optimalHorizonMinutes - 2) {
+        const candle = ordered[cursor];
+        const previous = ordered[cursor - 1];
+        if (candle.source === 'synthetic' || previous.source === 'synthetic') { cursor++; continue; }
+
+        // Candle timestamps are minute-open timestamps. The decision is made after the bar closes.
+        const decisionTime = candle.timestampMs + ONE_MIN_MS;
+        const nextEntryTime = Math.ceil(decisionTime / FIVE_MIN_MS) * FIVE_MIN_MS;
+        const advanceMs = nextEntryTime - decisionTime;
+        if (advanceMs < 15_000 || advanceMs > 180_000) { cursor++; continue; }
+
+        if (gene.sessionAffinity !== 'ALL') {
+          const hour = new Date(candle.timestampMs).getUTCHours();
+          const session = hour >= 12 && hour < 16 ? 'OVERLAP'
+            : hour >= 7 && hour < 12 ? 'LONDON'
+            : hour >= 16 && hour < 21 ? 'NEW_YORK' : 'ASIA';
+          if (session !== gene.sessionAffinity) { cursor++; continue; }
+        }
+
+        const result = this.evaluateSynthesizedGeneSignal(
+          gene,
+          candle,
+          previous,
+          closes.slice(0, cursor + 1),
+          ema9.slice(0, cursor + 1),
+          ema21.slice(0, cursor + 1),
+          rsi14.slice(0, cursor + 1)
+        );
+        if (!result.shouldTrigger) { cursor++; continue; }
+
+        // Require an actual one-minute candle at the scheduled entry boundary.
+        let entryIndex = cursor + 1;
+        while (entryIndex < until && ordered[entryIndex].timestampMs < nextEntryTime) entryIndex++;
+        if (entryIndex >= until || Math.abs(ordered[entryIndex].timestampMs - nextEntryTime) > ONE_MIN_MS) {
+          cursor++;
+          continue;
+        }
+
+        const exitTarget = nextEntryTime + gene.optimalHorizonMinutes * ONE_MIN_MS;
+        let exitIndex = entryIndex + 1;
+        while (exitIndex < until && ordered[exitIndex].timestampMs < exitTarget) exitIndex++;
+        if (exitIndex >= until || Math.abs(ordered[exitIndex].timestampMs - exitTarget) > ONE_MIN_MS) {
+          cursor++;
+          continue;
+        }
+
+        const pipFactor = gene.symbol?.includes('JPY') || candle.symbol.includes('JPY') ? 100 : 10000;
+        const entryPrice = ordered[entryIndex].open;
+        const exitPrice = ordered[exitIndex].close;
+        const gross = (result.direction === 'BUY' ? exitPrice - entryPrice : entryPrice - exitPrice) * pipFactor;
+        const net = gross - spreadPips;
+        trades++;
+        netPips += net;
+        if (net > 0.5) { wins++; positivePips += net; }
+        else if (net < -0.5) { losses++; negativePips += Math.abs(net); }
+        else scratches++;
+
+        // One outstanding trade per pair at a time, matching the production scheduler constraint.
+        cursor = exitIndex + 1;
+      }
+      const denominator = Math.max(1, trades);
+      return {
+        trades, wins, losses, scratches,
+        winRate: wins / denominator,
+        netPips,
+        expectedValuePips: netPips / denominator,
+        profitFactor: positivePips / Math.max(0.01, negativePips),
+      };
+    };
+
+    const train = simulateRange(0, trainEnd);
+    const validation = simulateRange(validationStart, validationEnd);
+    const test = simulateRange(testStart, n);
+    if (train.trades < 50 || validation.trades < 50 || test.trades < 100) {
+      throw new Error(
+        `Insufficient executed trades after realistic entry/expiry simulation (train=${train.trades}, validation=${validation.trades}, test=${test.trades}). Import more historical data or select a more frequent candidate setup.`
+      );
+    }
+
+    // Wilson interval for the untouched test-set win proportion.
+    const z = 1.96, p = test.wins / test.trades, nTest = test.trades;
+    const denominator = 1 + z * z / nTest;
+    const center = (p + z * z / (2 * nTest)) / denominator;
+    const margin = z * Math.sqrt((p * (1 - p) / nTest) + (z * z / (4 * nTest * nTest))) / denominator;
+    const interval: [number, number] = [
+      Math.max(0, Number((center - margin).toFixed(4))),
+      Math.min(1, Number((center + margin).toFixed(4))),
+    ];
+
+    const backtestMetrics: StrategyBacktestMetrics = {
+      trainSampleSize: train.trades,
+      validationSampleSize: validation.trades,
+      trainWinRate: Number(train.winRate.toFixed(4)),
+      validationWinRate: Number(validation.winRate.toFixed(4)),
+      testWinRate: Number(test.winRate.toFixed(4)),
+      testAccuracy: Number(test.winRate.toFixed(4)),
+      testSampleSize: test.trades,
+      testWins: test.wins,
+      testLosses: test.losses,
+      expectedValuePips: Number(test.expectedValuePips.toFixed(2)),
+      profitFactor: Number(test.profitFactor.toFixed(2)),
+      confidenceInterval95: interval,
+      trainPeriod: { start: ordered[30].timestamp, end: ordered[trainEnd - 1].timestamp },
+      validationPeriod: { start: ordered[validationStart].timestamp, end: ordered[validationEnd - 1].timestamp },
+      testPeriod: { start: ordered[testStart].timestamp, end: ordered[n - 1].timestamp },
+    };
+
+    const promotionEligible =
+      test.trades >= 200 &&
+      validation.trades >= 100 &&
+      test.winRate >= 0.55 &&
+      validation.winRate >= 0.53 &&
+      test.expectedValuePips > 0 &&
+      test.profitFactor >= 1.15 &&
+      interval[0] > 0.50;
+
+    const updated: SynthesizedStrategyGene = {
+      ...gene,
+      verifiedAccuracy: Number((test.winRate * 100).toFixed(1)),
+      sampleCount: test.trades,
+      accuracyStatus: 'BACKTESTED',
+      backtestMetrics,
+      status: promotionEligible ? 'PROMOTED_ACTIVE' : 'EXPERIMENTING',
+    };
+    db.updateSynthesizedStrategy(updated);
+    return updated;
+  }
+
+  /**
+   * Generates a candidate formula. Candidate generation is not evidence of an edge:
+   * every new candidate starts UNVALIDATED and cannot enter the production pool.
+   */
   public synthesizeInfiniteNovelStrategy(
     candles: Candle[],
     symbol: ForexSymbol,
     generation: number
   ): SynthesizedStrategyGene {
     const parentConcepts = [
-      'Fractal Volatility Matrix',
-      'Asymmetric Wick Rejection',
-      'Microstructure Flow',
-      'Logarithmic Liquidity Decay',
-      'Second-Derivative EMA Curvature',
-      'Entropy Harmonic Dispersion',
-      'Non-Linear Band Elasticity',
-      'Sub-Bar Delta Imbalance',
-      'Stochastic Phase Synchronization',
+      'Fractal Volatility Matrix', 'Asymmetric Wick Rejection', 'Microstructure Flow',
+      'Logarithmic Liquidity Decay', 'Second-Derivative EMA Curvature',
+      'Entropy Harmonic Dispersion', 'Non-Linear Band Elasticity',
+      'Sub-Bar Delta Imbalance', 'Stochastic Phase Synchronization',
       'Cross-Regime Momentum Wavelet',
     ];
-
-    // Pick 2 or 3 distinct random parents to cross-breed
     const shuffled = [...parentConcepts].sort(() => 0.5 - Math.random());
     const parents = shuffled.slice(0, Math.random() > 0.4 ? 3 : 2);
-
-    const operators: Array<'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion'> = [
-      'tanh_polynomial',
-      'fractal_power',
-      'exponential_decay',
-      'harmonic_dispersion',
-    ];
+    const operators: Array<'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion'> =
+      ['tanh_polynomial', 'fractal_power', 'exponential_decay', 'harmonic_dispersion'];
     const operator = operators[Math.floor(Math.random() * operators.length)];
-
     const horizons: Array<5 | 10 | 15 | 20 | 25 | 30> = [5, 10, 15, 20, 25, 30];
     const horizon = horizons[Math.floor(Math.random() * horizons.length)];
-
-    const sessions: Array<'ASIA' | 'LONDON' | 'OVERLAP' | 'NEW_YORK' | 'ALL'> = [
-      'ASIA',
-      'LONDON',
-      'OVERLAP',
-      'NEW_YORK',
-      'ALL',
-    ];
+    const sessions: Array<'ASIA' | 'LONDON' | 'OVERLAP' | 'NEW_YORK' | 'ALL'> =
+      ['ASIA', 'LONDON', 'OVERLAP', 'NEW_YORK', 'ALL'];
     const sessionAffinity = sessions[Math.floor(Math.random() * sessions.length)];
-
-    const alpha = (0.8 + Math.random() * 1.5).toFixed(2);
-    const beta = (0.4 + Math.random() * 0.9).toFixed(2);
-    const gamma = (0.15 + Math.random() * 0.45).toFixed(2);
-    const exponent = (1.2 + Math.random() * 0.9).toFixed(2);
+    const alpha = Number((0.8 + Math.random() * 1.5).toFixed(2));
+    const beta = Number((0.4 + Math.random() * 0.9).toFixed(2));
+    const gamma = Number((0.15 + Math.random() * 0.45).toFixed(2));
+    const exponent = Number((1.2 + Math.random() * 0.9).toFixed(2));
+    const threshold = 0.38;
     const mutationRate = Number((0.02 + Math.random() * 0.05).toFixed(3));
+    const params = { alpha, beta, gamma, exponent, threshold };
 
     let formula = '';
     let hypothesis = '';
     let whyHumansMissThis = '';
     let name = '';
-    const codeTag = `GEN${generation}_${operator.toUpperCase().slice(0, 4)}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-
     switch (operator) {
       case 'tanh_polynomial':
-        formula = `f(x) = tanh(${alpha}·Z_Entropy) + ${beta}·(LowerWickRatio)^${exponent} - ${gamma}·Δ_20SMA`;
-        name = `Synth-Gen${generation}: Hyperbolic Tangent Entropy + Power Wick Elasticity`;
-        hypothesis = `Hyperbolic tangent saturation compresses high-noise volatility spikes while polynomial wick exponents detect asymptotic limit-order absorption.`;
-        whyHumansMissThis = `Human eyes look for static hammer candles or 70/30 RSI lines; this formula calculates non-linear asymptotic saturation curves across multi-tick entropy, undetectable on visual charts.`;
+        formula = `tanh(${alpha}·ZEntropy) + ${beta}·(LowerWick^ ${exponent} - UpperWick^ ${exponent}) - ${gamma}·MeanDeviation`;
+        name = `Gen${generation}: Tanh Entropy and Wick Asymmetry`;
+        hypothesis = 'A nonlinear return transform combined with asymmetric wick rejection may improve directional selection.';
+        whyHumansMissThis = 'The candidate combines return scaling, wick imbalance and deviation from a short moving average; its value remains unproven until held-out testing.';
         break;
-
       case 'fractal_power':
-        formula = `f(x) = sign(MicroFlow)·|Δ_20MA|^${exponent} + ${alpha}·RSI_Curvature - ${beta}·Wick_Asymmetry`;
-        name = `Synth-Gen${generation}: Fractal Power Drift + Second-Derivative RSI Acceleration`;
-        hypothesis = `Power-law scaling of price deviation from moving average combined with second-derivative RSI acceleration predicts directional expansion before candlestick close.`;
-        whyHumansMissThis = `Traders cannot visually differentiate velocity from acceleration; this formula tracks second-order curvature of momentum derivatives before price bars close.`;
+        formula = `sign(MicroFlow)·|MeanDeviation|^${exponent} + ${alpha}·RSICurvature - ${beta}·WickAsymmetry - ${gamma}·DeviationPenalty`;
+        name = `Gen${generation}: Fractal Power Drift`;
+        hypothesis = 'Power-scaled deviation and RSI curvature may identify directional drift inflections.';
+        whyHumansMissThis = 'The formula combines nonlinear deviation, RSI curvature and wick asymmetry; empirical value has not yet been established.';
         break;
-
       case 'exponential_decay':
-        formula = `f(x) = σ(${alpha}·EMA_Curvature × Vol_Elasticity) - ${beta}·ln(1 + ATR_harmonic)`;
-        name = `Synth-Gen${generation}: Sigmoidal Wave Curvature × Logarithmic Harmonic Dispersion`;
-        hypothesis = `Sigmoidal activation isolates sharp accelerations in EMA slope multiplied by volume elasticity, while logarithmic harmonic damping filters false whipsaws.`;
-        whyHumansMissThis = `Manual traders rely on linear moving average crosses which suffer heavy lag; this non-linear sigmoid reacts to the rate-of-change of slope within the first 60 seconds of candle formation.`;
+        formula = `2.5·(sigmoid(${alpha}·EMACurvature·VolElasticity)-0.5) - ${beta}·log(1+|MeanDeviation|) - ${gamma}·WickAsymmetry`;
+        name = `Gen${generation}: Exponential Curvature Filter`;
+        hypothesis = 'EMA curvature scaled by candle range may help distinguish directional expansion from noisy movement.';
+        whyHumansMissThis = 'The rule combines acceleration, range scaling and wick imbalance; it is a testable hypothesis, not a verified edge.';
         break;
-
       case 'harmonic_dispersion':
-        formula = `f(x) = (Δ_TickEntropy / √(1 + EMA_Spread)) · cos(π·WickRatio) + ${alpha}·OrderFlow_Z`;
-        name = `Synth-Gen${generation}: Harmonic Wavelet Dispersion + Order-Flow Z-Score`;
-        hypothesis = `Modulating tick entropy by normalized EMA spread and cosine phase harmonic isolates periodic cycle bottoms during institutional market-making phases.`;
-        whyHumansMissThis = `Human intuition assumes trend continuity or support bounces; this formula detects phase-harmonic node cancellations where institutional books are completely unbalanced.`;
+        formula = `${beta}·cos(π·WickRatio) + ${alpha}·BodyFlow - ${gamma}·EMASpread`;
+        name = `Gen${generation}: Harmonic Wick Dispersion`;
+        hypothesis = 'Candle body flow and wick geometry may interact with EMA spread to identify directional imbalance.';
+        whyHumansMissThis = 'The equation compresses wick geometry and body flow into a single score; held-out results determine whether it is useful.';
         break;
     }
-
-    // Run walk-forward empirical validation over available candles
-    let sampleCount = Math.max(80, Math.min(260, Math.floor(candles.length * 1.5) + Math.floor(Math.random() * 40)));
-    // Realist high-conviction accuracy for non-human stacked models
-    const baseAcc = 81.5 + Math.random() * 6.5; // 81.5% - 88.0%
-    const verifiedAccuracy = Number(baseAcc.toFixed(1));
 
     const gene: SynthesizedStrategyGene = {
       id: `synth_gen${generation}_${Date.now().toString(36)}`,
       name,
-      code: codeTag,
+      code: `GEN${generation}_${operator.toUpperCase().slice(0, 4)}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
       generation,
       mathematicalFormula: formula,
       parents,
       mutationRate,
       nonLinearOperator: operator,
+      operatorParameters: params,
+      symbol,
       optimalHorizonMinutes: horizon,
       sessionAffinity,
-      verifiedAccuracy,
-      sampleCount,
-      status: verifiedAccuracy >= 75 ? 'PROMOTED_ACTIVE' : 'EXPERIMENTING',
+      verifiedAccuracy: 0,
+      sampleCount: 0,
+      accuracyStatus: 'UNVALIDATED',
+      status: 'EXPERIMENTING',
       scientificHypothesis: hypothesis,
       whyHumansMissThis,
       createdAt: new Date().toISOString(),
@@ -757,47 +913,53 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
     const rsiSlopeCurrent = lastRsi - prevRsi;
     const rsiCurvature = rsiSlopeCurrent / 10;
 
-    // Non-linear evaluation of the formula:
+    // These exact coefficients are persisted with the gene and reused by its backtest.
+    const params = gene.operatorParameters || { alpha: 1.45, beta: 0.68, gamma: 0.28, exponent: 1.8, threshold: 0.38 };
+    const { alpha, beta, gamma, exponent } = params;
+
+    // Non-linear evaluation of the exact persisted candidate formula:
     let activationScore = 0;
 
     switch (gene.nonLinearOperator) {
       case 'tanh_polynomial': {
         const zEntropy = ((candle.close - prevCandle.close) * pipFactor) / 2.0;
-        const wickDelta = Math.pow(lowerWickRatio, 1.8) - Math.pow(upperWickRatio, 1.8);
-        activationScore = Math.tanh(1.45 * zEntropy) + 0.68 * wickDelta - 0.28 * (delta20Pips / 10);
+        const wickDelta = Math.pow(lowerWickRatio, exponent) - Math.pow(upperWickRatio, exponent);
+        activationScore = Math.tanh(alpha * zEntropy) + beta * wickDelta - gamma * (delta20Pips / 10);
         break;
       }
       case 'fractal_power': {
         const microFlow = candle.close > candle.open ? 1 : -1;
-        const powerDrift = microFlow * Math.pow(Math.min(5, Math.abs(delta20Pips) / 4), 1.25);
-        activationScore = powerDrift + 0.54 * rsiCurvature - 0.35 * (upperWickRatio - lowerWickRatio);
+        const powerDrift = microFlow * Math.pow(Math.min(5, Math.abs(delta20Pips) / 4), exponent);
+        activationScore = powerDrift + alpha * rsiCurvature - beta * (upperWickRatio - lowerWickRatio) - gamma * (delta20Pips / 20);
         break;
       }
       case 'exponential_decay': {
         const volElasticity = Math.min(3, range / (range * 0.8 + 0.0001));
-        const sigmoid = 1 / (1 + Math.exp(-Math.max(-5, Math.min(5, 2.1 * emaCurvature * volElasticity))));
-        activationScore = (sigmoid - 0.5) * 2.5;
+        const sigmoid = 1 / (1 + Math.exp(-Math.max(-5, Math.min(5, alpha * emaCurvature * volElasticity))));
+        activationScore = (sigmoid - 0.5) * 2.5 - beta * Math.log1p(Math.abs(delta20Pips)) / 5 - gamma * (upperWickRatio - lowerWickRatio);
         break;
       }
       case 'harmonic_dispersion': {
         const wickRatio = (upperWick + lowerWick) / range;
         const wave = Math.cos(Math.PI * wickRatio);
         const orderFlow = candle.close > candle.open ? 0.6 : -0.6;
-        activationScore = wave * 0.5 + orderFlow;
+        const bodyFlow = (candle.close - candle.open) * pipFactor / Math.max(0.1, range * pipFactor);
+        const emaSpread = (lastEma9 - lastEma21) * pipFactor / 10;
+        activationScore = beta * wave + alpha * bodyFlow - gamma * emaSpread;
         break;
       }
     }
 
-    const threshold = 0.38;
+    const threshold = params.threshold;
     const shouldTrigger = Math.abs(activationScore) > threshold;
     const direction: 'BUY' | 'SELL' = activationScore > 0 ? 'BUY' : 'SELL';
-    const conviction = Number(Math.min(0.94, 0.80 + Math.abs(activationScore) * 0.1).toFixed(2));
+    const conviction = Number(Math.min(0.94, 0.50 + Math.min(0.44, Math.abs(activationScore) * 0.1)).toFixed(2));
 
     return {
       shouldTrigger,
       direction,
       conviction,
-      rationale: `Formula Activation: ${activationScore.toFixed(3)} (Threshold: ±${threshold}). Non-linear operator ${gene.nonLinearOperator} converged on ${direction}.`,
+      rationale: `Signal score: ${activationScore.toFixed(3)} (Threshold: ±${threshold}). Operator ${gene.nonLinearOperator} selected ${direction}; this score is not a win probability.`,
     };
   }
 
@@ -895,9 +1057,10 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
       nonLinearOperator: operator,
       optimalHorizonMinutes: (signal.expiryMinutes === 5 ? 10 : 5) as any,
       sessionAffinity: (signal.marketSession || 'ALL') as any,
-      verifiedAccuracy: Number((84.0 + Math.random() * 4.5).toFixed(1)),
-      sampleCount: 185,
-      status: 'PROMOTED_ACTIVE',
+      verifiedAccuracy: 0,
+      sampleCount: 0,
+      accuracyStatus: 'UNVALIDATED',
+      status: 'EXPERIMENTING',
       scientificHypothesis: `Autonomous adaptive counter-measure evolved directly from trade failure: ${lessonsLearned[0]}`,
       whyHumansMissThis: `Humans repeat emotional mistakes or abandon strategies after a loss; the AGI quantifies the exact failure mode, extracts parameter corrections, and synthesizes a mathematical antidote.`,
       createdAt: new Date().toISOString(),
