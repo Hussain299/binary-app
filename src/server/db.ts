@@ -444,7 +444,7 @@ class DatabaseService {
    * Stores a single completed forward observation. It is not a backtest and does not
    * independently validate a strategy or train model weights.
    */
-  public recordTradeExperiment(sig: ResearchSignal): ResearchExperiment {
+  public recordForwardObservation(sig: ResearchSignal): ResearchExperiment {
     const isWin = sig.outcomeResult === 'WIN';
     const netPips = sig.netReturnPips || 0;
     const sessionName = sig.marketSessionName || 'Market Session';
@@ -452,10 +452,10 @@ class DatabaseService {
 
     const exp: ResearchExperiment = {
       id: `exp_live_${sig.id}`,
-      experimentType: 'LIVE_TRADE',
+      experimentType: 'FORWARD_OBSERVATION',
       liveOutcome: sig.outcomeResult === 'CANCELLED' || sig.outcomeResult === 'PENDING' ? 'SCRATCH' : sig.outcomeResult,
       generation: this.state.generations.length + 1,
-      name: `Live Trade Experiment: ${sig.symbol} ${sig.direction} (${sessionName})`,
+      name: `Forward Signal Outcome: ${sig.symbol} ${sig.direction} (${sessionName})`,
       symbol: sig.symbol,
       ruleFamily: (sig.ruleFamily as any) || 'momentum_5',
       horizonMinutes: sig.expiryMinutes,
@@ -503,9 +503,9 @@ class DatabaseService {
         end: sig.actualExitTimeUtc || sig.predictionTimeUtc,
       },
       purgedWindowCandles: sig.expiryMinutes,
-      scientistHypothesis: `Live hypothesis: ${strategyName} ${sig.isStackedStrategy ? '(Stacked Confluence)' : ''} maintains statistical alpha during ${sessionName}.`,
+      scientistHypothesis: `Forward paper observation for ${strategyName} ${sig.isStackedStrategy ? '(Stacked Confluence)' : ''} during ${sessionName}.`,
       scientistDisproofCondition: `Disproved if net spread-adjusted pips fall below -0.5 pips. Observed: ${netPips > 0 ? '+' : ''}${netPips} pips.`,
-      engineerConfigNotes: `Execution verified on ${sig.entrySource || 'feed'}. Entry: ${sig.actualEntryPrice}, Exit: ${sig.actualExitPrice}, Duration: ${sig.expiryMinutes}m.`,
+      engineerConfigNotes: `Feed-based paper entry/exit estimate using ${sig.entrySource || 'market data'}. Entry: ${sig.actualEntryPrice}, Exit: ${sig.actualExitPrice}, Duration: ${sig.expiryMinutes}m; no broker fill is asserted.`,
       auditorVerdict: 'PROVISIONAL',
       auditorConcerns: ['Single forward trade recorded for outcome tracking only. This observation does not validate or reject a strategy.'],
       createdAt: new Date().toISOString(),
