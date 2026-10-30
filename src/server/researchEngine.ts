@@ -19,6 +19,7 @@ import {
   StrategyGenome,
 } from '../types/index.js';
 import { db } from './db.js';
+import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
 
 type StrategyHorizon = 5 | 10 | 15 | 20 | 25 | 30;
 type GeneFeatureVector = Record<StrategyFeatureName, number>;
@@ -45,7 +46,7 @@ interface PreparedGeneResearchData {
   validationStartMs: number;
   validationEndMs: number;
   testStartMs: number;
-  spreadPips: number;
+  payoutPct: number;
 }
 
 export class ResearchEngine {
@@ -965,12 +966,10 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     const validationStartMs = trainEndMs + 35 * ONE_MIN_MS;
     const validationEndMs = ordered[Math.floor(ordered.length * 0.65)]?.timestampMs ?? ordered[ordered.length - 1].timestampMs;
     const testStartMs = validationEndMs + 35 * ONE_MIN_MS;
-    const spreadMap: Record<string, number> = {
-      'EUR/USD': 1.1, 'GBP/USD': 1.6, 'USD/JPY': 1.2, 'EUR/JPY': 1.8,
-      'AUD/USD': 1.4, 'USD/CAD': 1.7, 'EUR/GBP': 1.2, 'AUD/CAD': 1.8,
-      'AUD/CHF': 1.9, 'AUD/JPY': 1.7, 'AUD/NZD': 2.0, 'EUR/AUD': 1.9,
-      'EUR/CAD': 1.8, 'EUR/CHF': 1.6, 'EUR/NZD': 2.2, 'GBP/AUD': 2.2,
-      'GBP/CAD': 2.0, 'GBP/CHF': 2.1, 'GBP/JPY': 2.0, 'GBP/NZD': 2.4,
+    return {
+      candles: ordered, closes, ema9, ema21, rsi14, rows,
+      trainEndMs, validationStartMs, validationEndMs, testStartMs,
+      payoutPct: DEFAULT_BINARY_PAYOUT_PERCENT,
     };
     return {
       candles: ordered, closes, ema9, ema21, rsi14, rows,
@@ -985,7 +984,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     data: PreparedGeneResearchData
   ) {
     let trades = 0, wins = 0, losses = 0, scratches = 0;
-    let netPips = 0, positivePips = 0, negativePips = 0;
+    let netReturnUnits = 0, positiveReturnUnits = 0, negativeReturnUnits = 0;
     let busyUntil = -Infinity;
     const scoredOutcomes: Array<'WIN' | 'LOSS'> = [];
     const horizon = gene.optimalHorizonMinutes;
@@ -1009,21 +1008,25 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       if (exitIndex === undefined) continue;
       const entryPrice = data.candles[row.entryIndex].open;
       const exitPrice = data.candles[exitIndex].close;
-      const isJpy = gene.symbol?.includes('JPY') || row.candle.symbol.includes('JPY');
-      const pipFactor = isJpy ? 100 : 10000;
-      const gross = (activation > 0 ? exitPrice - entryPrice : entryPrice - exitPrice) * pipFactor;
-      const net = gross - data.spreadPips;
+      const settlement = calculateBinarySettlement(
+        activation > 0 ? 'BUY' : 'SELL',
+        entryPrice,
+        exitPrice,
+        data.payoutPct
+      );
       trades++;
-      netPips += net;
-      if (net > 0.5) {
+      netReturnUnits += settlement.netReturnUnits;
+      if (settlement.outcome === 'WIN') {
         wins++;
-        positivePips += net;
+        positiveReturnUnits += settlement.netReturnUnits;
         scoredOutcomes.push('WIN');
-      } else if (net < -0.5) {
+      } else if (settlement.outcome === 'LOSS') {
         losses++;
-        negativePips += Math.abs(net);
+        negativeReturnUnits += Math.abs(settlement.netReturnUnits);
         scoredOutcomes.push('LOSS');
       } else {
+        // Exact strike ties are returned stakes (pushes): a trade, but not a
+        // directional WIN/LOSS observation and zero profit/loss.
         scratches++;
       }
       busyUntil = row.entryTimeMs + horizon * 60_000;
@@ -1032,10 +1035,13 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     return {
       trades, wins, losses, scratches, scoredTrades,
       winRate: scoredTrades ? wins / scoredTrades : 0,
-      netPips,
-      expectedValuePips: trades ? netPips / trades : 0,
-      profitFactor: negativePips > 0 ? positivePips / negativePips : (positivePips > 0 ? 99 : 0),
+      netReturnUnits,
+      expectedValueUnits: trades ? netReturnUnits / trades : 0,
+      profitFactor: negativeReturnUnits > 0
+        ? positiveReturnUnits / negativeReturnUnits
+        : (positiveReturnUnits > 0 ? 99 : 0),
       scoredOutcomes,
+      payoutPct: data.payoutPct,
     };
   }
 
@@ -1087,7 +1093,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       validation.winRate >= 0.70 &&
       blockRates.length === 3 &&
       blockRates.every(rate => rate >= 0.70) &&
-      test.netPips > 0 &&
+      test.netReturnUnits > 0 &&
       test.profitFactor >= 1.15 &&
       interval[0] >= 0.60;
 
@@ -1113,7 +1119,8 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       testScoredSampleSize: test.scoredTrades,
       testWins: test.wins,
       testLosses: test.losses,
-      expectedValuePips: Number(test.expectedValuePips.toFixed(2)),
+      binaryPayoutPct: test.payoutPct,
+      expectedValueUnits: Number(test.expectedValueUnits.toFixed(4)),
       profitFactor: Number(test.profitFactor.toFixed(2)),
       confidenceInterval95: interval,
       testBlockWinRates: blockRates,
@@ -1183,7 +1190,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       validationScoredTrades: number;
       trainWinRate: number;
       validationWinRate: number;
-      validationExpectedValuePips: number;
+      validationExpectedValueUnits: number;
       validationProfitFactor: number;
     }> = [];
     const signatures = new Set<string>();
@@ -1212,7 +1219,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
         validationScoredTrades: validation.scoredTrades,
         trainWinRate: Number(train.winRate.toFixed(4)),
         validationWinRate: Number(validation.winRate.toFixed(4)),
-        validationExpectedValuePips: Number(validation.expectedValuePips.toFixed(2)),
+        validationExpectedValueUnits: Number(validation.expectedValueUnits.toFixed(2)),
         validationProfitFactor: Number(validation.profitFactor.toFixed(2)),
       };
       gene.accuracyStatus = 'UNVALIDATED';
@@ -1270,7 +1277,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
         candidate.gene.validationFailureReason =
           candidate.trainScoredTrades < 150 || candidate.validationScoredTrades < 150
             ? `Discovery sample too small (train ${candidate.trainScoredTrades}, validation ${candidate.validationScoredTrades}; require 150 each).`
-            : `Not selected for untouched-test replication: validation EV ${m.validationExpectedValuePips.toFixed(2)} pips, PF ${m.validationProfitFactor.toFixed(2)}.`;
+            : `Not selected for untouched-test replication: validation EV ${m.validationExpectedValueUnits.toFixed(4)} stake units/trade, PF ${m.validationProfitFactor.toFixed(2)}.`;
         db.updateSynthesizedStrategy(candidate.gene);
       }
     }
