@@ -123,12 +123,12 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
           {/* Top Metric Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
             <div className="bg-neutral-900/60 border border-neutral-800 rounded p-3 text-xs font-mono">
-              <span className="text-neutral-500 text-[10px] block">Untouched Test Accuracy · n={exp.metrics.sampleSize}</span>
+              <span className="text-neutral-500 text-[10px] block">Untouched Test Directional Accuracy · n={exp.metrics.sampleSize}</span>
               <span className="text-lg font-bold text-white tabular-nums">
                 {(exp.metrics.testAccuracy * 100).toFixed(1)}%
               </span>
               <span className="text-[10px] text-neutral-400 block mt-0.5">
-                95% CI (net-positive WR): [{(exp.metrics.confidenceInterval95[0] * 100).toFixed(0)}%,{' '}
+                95% CI (net-positive WR; scored n={exp.metrics.scoredTradeSampleSize}): [{(exp.metrics.confidenceInterval95[0] * 100).toFixed(0)}%,{' '}
                 {(exp.metrics.confidenceInterval95[1] * 100).toFixed(0)}%]
               </span>
             </div>
@@ -157,7 +157,7 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
                 {exp.metrics.brierScore.toFixed(4)}
               </span>
               <span className="text-[10px] text-neutral-400 block mt-0.5">
-                {exp.metrics.brierScore < 0.22 ? 'Well-Calibrated' : 'Drift Risk'}
+                {exp.metrics.brierScore < 0.22 ? 'Lower Brier score' : 'Calibration concern'}
               </span>
             </div>
 
@@ -167,7 +167,7 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
                 {exp.metrics.profitFactor}
               </span>
               <span className="text-[10px] text-neutral-400 block mt-0.5">
-                After modeled 1.2 pip spread
+                After pair-specific modeled spread
               </span>
             </div>
 
@@ -213,8 +213,7 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
             <p className="text-[10px] text-neutral-500">Timeline widths are schematic; exact partition sample counts are shown in each segment. Embargoes reduce overlap between forward outcome windows but do not guarantee freedom from every possible research bias.</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-neutral-400 pt-2 text-[11px]">
               <div>
-                <strong className="text-neutral-300">Scaling Isolation:</strong> Means and standard
-                deviations are computed strictly across the 60% train split and applied out-of-sample.
+                <strong className="text-neutral-300">Scaling Isolation:</strong> Feature means and standard deviations are fitted only on the training partition and then held fixed.
               </div>
               <div>
                 <strong className="text-neutral-300">Overfitting Delta:</strong> Train ({exp.metrics.trainAccuracy}) vs
