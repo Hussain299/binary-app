@@ -252,11 +252,11 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
                           {candidate.reason && <div className="mt-1 text-[10px] text-amber-300">{candidate.reason}</div>}
                         </td>
                         <td className="p-2 font-mono text-neutral-300">{candidate.validationWinRate > 0 ? `${(candidate.validationWinRate * 100).toFixed(1)}%` : '—'}</td>
-                        <td className="p-2 font-mono text-neutral-300">{candidate.validationExpectedValuePips.toFixed(2)}</td>
+                        <td className="p-2 font-mono text-neutral-300">{candidate.validationExpectedValueUnits.toFixed(4)}</td>
                         <td className="p-2 font-mono text-white">{candidate.testedOnHoldout ? `${(candidate.testWinRate * 100).toFixed(1)}%` : 'Not tested'}</td>
                         <td className="p-2 font-mono text-neutral-300">{candidate.testedOnHoldout ? candidate.testScoredTrades : '—'}</td>
                         <td className="p-2 font-mono text-neutral-300">{candidate.testBlockWinRates.length === 3 ? candidate.testBlockWinRates.map(rate => `${(rate * 100).toFixed(0)}%`).join(' / ') : '—'}</td>
-                        <td className="p-2 font-mono text-neutral-300">{candidate.testedOnHoldout ? candidate.testExpectedValuePips.toFixed(2) : '—'}</td>
+                        <td className="p-2 font-mono text-neutral-300">{candidate.testedOnHoldout ? candidate.testExpectedValueUnits.toFixed(4) : '—'}</td>
                         <td className="p-2">
                           <span className={candidate.status === 'PAPER_TRADING' ? 'text-emerald-300' : 'text-neutral-400'}>
                             {candidate.status}
