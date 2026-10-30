@@ -471,6 +471,7 @@ class DatabaseService {
       featuresUsed: sig.confluenceStrategies || [strategyName],
       metrics: {
         sampleSize: 1,
+        scoredTradeSampleSize: 0,
         trainSampleSize: 0,
         validationSampleSize: 0,
         trainAccuracy: 0,
