@@ -107,7 +107,7 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
                       className="hover:bg-neutral-900/60 cursor-pointer transition-colors"
                     >
                       <td className="py-2.5 px-4">
-                        <span className="text-neutral-500">{exp.experimentType === 'LIVE_TRADE' ? 'FORWARD' : `G${exp.generation}`}</span> ·{' '}
+                        <span className="text-neutral-500">{isForwardObservation ? 'FORWARD' : `G${exp.generation}`}</span> ·{' '}
                         <strong className="text-white">{exp.name}</strong>
                       </td>
                       <td className="py-2.5 px-4 text-neutral-300 font-semibold">{exp.symbol}</td>
@@ -115,19 +115,19 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
                         {exp.ruleFamily} ({exp.horizonMinutes}m)
                       </td>
                       <td className="py-2.5 px-4 text-right text-neutral-300 tabular-nums">
-                        {exp.experimentType === 'LIVE_TRADE' ? '—' : `${(exp.metrics.trainAccuracy * 100).toFixed(1)}% (n=${exp.metrics.trainSampleSize})`}
+                        {isForwardObservation ? '—' : `${(exp.metrics.trainAccuracy * 100).toFixed(1)}% (n=${exp.metrics.trainSampleSize})`}
                       </td>
                       <td className="py-2.5 px-4 text-right text-neutral-300 tabular-nums">
-                        {exp.experimentType === 'LIVE_TRADE' ? '—' : `${(exp.metrics.valAccuracy * 100).toFixed(1)}% (n=${exp.metrics.validationSampleSize})`}
+                        {isForwardObservation ? '—' : `${(exp.metrics.valAccuracy * 100).toFixed(1)}% (n=${exp.metrics.validationSampleSize})`}
                       </td>
                       <td className="py-2.5 px-4 text-right font-semibold text-white tabular-nums">
-                        {exp.experimentType === 'LIVE_TRADE' ? `${exp.liveOutcome || 'OUTCOME'} (n=1)` : `${(exp.metrics.testAccuracy * 100).toFixed(1)}% (n=${exp.metrics.sampleSize})`}
+                        {isForwardObservation ? `${exp.liveOutcome || 'OUTCOME'} (n=1)` : `${(exp.metrics.testAccuracy * 100).toFixed(1)}% (n=${exp.metrics.sampleSize})`}
                       </td>
                       <td className="py-2.5 px-4 text-right text-emerald-400 tabular-nums">
-                        {exp.experimentType === 'LIVE_TRADE' ? '—' : exp.metrics.f1Score.toFixed(3)}
+                        {isForwardObservation ? '—' : exp.metrics.f1Score.toFixed(3)}
                       </td>
                       <td className="py-2.5 px-4 text-right text-neutral-300 tabular-nums">
-                        {exp.experimentType === 'LIVE_TRADE' ? '—' : exp.metrics.profitFactor}
+                        {isForwardObservation ? '—' : exp.metrics.profitFactor}
                       </td>
                       <td className="py-2.5 px-4 text-center">
                         <span
@@ -158,7 +158,7 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
             <div className="flex justify-between items-center pb-3 border-b border-neutral-800">
               <div>
                 <span className="text-[10px] text-neutral-500 uppercase">
-                  {selectedExp.experimentType === 'LIVE_TRADE' ? 'Single Forward Paper Observation' : `Experiment Dossier G${selectedExp.generation}`}
+                  {(selectedExp.experimentType === 'LIVE_TRADE' || selectedExp.experimentType === 'FORWARD_OBSERVATION') ? 'Single Forward Paper Observation' : `Experiment Dossier G${selectedExp.generation}`}
                 </span>
                 <h4 className="text-base font-bold text-white">{selectedExp.name}</h4>
               </div>
@@ -170,9 +170,9 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
               </button>
             </div>
 
-            {selectedExp.experimentType === 'LIVE_TRADE' && (
+            {(selectedExp.experimentType === 'LIVE_TRADE' || selectedExp.experimentType === 'FORWARD_OBSERVATION') && (
               <div className="bg-neutral-950 p-3 rounded border border-neutral-800 space-y-1">
-                <div className="text-white font-semibold">Observed forward outcome: {selectedExp.liveOutcome || 'RECORDED'}</div>
+                <div className="text-white font-semibold">Observed forward paper outcome: {selectedExp.liveOutcome || 'RECORDED'}</div>
                 <div>One completed candle-based paper observation only. This record is not a broker fill, historical backtest or strategy win-rate estimate.</div>
                 <div>Net result: {selectedExp.metrics.expectedValuePips > 0 ? '+' : ''}{selectedExp.metrics.expectedValuePips.toFixed(1)} pips</div>
               </div>
