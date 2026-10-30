@@ -451,7 +451,7 @@ class DatabaseService {
     const strategyName = sig.strategyName || 'Algorithmic Strategy';
 
     const exp: ResearchExperiment = {
-      id: `exp_live_${sig.id}`,
+      id: `exp_forward_${sig.id}`,
       experimentType: 'FORWARD_OBSERVATION',
       liveOutcome: sig.outcomeResult === 'CANCELLED' || sig.outcomeResult === 'PENDING' ? 'SCRATCH' : sig.outcomeResult,
       generation: this.state.generations.length + 1,
