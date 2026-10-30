@@ -1,11 +1,7 @@
 /**
- * SignalForge ML — Autonomous Research Engine & ML Trinity
- * Implements Purged Walk-Forward splits, feature scaling fitted only on train sets,
- * calibration metrics (Brier score), confusion matrix, and 3-role reviews
- * (Scientist, Engineer, Skeptical Auditor) powered by Gemini and quantitative engines.
+ * SignalForge ML — Historical research and strategy-validation engine.
+ * Trains local models on chronological data and evaluates untouched outcomes.
  */
-
-import { GoogleGenAI } from '@google/genai';
 import {
   AgentReview,
   Candle,
@@ -21,12 +17,6 @@ import {
 import { db } from './db.js';
 
 export class ResearchEngine {
-  private ai: GoogleGenAI | null = null;
-
-  constructor() {
-    // Model parameters are fitted locally by the deterministic training routine below.
-    // The Gemini client remains unused in this research path; narrative reviews are rule-based.
-  }
 
   /**
    * Computes technical features from candles:
@@ -491,12 +481,13 @@ Market Regime Observation: This pattern demonstrates highest signal density when
       id: `rev_eng_${exp.id}`,
       experimentId: exp.id,
       role: 'ENGINEER',
-      title: `Pipeline Isolation & Feature Architecture Audit`,
-      content: `Pipeline verification complete for generation ${exp.generation}. 
-- Data Leakage Check: Standard scaler parameters were fit strictly on the train slice (0-60%) and frozen prior to validation/testing.
-- Embargo Enforcement: ${exp.purgedWindowCandles}-candle buffer purged between splits to isolate overlapping ${exp.horizonMinutes}m outcome horizons.
-- Reproducibility: Deterministic feature extraction verified with zero NaNs.
-- Sample Size: ${exp.metrics.sampleSize} test samples evaluated against 95% Wilson confidence intervals [${exp.metrics.confidenceInterval95[0]}, ${exp.metrics.confidenceInterval95[1]}].`,
+      title: `Training, Split and Execution Configuration Review`,
+      content: `Research pipeline configuration for generation ${exp.generation}.
+- Model: logistic regression fitted only on the chronological training partition.
+- Threshold: selected from a fixed candidate set using validation EV, then frozen before the untouched test.
+- Execution alignment: 3-minute advance decision, next 5M candle open and ${exp.horizonMinutes}m expiry.
+- Purged embargo: ${exp.purgedWindowCandles} M1 candles between partitions.
+- Test opportunities: n=${exp.metrics.sampleSize}; scored WIN/LOSS outcomes: n=${exp.metrics.scoredTradeSampleSize}.`,
       timestamp: nowIso,
       verdict: 'PROCEED',
       score: 92,
