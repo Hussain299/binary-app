@@ -10,6 +10,9 @@ interface StrategySearchCandidate {
   testWinRate: number;
   testScoredTrades: number;
   validationWinRate: number;
+  validationExpectedValuePips: number;
+  testExpectedValuePips: number;
+  testedOnHoldout: boolean;
   expectedValuePips: number;
   testBlockWinRates: number[];
   reason?: string;
@@ -24,6 +27,7 @@ interface StrategySearchBatch {
   passedHistorical: number;
   insufficientSample: number;
   rejected: number;
+  replicationFinalists: number;
   approvedCount: number;
   startedAt: string;
   finishedAt?: string;
@@ -81,6 +85,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
         passedHistorical: 0,
         insufficientSample: 0,
         rejected: 0,
+        replicationFinalists: 0,
         approvedCount: 0,
         total: 300,
       };
@@ -129,7 +134,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
             <span>Research Candidate Laboratory</span>
           </h3>
           <p className="text-xs text-neutral-400 font-mono mt-1">
-            Chronological experiments evaluate rule families; sampled formula candidates must pass historical testing and forward paper verification before approval.
+            Three hundred expressions are ranked on train/validation data; only the preselected finalists see the untouched holdout. Passing history only allows paper testing.
           </p>
         </div>
 
@@ -199,7 +204,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
             <div className="h-2 rounded-full bg-neutral-800 overflow-hidden">
               <div className="h-full bg-cyan-400 transition-all" style={{ width: `${searchProgress}%` }} />
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
               <div className="rounded-lg bg-neutral-950 border border-neutral-800 p-3">
                 <div className="text-[10px] text-neutral-500">Historical passes</div>
                 <div className="text-xl font-bold text-emerald-300">{searchBatch.passedHistorical}</div>
@@ -213,6 +218,11 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
                 <div className="text-xl font-bold text-rose-300">{searchBatch.rejected}</div>
               </div>
               <div className="rounded-lg bg-neutral-950 border border-neutral-800 p-3">
+                <div className="text-[10px] text-neutral-500">Blind holdout finalists</div>
+                <div className="text-xl font-bold text-cyan-300">{searchBatch.replicationFinalists}</div>
+                <div className="text-[9px] text-neutral-500">Selected using validation only</div>
+              </div>
+              <div className="rounded-lg bg-neutral-950 border border-neutral-800 p-3">
                 <div className="text-[10px] text-neutral-500">Actionable strategies approved</div>
                 <div className="text-xl font-bold text-white">{searchBatch.approvedCount}</div>
                 <div className="text-[9px] text-neutral-500">approved after historical + forward 300 gates</div>
@@ -224,11 +234,12 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
                   <thead className="bg-neutral-950 text-neutral-500 uppercase">
                     <tr>
                       <th className="p-2">Candidate / formula</th>
-                      <th className="p-2">Test WR</th>
-                      <th className="p-2">Test n</th>
                       <th className="p-2">Validation WR</th>
-                      <th className="p-2">100-trade blocks</th>
-                      <th className="p-2">EV (pips)</th>
+                      <th className="p-2">Validation EV</th>
+                      <th className="p-2">Blind test WR</th>
+                      <th className="p-2">Test n</th>
+                      <th className="p-2">Test blocks</th>
+                      <th className="p-2">Test EV</th>
                       <th className="p-2">Status</th>
                     </tr>
                   </thead>
@@ -240,11 +251,12 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
                           <div className="mt-1 font-mono text-[10px] text-neutral-500 break-all">{candidate.formula}</div>
                           {candidate.reason && <div className="mt-1 text-[10px] text-amber-300">{candidate.reason}</div>}
                         </td>
-                        <td className="p-2 font-mono text-white">{(candidate.testWinRate * 100).toFixed(1)}%</td>
-                        <td className="p-2 font-mono text-neutral-300">{candidate.testScoredTrades}</td>
                         <td className="p-2 font-mono text-neutral-300">{candidate.validationWinRate > 0 ? `${(candidate.validationWinRate * 100).toFixed(1)}%` : '—'}</td>
+                        <td className="p-2 font-mono text-neutral-300">{candidate.validationExpectedValuePips.toFixed(2)}</td>
+                        <td className="p-2 font-mono text-white">{candidate.testedOnHoldout ? `${(candidate.testWinRate * 100).toFixed(1)}%` : 'Not tested'}</td>
+                        <td className="p-2 font-mono text-neutral-300">{candidate.testedOnHoldout ? candidate.testScoredTrades : '—'}</td>
                         <td className="p-2 font-mono text-neutral-300">{candidate.testBlockWinRates.length === 3 ? candidate.testBlockWinRates.map(rate => `${(rate * 100).toFixed(0)}%`).join(' / ') : '—'}</td>
-                        <td className="p-2 font-mono text-neutral-300">{candidate.expectedValuePips.toFixed(2)}</td>
+                        <td className="p-2 font-mono text-neutral-300">{candidate.testedOnHoldout ? candidate.testExpectedValuePips.toFixed(2) : '—'}</td>
                         <td className="p-2">
                           <span className={candidate.status === 'PAPER_TRADING' ? 'text-emerald-300' : 'text-neutral-400'}>
                             {candidate.status}
@@ -257,7 +269,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
               </div>
             )}
             <p className="text-[10px] text-neutral-500">
-              Historical test results across 300 candidates are a discovery filter, not final proof: the finalists still need a separate 300-outcome forward paper run before approved alerts. Forward paper outcomes are candle-based observations, not broker fills.
+              All 300 candidates are ranked without touching the final holdout. Only up to 10 preselected validation finalists are replayed on the untouched holdout. A historical pass still needs a separate 300-outcome forward paper run before approved alerts. Forward paper outcomes are candle-based observations, not broker fills.
             </p>
           </div>
         )}
