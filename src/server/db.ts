@@ -652,6 +652,7 @@ class DatabaseService {
       gene.paperMetrics.trades >= 300 &&
       gene.paperMetrics.scoredTrades >= 300 &&
       gene.paperMetrics.winRate >= 0.70 &&
+      Array.isArray(gene.paperMetrics.rollingWinRates) &&
       gene.paperMetrics.rollingWinRates.length === 3 &&
       gene.paperMetrics.rollingWinRates.every(rate => rate >= 0.70) &&
       gene.paperMetrics.netPips > 0 &&
