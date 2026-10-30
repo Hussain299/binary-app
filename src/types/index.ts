@@ -333,6 +333,8 @@ export interface ResearchExperiment {
   id: string;
   experimentType?: 'BACKTEST' | 'LIVE_TRADE' | 'FORWARD_OBSERVATION';
   liveOutcome?: 'WIN' | 'LOSS' | 'SCRATCH';
+  /** One forward observation's actual net result; not a model expected value. */
+  observedNetPips?: number;
   generation: number;
   name: string;
   symbol: ForexSymbol;
