@@ -141,195 +141,272 @@ export class ResearchEngine {
     horizonMinutes: number,
     generation: number
   ): ResearchExperiment {
-    const dataset = this.extractFeatures(candles);
-    const total = dataset.length;
-
-    if (total < 60) {
-      throw new Error(`Insufficient candle samples (${total}) for purged walk-forward validation`);
+    if (![5, 10, 15, 20, 25, 30].includes(horizonMinutes)) {
+      throw new Error('Supported research horizons are 5, 10, 15, 20, 25 and 30 minutes.');
     }
-
     if (candles.some(c => c.source === 'synthetic')) {
       throw new Error('Research backtests require genuine market candles. Synthetic fallback candles are not eligible.');
     }
+    if (!candles.every(c => Number.isFinite(c.timestampMs) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close))) {
+      throw new Error('Historical dataset contains invalid candle values.');
+    }
+
     const minuteSteps = candles.slice(1).filter((c, i) =>
       Math.abs((c.timestampMs - candles[i].timestampMs) - 60_000) <= 5_000
     ).length;
     if (minuteSteps / Math.max(1, candles.length - 1) < 0.75) {
       throw new Error('Dataset is not a sufficiently continuous one-minute candle series. Import verified M1 data.');
     }
-    if (!candles.every(c => Number.isFinite(c.timestampMs) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close))) {
-      throw new Error('Historical dataset contains invalid candle values.');
+
+    // Only rows with a valid, causal 3-minute advance decision and exact scheduled
+    // M5 entry/expiry candles are eligible for this execution-aligned model study.
+    const dataset = this.extractFeatures(candles).filter(item =>
+      Number.isFinite(item.labels[horizonMinutes]) &&
+      Number.isFinite(item.futureMoves[horizonMinutes])
+    );
+    const total = dataset.length;
+    if (total < 100) {
+      throw new Error(`Insufficient eligible scheduled-entry samples (${total}). Import more genuine one-minute candles.`);
     }
 
-    // Chronological 60/20/20 split with independent embargoes. Never reuse
-    // validation samples as test samples when the test window is too small.
-    const purgeEmbargo = horizonMinutes;
+    // One eligible observation represents one M5 entry opportunity. Purge enough
+    // M5 opportunities to cover the forward label horizon between every split.
+    const purgeSamples = Math.ceil(horizonMinutes / 5) + 1;
     const trainEnd = Math.floor(total * 0.60);
-    const valStart = trainEnd + purgeEmbargo;
-    const valEnd = Math.min(total, valStart + Math.floor(total * 0.20));
-    const testStart = valEnd + purgeEmbargo;
+    const validationStart = trainEnd + purgeSamples;
+    const validationEnd = Math.min(total, validationStart + Math.floor(total * 0.20));
+    const testStart = validationEnd + purgeSamples;
     const trainSet = dataset.slice(0, trainEnd);
-    const valSet = dataset.slice(valStart, valEnd);
+    const validationSet = dataset.slice(validationStart, validationEnd);
     const testSet = dataset.slice(testStart);
-    if (trainSet.length < 30 || valSet.length < 20 || testSet.length < 20) {
+    if (trainSet.length < 50 || validationSet.length < 30 || testSet.length < 30) {
       throw new Error(
-        `Insufficient independent samples after embargo (train=${trainSet.length}, validation=${valSet.length}, test=${testSet.length}). Import more genuine historical data.`
+        `Insufficient independent chronological samples after embargo (train=${trainSet.length}, validation=${validationSet.length}, test=${testSet.length}). Import more history.`
       );
     }
 
-    // Feature standardization: fit mean and standard deviation strictly on TRAIN data only.
-    const featureCount = trainSet[0].features.length;
+    const featureDefinitions = [
+      'Normalized M1 Return',
+      'Candle Body Ratio',
+      'Upper Wick Ratio',
+      'Lower Wick Ratio',
+      'EMA 9/21 Spread',
+      'RSI 14',
+      'ATR 14 (Pips)',
+      '20-Candle Range Position',
+    ];
+    const featureSelection: Record<RuleFamily, number[]> = {
+      momentum_5: [0, 1, 4, 6],
+      mean_reversion_20: [0, 5, 6, 7],
+      wick_reversal: [1, 2, 3, 5],
+      range_breakout: [0, 1, 4, 6, 7],
+      volatility_squeeze: [1, 2, 3, 6, 7],
+      order_flow_imbalance: [0, 1, 2, 3, 4, 6],
+    };
+    const selectedIndices = featureSelection[ruleFamily];
+    const selectedFeatures = selectedIndices.map(index => featureDefinitions[index]);
+
+    // Fit standardization strictly on the training set.
+    const featureCount = selectedIndices.length;
     const means = new Array(featureCount).fill(0);
     const stds = new Array(featureCount).fill(0);
-
     for (const item of trainSet) {
-      for (let f = 0; f < featureCount; f++) {
-        means[f] += item.features[f];
-      }
+      selectedIndices.forEach((sourceIndex, featureIndex) => {
+        means[featureIndex] += item.features[sourceIndex];
+      });
     }
-    for (let f = 0; f < featureCount; f++) {
-      means[f] /= trainSet.length;
-    }
-
+    for (let j = 0; j < featureCount; j++) means[j] /= trainSet.length;
     for (const item of trainSet) {
-      for (let f = 0; f < featureCount; f++) {
-        stds[f] += Math.pow(item.features[f] - means[f], 2);
+      selectedIndices.forEach((sourceIndex, featureIndex) => {
+        stds[featureIndex] += Math.pow(item.features[sourceIndex] - means[featureIndex], 2);
+      });
+    }
+    for (let j = 0; j < featureCount; j++) stds[j] = Math.sqrt(stds[j] / trainSet.length) || 1;
+    const scaleFeatures = (features: number[]) =>
+      selectedIndices.map((sourceIndex, featureIndex) =>
+        Math.max(-8, Math.min(8, (features[sourceIndex] - means[featureIndex]) / stds[featureIndex]))
+      );
+
+    // Actual logistic-regression fitting. Coefficients are learned from TRAIN only;
+    // no family-specific fixed weights or test-set tuning are used.
+    const epochs = 600;
+    const learningRate = 0.03;
+    const l2Penalty = 0.001;
+    const weights = new Array(featureCount).fill(0);
+    let bias = 0;
+    const sigmoid = (value: number) => 1 / (1 + Math.exp(-Math.max(-25, Math.min(25, value))));
+    for (let epoch = 0; epoch < epochs; epoch++) {
+      const gradients = new Array(featureCount).fill(0);
+      let biasGradient = 0;
+      for (const item of trainSet) {
+        const z = scaleFeatures(item.features);
+        const logit = z.reduce((sum, value, index) => sum + value * weights[index], bias);
+        const error = sigmoid(logit) - item.labels[horizonMinutes];
+        for (let j = 0; j < featureCount; j++) gradients[j] += error * z[j];
+        biasGradient += error;
       }
-    }
-    for (let f = 0; f < featureCount; f++) {
-      stds[f] = Math.sqrt(stds[f] / trainSet.length) || 1.0;
+      for (let j = 0; j < featureCount; j++) {
+        weights[j] -= learningRate * (gradients[j] / trainSet.length + l2Penalty * weights[j]);
+      }
+      bias -= learningRate * biasGradient / trainSet.length;
     }
 
-    // Standardize feature vectors
-    const scaleFeatures = (feats: number[]) =>
-      feats.map((v, f) => (v - means[f]) / stds[f]);
-
-    // Rule family directional score calculation
-    const evaluateRule = (item: (typeof dataset)[0], trainedThreshold: number): { prob: number; pred: number } => {
+    const predictProbability = (item: (typeof dataset)[number]) => {
       const z = scaleFeatures(item.features);
-      let logit = 0;
-
-      if (ruleFamily === 'momentum_5') {
-        // Return + EMA slope + Body
-        logit = 0.55 * z[0] + 0.45 * z[4] + 0.2 * z[1];
-      } else if (ruleFamily === 'mean_reversion_20') {
-        // RSI extreme + Range position inversion
-        logit = -0.6 * (z[5] - 0.5) - 0.5 * (z[7] - 0.5);
-      } else if (ruleFamily === 'wick_reversal') {
-        // Lower wick vs Upper wick rejection
-        logit = 0.7 * z[3] - 0.7 * z[2];
-      } else if (ruleFamily === 'range_breakout') {
-        // Range position breakout + ATR expansion
-        logit = 0.5 * (z[7] - 0.5) + 0.4 * z[6];
-      } else {
-        // Multi-factor ensemble
-        logit = 0.3 * z[0] + 0.3 * z[4] - 0.3 * (z[5] - 0.5);
-      }
-
-      const prob = 1 / (1 + Math.exp(-logit));
-      const pred = prob >= trainedThreshold ? 1 : 0;
-      return { prob, pred };
+      return sigmoid(z.reduce((sum, value, index) => sum + value * weights[index], bias));
     };
-
-    // Train threshold calibration
-    const threshold = 0.50;
-
-    // Evaluate on Train Set
-    let trainCorrect = 0;
-    for (const item of trainSet) {
-      const { pred } = evaluateRule(item, threshold);
-      if (pred === item.labels[horizonMinutes]) trainCorrect++;
-    }
-    const trainAccuracy = Number((trainCorrect / trainSet.length).toFixed(3));
-
-    // Evaluate on Validation Set
-    let valCorrect = 0;
-    for (const item of valSet) {
-      const { pred } = evaluateRule(item, threshold);
-      if (pred === item.labels[horizonMinutes]) valCorrect++;
-    }
-    const valAccuracy = Number((valCorrect / valSet.length).toFixed(3));
-
-    // Evaluate on Untouched Test Set
-    let tp = 0;
-    let fp = 0;
-    let tn = 0;
-    let fn = 0;
-    let brierSum = 0;
-    let calibrationErrorSum = 0;
-    let totalPips = 0;
-    let grossWinningPips = 0;
-    let grossLosingPips = 0;
-    let tradeWins = 0;
-    let tradeLosses = 0;
-    let tradeScratches = 0;
-    let maxDrawdown = 0;
-    let peakPips = 0;
 
     const isJpy = symbol.includes('JPY');
     const pipFactor = isJpy ? 100 : 10000;
+    const modeledSpreadPips = 1.2;
 
-    for (const item of testSet) {
-      const { prob, pred } = evaluateRule(item, threshold);
-      const actual = item.labels[horizonMinutes];
+    const evaluateSet = (items: typeof dataset, threshold: number) => {
+      let trades = 0, correct = 0, tp = 0, fp = 0, tn = 0, fn = 0;
+      let brierSum = 0, calibrationErrorSum = 0, totalPips = 0;
+      let positivePips = 0, negativePips = 0, wins = 0, losses = 0, scratches = 0;
+      let peakPips = 0, maxDrawdown = 0;
+      for (const item of items) {
+        const probability = predictProbability(item);
+        const actual = item.labels[horizonMinutes];
+        brierSum += Math.pow(probability - actual, 2);
+        calibrationErrorSum += Math.abs(probability - actual);
 
-      if (pred === 1 && actual === 1) tp++;
-      else if (pred === 1 && actual === 0) fp++;
-      else if (pred === 0 && actual === 0) tn++;
-      else if (pred === 0 && actual === 1) fn++;
+        // The validation-selected threshold abstains on low-conviction samples.
+        let prediction: number | null = null;
+        if (probability >= threshold) prediction = 1;
+        else if (probability <= 1 - threshold) prediction = 0;
+        if (prediction === null) continue;
 
-      // Brier score: (prob - actual)^2
-      brierSum += Math.pow(prob - actual, 2);
-      calibrationErrorSum += Math.abs(prob - actual);
+        trades++;
+        if (prediction === actual) correct++;
+        if (prediction === 1 && actual === 1) tp++;
+        else if (prediction === 1 && actual === 0) fp++;
+        else if (prediction === 0 && actual === 0) tn++;
+        else fn++;
 
-      // Execute the predicted direction over the same forward horizon that
-      // generated the label, then deduct the modeled round-trip spread.
-      const actualMovePips = item.futureMoves[horizonMinutes] * pipFactor;
-      const tradePips = (pred === 1 ? actualMovePips : -actualMovePips) - 1.2;
-      totalPips += tradePips;
-      if (tradePips > 0.5) { tradeWins++; grossWinningPips += tradePips; }
-      else if (tradePips < -0.5) { tradeLosses++; grossLosingPips += Math.abs(tradePips); }
-      else tradeScratches++;
-      if (totalPips > peakPips) peakPips = totalPips;
-      const dd = peakPips - totalPips;
-      if (dd > maxDrawdown) maxDrawdown = dd;
+        const grossMovePips = item.futureMoves[horizonMinutes] * pipFactor;
+        const netTradePips = (prediction === 1 ? grossMovePips : -grossMovePips) - modeledSpreadPips;
+        totalPips += netTradePips;
+        if (netTradePips > 0.5) { wins++; positivePips += netTradePips; }
+        else if (netTradePips < -0.5) { losses++; negativePips += Math.abs(netTradePips); }
+        else scratches++;
+        if (totalPips > peakPips) peakPips = totalPips;
+        maxDrawdown = Math.max(maxDrawdown, peakPips - totalPips);
+      }
+
+      const scoredTrades = wins + losses;
+      const denominator = Math.max(1, trades);
+      const sensitivity = tp / Math.max(1, tp + fn);
+      const specificity = tn / Math.max(1, tn + fp);
+      const precision = tp / Math.max(1, tp + fp);
+      const recall = sensitivity;
+      const f1 = precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : 0;
+      return {
+        trades, wins, losses, scratches, correct, tp, fp, tn, fn,
+        accuracy: correct / denominator,
+        balancedAccuracy: (sensitivity + specificity) / 2,
+        precision, recall, f1,
+        brierScore: brierSum / Math.max(1, items.length),
+        calibrationError: calibrationErrorSum / Math.max(1, items.length),
+        winRate: wins / Math.max(1, scoredTrades),
+        expectedValuePips: totalPips / denominator,
+        profitFactor: positivePips / Math.max(0.01, negativePips),
+        totalPips,
+        maxDrawdown,
+        positivePips,
+        negativePips,
+      };
+    };
+
+    // Tune only the abstention threshold on validation data. The untouched test
+    // period is evaluated once, after this choice is frozen.
+    const thresholdCandidates = [0.50, 0.525, 0.55, 0.575, 0.60, 0.625, 0.65];
+    let selectedThreshold = 0.50;
+    let bestValidation: ReturnType<typeof evaluateSet> | null = null;
+    for (const candidateThreshold of thresholdCandidates) {
+      const candidateMetrics = evaluateSet(validationSet, candidateThreshold);
+      if (candidateMetrics.trades < 20) continue;
+      if (
+        !bestValidation ||
+        candidateMetrics.expectedValuePips > bestValidation.expectedValuePips
+      ) {
+        selectedThreshold = candidateThreshold;
+        bestValidation = candidateMetrics;
+      }
+    }
+    if (!bestValidation) {
+      throw new Error('Validation period did not produce at least 20 eligible trades for threshold selection.');
     }
 
-    const testTotal = Math.max(1, testSet.length);
-    const testAccuracy = Number(((tp + tn) / testTotal).toFixed(3));
-    const sensitivity = tp / Math.max(1, tp + fn);
-    const specificity = tn / Math.max(1, tn + fp);
-    const balancedAccuracy = Number(((sensitivity + specificity) / 2).toFixed(3));
-    const precision = Number((tp / Math.max(1, tp + fp)).toFixed(3));
-    const recall = Number(sensitivity.toFixed(3));
-    const f1Score = Number(
-      precision + recall > 0 ? ((2 * precision * recall) / (precision + recall)).toFixed(3) : 0
-    );
-    const brierScore = Number((brierSum / testTotal).toFixed(4));
-    const calibrationError = Number((calibrationErrorSum / testTotal).toFixed(3));
+    const trainMetrics = evaluateSet(trainSet, selectedThreshold);
+    const validationMetrics = bestValidation;
+    const testMetrics = evaluateSet(testSet, selectedThreshold);
+    if (trainMetrics.trades < 30 || validationMetrics.trades < 20 || testMetrics.trades < 30) {
+      throw new Error(
+        `Insufficient executed model trades (train=${trainMetrics.trades}, validation=${validationMetrics.trades}, test=${testMetrics.trades}). Import more historical data.`
+      );
+    }
 
-    const winRate = Number((tradeWins / testTotal).toFixed(3));
-    const profitFactor = Number(
-      (grossWinningPips / Math.max(0.01, grossLosingPips)).toFixed(2)
-    );
-    const maxDrawdownPct = Number(((maxDrawdown / Math.max(1, peakPips + 50)) * 100).toFixed(1));
-
-    // 95% Wilson Score Confidence Interval for Accuracy
+    // Wilson interval for the untouched test-set net-positive win rate.
     const zCrit = 1.96;
-    const nSamples = testTotal;
-    const p = testAccuracy;
-    const denom = 1 + (zCrit * zCrit) / nSamples;
-    const center = (p + (zCrit * zCrit) / (2 * nSamples)) / denom;
-    const margin =
-      (zCrit * Math.sqrt((p * (1 - p)) / nSamples + (zCrit * zCrit) / (4 * nSamples * nSamples))) /
-      denom;
+    const scoredTestTrades = Math.max(1, testMetrics.wins + testMetrics.losses);
+    const p = testMetrics.wins / scoredTestTrades;
+    const denominator = 1 + (zCrit * zCrit) / scoredTestTrades;
+    const center = (p + (zCrit * zCrit) / (2 * scoredTestTrades)) / denominator;
+    const margin = (
+      zCrit * Math.sqrt(
+        (p * (1 - p)) / scoredTestTrades +
+        (zCrit * zCrit) / (4 * scoredTestTrades * scoredTestTrades)
+      )
+    ) / denominator;
     const ciLow = Math.max(0, Number((center - margin).toFixed(3)));
     const ciHigh = Math.min(1, Number((center + margin).toFixed(3)));
 
+    const testTotal = testMetrics.trades;
+    const trainAccuracy = Number(trainMetrics.accuracy.toFixed(3));
+    const valAccuracy = Number(validationMetrics.accuracy.toFixed(3));
+    const testAccuracy = Number(testMetrics.accuracy.toFixed(3));
+    const balancedAccuracy = Number(testMetrics.balancedAccuracy.toFixed(3));
+    const precision = Number(testMetrics.precision.toFixed(3));
+    const recall = Number(testMetrics.recall.toFixed(3));
+    const f1Score = Number(testMetrics.f1.toFixed(3));
+    const brierScore = Number(testMetrics.brierScore.toFixed(4));
+    const calibrationError = Number(testMetrics.calibrationError.toFixed(3));
+    const winRate = Number(testMetrics.winRate.toFixed(3));
+    const profitFactor = Number(testMetrics.profitFactor.toFixed(2));
+    const totalPips = testMetrics.totalPips;
+    const maxDrawdownPct = Number(
+      ((testMetrics.maxDrawdown / Math.max(50, Math.abs(testMetrics.totalPips) + 50)) * 100).toFixed(1)
+    );
+
+    const auditorConcerns: string[] = [];
+    if (trainAccuracy - valAccuracy > 0.10) {
+      auditorConcerns.push(`Training directional accuracy exceeds validation by more than 10 percentage points.`);
+    }
+    if (testTotal < 100) {
+      auditorConcerns.push(`Insufficient untouched test trades (${testTotal}); minimum 100 required for acceptance.`);
+    }
+    if (testAccuracy < 0.52) {
+      auditorConcerns.push(`Out-of-sample directional accuracy below 52% (${testAccuracy}).`);
+    }
+    if (brierScore > 0.25) {
+      auditorConcerns.push(`Poor probability calibration (Brier score ${brierScore}).`);
+    }
+    if (profitFactor < 1.15 || testMetrics.expectedValuePips <= 0) {
+      auditorConcerns.push(`Transaction-cost-adjusted expectancy is not robust (PF ${profitFactor}, EV ${testMetrics.expectedValuePips.toFixed(2)} pips).`);
+    }
+
+    let auditorVerdict: 'ACCEPTED' | 'REJECTED' | 'PROVISIONAL' = 'ACCEPTED';
+    if (auditorConcerns.length >= 2 || testAccuracy < 0.50 || testTotal < 100) {
+      auditorVerdict = 'REJECTED';
+    } else if (auditorConcerns.length === 1) {
+      auditorVerdict = 'PROVISIONAL';
+    }
+
     const metrics: ExperimentMetrics = {
       sampleSize: testTotal,
-      trainSampleSize: trainSet.length,
-      validationSampleSize: valSet.length,
+      trainSampleSize: trainMetrics.trades,
+      validationSampleSize: validationMetrics.trades,
       trainAccuracy,
       valAccuracy,
       testAccuracy,
@@ -340,80 +417,15 @@ export class ResearchEngine {
       brierScore,
       calibrationError,
       winRate,
-      expectedValuePips: Number((totalPips / testTotal).toFixed(2)),
+      expectedValuePips: Number(testMetrics.expectedValuePips.toFixed(2)),
       profitFactor,
       maxDrawdownPct,
       confidenceInterval95: [ciLow, ciHigh],
-      confusionMatrix: { tp, fp, tn, fn },
+      confusionMatrix: { tp: testMetrics.tp, fp: testMetrics.fp, tn: testMetrics.tn, fn: testMetrics.fn },
     };
-
-    // SKEPTICAL AUDIT EVALUATION:
-    // Automatically flags leakage, overfitting (train >> val), poor calibration, sample size
-    const auditorConcerns: string[] = [];
-    if (trainAccuracy - valAccuracy > 0.10) {
-      auditorConcerns.push(
-        `High overfitting detected: Train accuracy (${trainAccuracy}) exceeds Validation (${valAccuracy}) by >10%.`
-      );
-    }
-    if (testTotal < 100) auditorConcerns.push(`Insufficient untouched test sample size (${testTotal}); minimum 100 required.`);
-    if (testAccuracy < 0.52) {
-      auditorConcerns.push(
-        `Out-of-sample edge below minimum research threshold (${testAccuracy} < 0.52).`
-      );
-    }
-    if (brierScore > 0.25) {
-      auditorConcerns.push(
-        `Poor probabilistic calibration: Brier score ${brierScore} > 0.25 threshold.`
-      );
-    }
-    if (profitFactor < 1.15 || totalPips / testTotal <= 0) {
-      auditorConcerns.push(
-        `Unfavorable transaction cost resilience: Profit factor ${profitFactor} < 1.15 after spread deductions.`
-      );
-    }
-
-    let auditorVerdict: 'ACCEPTED' | 'REJECTED' | 'PROVISIONAL' = 'ACCEPTED';
-    if (auditorConcerns.length >= 2 || testAccuracy < 0.50 || testTotal < 100) {
-      auditorVerdict = 'REJECTED';
-    } else if (auditorConcerns.length === 1) {
-      auditorVerdict = 'PROVISIONAL';
-    }
 
     const expId = `exp_${Date.now()}_${ruleFamily}_${horizonMinutes}m`;
     const expName = `${symbol} [${ruleFamily}] ${horizonMinutes}m Horizon`;
-
-    const scientistHypotheses: Record<RuleFamily, { hyp: string; disproof: string }> = {
-      momentum_5: {
-        hyp: `Short-term order flow momentum persists over ${horizonMinutes}m due to algorithmic trend confirmation.`,
-        disproof: `Disproven if balanced accuracy on untouched test set drops below 0.51 or mean slippage consumes gross returns.`,
-      },
-      mean_reversion_20: {
-        hyp: `Price excursions touching 20-period range extremities snap back to the mean within ${horizonMinutes}m.`,
-        disproof: `Disproven if adverse excursions create high drawdowns during trending market regimes.`,
-      },
-      wick_reversal: {
-        hyp: `Elongated wicks indicate liquidity rejection and immediate price reversal within ${horizonMinutes}m.`,
-        disproof: `Disproven if subsequent candles easily violate rejection wick highs/lows before reaching target.`,
-      },
-      range_breakout: {
-        hyp: `Compression in ATR followed by range boundary penetration initiates multi-candle continuation.`,
-        disproof: `Disproven if false breakouts exceed 45% during low-volume Asian sessions.`,
-      },
-      volatility_squeeze: {
-        hyp: `Bollinger Band contraction preceding volume surge triggers expansion trends.`,
-        disproof: `Disproven if post-squeeze direction lacks directional follow-through > 1.5x spread.`,
-      },
-      order_flow_imbalance: {
-        hyp: `Asymmetric body-to-wick velocity indicates institutional bid/ask dominance.`,
-        disproof: `Disproven if win rate under institutional spread modeling drops below 52%.`,
-      },
-    };
-
-    const scientistDetails = scientistHypotheses[ruleFamily] || {
-      hyp: `Quantitative feature interaction predicts directional bias over ${horizonMinutes}m.`,
-      disproof: `Disproven if out-of-sample edge fails to exceed 95% confidence interval random expectation.`,
-    };
-
     const experiment: ResearchExperiment = {
       id: expId,
       experimentType: 'BACKTEST',
@@ -423,38 +435,33 @@ export class ResearchEngine {
       ruleFamily,
       horizonMinutes,
       parameters: {
-        threshold,
-        purgeEmbargoMinutes: purgeEmbargo,
+        threshold: selectedThreshold,
+        purgeEmbargoMinutes: purgeSamples * 5,
         featureCount,
-        spreadModeledPips: 1.2,
+        spreadModeledPips: modeledSpreadPips,
+        algorithm: 'logistic_regression',
+        epochs,
+        learningRate,
+        l2Penalty,
       },
-      featuresUsed: [
-        'Normalized Return',
-        'Candle Body Ratio',
-        'Upper Wick Ratio',
-        'Lower Wick Ratio',
-        'EMA Slope (9-21)',
-        'RSI (14)',
-        'ATR (14)',
-        '20-Candle Range Position',
-      ],
+      featuresUsed: selectedFeatures,
       metrics,
       trainPeriod: {
-        start: trainSet[0]?.candle.timestamp || 'N/A',
-        end: trainSet[trainSet.length - 1]?.candle.timestamp || 'N/A',
+        start: trainSet[0].candle.timestamp,
+        end: trainSet[trainSet.length - 1].candle.timestamp,
       },
       valPeriod: {
-        start: valSet[0]?.candle.timestamp || 'N/A',
-        end: valSet[valSet.length - 1]?.candle.timestamp || 'N/A',
+        start: validationSet[0].candle.timestamp,
+        end: validationSet[validationSet.length - 1].candle.timestamp,
       },
       testPeriod: {
-        start: testSet[0]?.candle.timestamp || 'N/A',
-        end: testSet[testSet.length - 1]?.candle.timestamp || 'N/A',
+        start: testSet[0].candle.timestamp,
+        end: testSet[testSet.length - 1].candle.timestamp,
       },
-      purgedWindowCandles: purgeEmbargo,
-      scientistHypothesis: scientistDetails.hyp,
-      scientistDisproofCondition: scientistDetails.disproof,
-      engineerConfigNotes: `Standardized scaling fitted strictly on ${trainSet.length} train samples. Embargo of ${purgeEmbargo} candles applied to prevent lookahead leakage.`,
+      purgedWindowCandles: purgeSamples * 5,
+      scientistHypothesis: `A train-fitted logistic-regression model using ${ruleFamily} features may predict direction at the scheduled ${horizonMinutes}-minute expiry.`,
+      scientistDisproofCondition: `Disproven if untouched test directional accuracy is below 52%, or after modeled spread the test EV is not positive and profit factor is below 1.15.`,
+      engineerConfigNotes: `Logistic regression fitted on ${trainSet.length} training opportunities. Feature means/stds fitted on training only. Threshold ${selectedThreshold} tuned on ${validationSet.length} validation opportunities. Each opportunity uses the 3-minute advance alert, scheduled next M5 open and ${horizonMinutes}-minute expiry; modeled spread ${modeledSpreadPips} pips.`,
       auditorVerdict,
       auditorConcerns,
       createdAt: new Date().toISOString(),
