@@ -1085,7 +1085,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       test.winRate >= 0.70 &&
       validation.winRate >= 0.70 &&
       blockRates.length === 3 &&
-      blockRates.every(rate => rate >= 0.65) &&
+      blockRates.every(rate => rate >= 0.70) &&
       test.netPips > 0 &&
       test.profitFactor >= 1.15 &&
       interval[0] >= 0.60;
@@ -1095,7 +1095,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     else if (validation.scoredTrades < 150 || train.scoredTrades < 150) failureReason = `Insufficient train/validation outcomes (train ${train.scoredTrades}, validation ${validation.scoredTrades}; require 150 each).`;
     else if (validation.winRate < 0.70) failureReason = `Validation win rate ${(validation.winRate * 100).toFixed(1)}% is below 70%.`;
     else if (test.winRate < 0.70) failureReason = `Untouched test win rate ${(test.winRate * 100).toFixed(1)}% is below 70%.`;
-    else if (blockRates.length !== 3 || blockRates.some(rate => rate < 0.65)) failureReason = 'One or more consecutive 100-trade test blocks fell below 65%.';
+    else if (blockRates.length !== 3 || blockRates.some(rate => rate < 0.70)) failureReason = 'One or more consecutive 100-trade test blocks fell below 70%.';
     else if (test.netPips <= 0 || test.profitFactor < 1.15) failureReason = 'Net return or profit factor failed after modeled spread costs.';
     else if (interval[0] < 0.60) failureReason = 'The 95% Wilson lower bound is below 60%.';
 
