@@ -354,7 +354,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           <div className="px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-800/80 flex items-center gap-2">
             <Target className="w-3.5 h-3.5 text-emerald-400" />
             <span className="text-xs font-bold text-emerald-300 font-mono">
-              {calculatedWinRate}% Accuracy
+              {closedSignals.length ? `${calculatedWinRate}% Live win rate` : 'No completed live trades'}
             </span>
             <span className="text-[10px] text-neutral-400 font-mono hidden sm:inline">
               ({totalWins}W / {totalLosses}L)
@@ -520,7 +520,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   Closed Trades Performance
                 </span>
                 <div className="text-xl sm:text-2xl font-black font-mono text-white">
-                  {calculatedWinRate}% Verified Win Rate
+                  {closedSignals.length ? `${calculatedWinRate}% Live win rate` : 'No completed live trades'}
                 </div>
               </div>
             </div>
@@ -789,7 +789,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                           </span>
                         </div>
                         <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800/80 font-mono text-[11px] font-bold shrink-0">
-                          {sig.strategyWinRate || '76.5'}% Win Rate
+                          {sig.strategyEvidenceStatus === 'BACKTESTED' && typeof sig.strategyWinRate === 'number' ? `${sig.strategyWinRate.toFixed(1)}% Historical test WR · n=${sig.strategyHistoricalSampleSize || 0}` : 'Historical result not validated'}
                         </span>
                       </div>
 
@@ -816,7 +816,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   {/* CARD FOOTER: Tap hint & Confidence */}
                   <div className="pt-2.5 mt-3 border-t border-neutral-800/60 flex items-center justify-between text-[11px] text-neutral-400">
                     <span className="font-mono">
-                      AI Confidence:{' '}
+                      Signal score (not a probability):{' '}
                       <strong className="text-emerald-400">
                         {(sig.confidence * 100).toFixed(0)}%
                       </strong>
@@ -930,7 +930,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
               <div className="bg-emerald-950/40 p-3.5 rounded-xl border border-emerald-800/80 flex items-center justify-between">
                 <div>
-                  <div className="text-xs text-neutral-400">Current Autonomous Accuracy:</div>
+                  <div className="text-xs text-neutral-400">Observed completed live trades:</div>
                   <div className="text-2xl font-extrabold text-emerald-400 font-mono">
                     {calculatedWinRate}% Verified Win Rate
                   </div>
@@ -1121,7 +1121,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   {selectedSignal.strategyName || '5-Min Momentum Breakout'}
                 </span>
                 <span className="text-emerald-400 font-bold">
-                  {selectedSignal.strategyWinRate || '76.5'}% Win Rate
+                  {selectedSignal.strategyEvidenceStatus === 'BACKTESTED' && typeof selectedSignal.strategyWinRate === 'number' ? `${selectedSignal.strategyWinRate.toFixed(1)}% Historical test WR · n=${selectedSignal.strategyHistoricalSampleSize || 0}` : 'Historical result not validated'}
                 </span>
               </div>
               {selectedSignal.confluenceStrategies && selectedSignal.confluenceStrategies.length > 0 && (
@@ -1292,7 +1292,11 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {sessionData.map(sess => (
+              {sessionData.length === 0 ? (
+                <div className="col-span-2 p-5 rounded-xl border border-neutral-800 bg-neutral-950 text-sm text-neutral-400">
+                  No completed live outcomes are available yet. Session win rates will appear only after real trades close.
+                </div>
+              ) : sessionData.map(sess => (
                 <div
                   key={sess.id}
                   className={`p-3.5 rounded-xl border flex flex-col justify-between space-y-2.5 ${
@@ -1345,7 +1349,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </div>
 
             <button
-              onClick={() => setShowSessionsModal(false)}
+              onClick={() => setShowSessionsModal(false)
               className="w-full py-2.5 bg-neutral-800 hover:bg-neutral-700 font-semibold text-white rounded-xl text-xs transition-colors"
             >
               Close
@@ -1418,7 +1422,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   </span>
                 </div>
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
-                  <span className="text-[10px] text-neutral-400 block uppercase">Verified Edge</span>
+                  <span className="text-[10px] text-neutral-400 block uppercase">Measured test win rate</span>
                   <span className="text-sm font-extrabold text-emerald-400">
                     {averageTestWinRate ? `${averageTestWinRate}% test WR` : 'No validated results'}
                   </span>
