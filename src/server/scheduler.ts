@@ -573,7 +573,10 @@ export class AutonomousScheduler {
         const allExps = db.getExperiments().filter(e => e.experimentType !== 'LIVE_TRADE').slice(0, 10);
         const accepted = allExps.filter(e => e.auditorVerdict === 'ACCEPTED').length;
         const rejected = allExps.filter(e => e.auditorVerdict === 'REJECTED').length;
-        const bestF1 = Math.max(...allExps.map(e => e.metrics.f1Score), 0.65);
+        const bestF1 = allExps.length > 0
+          ? Math.max(...allExps.map(e => e.metrics.f1Score))
+          : 0;
+        const latestExperiment = allExps[0] || null;
 
         const gen: EvolutionGeneration = {
           generation: this.currentGeneration,
@@ -581,13 +584,17 @@ export class AutonomousScheduler {
           totalExperiments: allExps.length,
           acceptedCount: accepted,
           rejectedCount: rejected,
-          topExperimentId: allExps[0]?.id || null,
+          topExperimentId: latestExperiment?.id || null,
           bestF1Score: bestF1,
-          summary: `Autopilot Gen ${this.currentGeneration} autonomous evaluation complete. ${accepted} candidate rules accepted, ${rejected} rejected due to spread or calibration drag.`,
-          lessonsLearned: [
-            `Autonomous tuning identified optimal horizon of 10m for momentum breakout during active market overlap.`,
-            `Auditor penalized rules with Brier score > 0.25 to prevent overconfident signals.`,
-          ],
+          summary: allExps.length > 0
+            ? `Generation ${this.currentGeneration}: ${allExps.length} historical experiments reviewed; ${accepted} accepted, ${rejected} rejected. Best recorded F1: ${bestF1.toFixed(3)}.`
+            : `Generation ${this.currentGeneration}: no eligible historical experiments were available; no performance conclusion recorded.`,
+          lessonsLearned: latestExperiment
+            ? [
+                `Latest run: ${latestExperiment.symbol} ${latestExperiment.ruleFamily}, ${latestExperiment.horizonMinutes}m; test sample n=${latestExperiment.metrics.sampleSize}.`,
+                `Out-of-sample EV ${latestExperiment.metrics.expectedValuePips.toFixed(2)} pips; PF ${latestExperiment.metrics.profitFactor.toFixed(2)} after modeled spread.`,
+              ]
+            : ['No empirical lesson recorded because no qualifying historical experiment was available.'],
         };
         db.addGeneration(gen);
         this.currentGeneration++;
