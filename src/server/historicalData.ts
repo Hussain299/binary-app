@@ -1,14 +1,19 @@
 /**
- * Persistent store for imported, genuine historical market candles.
- * Kept separate from the short rolling live-feed cache so backtests can use
- * long datasets without confusing synthetic continuity candles with market data.
+ * Persistent store for imported one-minute OHLC history.
+ *
+ * Data is partitioned by pair and UTC month. Each upload batch only rewrites
+ * the affected monthly partitions, avoiding repeated full-history rewrites
+ * when importing several years of candles.
+ *
+ * User-imported data is schema/continuity checked, but the application cannot
+ * independently authenticate the provider or prove the contents are genuine.
  */
 import fs from 'fs';
 import path from 'path';
 import { Candle, ForexSymbol } from '../types/index.js';
 
 const ROOT = path.resolve(process.cwd(), 'data', 'historical');
-const MAX_CANDLES_PER_PAIR = 1_900_000; // Approximately five years of active-session M1 FX candles.
+const MAX_CANDLES_PER_PAIR = 1_900_000;
 const MAX_IMPORT_BATCH = 20_000;
 const ALLOWED_SOURCES = new Set(['biquote', 'dukascopy', 'yahoo', 'imported']);
 
@@ -23,23 +28,52 @@ export interface HistoricalImportResult {
 }
 
 class HistoricalDataStore {
-  private fileFor(symbol: ForexSymbol): string {
-    return path.join(ROOT, `${symbol.replace('/', '')}.json`);
+  private prefixFor(symbol: ForexSymbol): string {
+    return `${symbol.replace('/', '')}_`;
+  }
+
+  private fileFor(symbol: ForexSymbol, month: string): string {
+    return path.join(ROOT, `${this.prefixFor(symbol)}${month}.json`);
   }
 
   private ensureRoot(): void {
     fs.mkdirSync(ROOT, { recursive: true });
   }
 
-  public getCandles(symbol: ForexSymbol, limit = MAX_CANDLES_PER_PAIR): Candle[] {
+  private readMonth(symbol: ForexSymbol, month: string): Candle[] {
     try {
-      const file = this.fileFor(symbol);
+      const file = this.fileFor(symbol, month);
       if (!fs.existsSync(file)) return [];
       const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
       if (!Array.isArray(parsed)) return [];
-      return parsed.slice(-Math.max(1, Math.min(limit, MAX_CANDLES_PER_PAIR)));
+      return parsed.filter((row: any) =>
+        row && row.symbol === symbol &&
+        Number.isFinite(row.timestampMs) &&
+        Number.isFinite(row.open) &&
+        Number.isFinite(row.high) &&
+        Number.isFinite(row.low) &&
+        Number.isFinite(row.close)
+      ) as Candle[];
     } catch (error) {
-      console.error(`[HistoricalData] Failed to read ${symbol} history:`, error);
+      console.error(`[HistoricalData] Failed to read ${symbol} ${month} partition:`, error);
+      return [];
+    }
+  }
+
+  public getCandles(symbol: ForexSymbol, limit = MAX_CANDLES_PER_PAIR): Candle[] {
+    try {
+      if (!fs.existsSync(ROOT)) return [];
+      const prefix = this.prefixFor(symbol);
+      const months = fs.readdirSync(ROOT)
+        .filter(name => name.startsWith(prefix) && /^\d{6}\.json$/.test(name.slice(prefix.length)))
+        .map(name => name.slice(prefix.length, -5))
+        .sort();
+      const candles: Candle[] = [];
+      for (const month of months) candles.push(...this.readMonth(symbol, month));
+      candles.sort((a, b) => a.timestampMs - b.timestampMs);
+      return candles.slice(-Math.max(1, Math.min(limit, MAX_CANDLES_PER_PAIR)));
+    } catch (error) {
+      console.error(`[HistoricalData] Failed to list ${symbol} history:`, error);
       return [];
     }
   }
@@ -49,12 +83,13 @@ class HistoricalDataStore {
       throw new Error('Provide a non-empty candles array.');
     }
     if (input.length > MAX_IMPORT_BATCH) {
-      throw new Error(`A single import batch is limited to ${MAX_IMPORT_BATCH.toLocaleString()} candles. Uploads are chunked automatically by the UI.`);
+      throw new Error(`A single import batch is limited to ${MAX_IMPORT_BATCH.toLocaleString()} candles. The UI uploads history in chunks.`);
     }
 
-    const byTime = new Map<number, Candle>();
+    const byMonth = new Map<string, Map<number, Candle>>();
     let rejected = 0;
     let duplicates = 0;
+
     for (const raw of input) {
       if (!raw || typeof raw !== 'object') { rejected++; continue; }
       const row = raw as Record<string, unknown>;
@@ -71,17 +106,22 @@ class HistoricalDataStore {
       const low = Number(row.low ?? row.l);
       const close = Number(row.close ?? row.c);
       const volume = Number(row.volume ?? row.v ?? 0);
+      const suppliedSource = String(row.source ?? 'imported');
+
       if (
         !Number.isFinite(timestampMs) ||
         ![open, high, low, close].every(Number.isFinite) ||
         high < Math.max(open, close, low) ||
         low > Math.min(open, close, high) ||
-        !ALLOWED_SOURCES.has(String(row.source ?? 'imported'))
+        !ALLOWED_SOURCES.has(suppliedSource)
       ) { rejected++; continue; }
 
+      const date = new Date(timestampMs);
+      if (!Number.isFinite(date.getTime())) { rejected++; continue; }
+      const month = `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
       const candle: Candle = {
         symbol,
-        timestamp: new Date(timestampMs).toISOString(),
+        timestamp: date.toISOString(),
         timestampMs,
         open,
         high,
@@ -90,33 +130,40 @@ class HistoricalDataStore {
         volume: Number.isFinite(volume) ? volume : 0,
         source: 'imported',
       };
-      if (byTime.has(timestampMs)) duplicates++;
-      byTime.set(timestampMs, candle);
+      if (!byMonth.has(month)) byMonth.set(month, new Map<number, Candle>());
+      const monthMap = byMonth.get(month)!;
+      if (monthMap.has(timestampMs)) duplicates++;
+      monthMap.set(timestampMs, candle);
     }
-    if (byTime.size === 0) {
+
+    if (byMonth.size === 0) {
       throw new Error(`No valid candles found. Rejected rows: ${rejected}.`);
     }
 
-    const existing = this.getCandles(symbol, MAX_CANDLES_PER_PAIR);
-    const merged = new Map<number, Candle>();
-    for (const candle of existing) merged.set(candle.timestampMs, candle);
-    for (const candle of byTime.values()) {
-      if (merged.has(candle.timestampMs)) duplicates++;
-      merged.set(candle.timestampMs, candle);
-    }
-    const sorted = Array.from(merged.values())
-      .sort((a, b) => a.timestampMs - b.timestampMs)
-      .slice(-MAX_CANDLES_PER_PAIR);
-
     this.ensureRoot();
-    const file = this.fileFor(symbol);
-    const temp = `${file}.tmp`;
-    fs.writeFileSync(temp, JSON.stringify(sorted), 'utf-8');
-    fs.renameSync(temp, file);
+    let imported = 0;
+    for (const [month, incoming] of byMonth) {
+      const merged = new Map<number, Candle>();
+      for (const candle of this.readMonth(symbol, month)) merged.set(candle.timestampMs, candle);
+      for (const candle of incoming.values()) {
+        if (merged.has(candle.timestampMs)) duplicates++;
+        else imported++;
+        merged.set(candle.timestampMs, candle);
+      }
+      const sortedMonth = Array.from(merged.values()).sort((a, b) => a.timestampMs - b.timestampMs);
+      const file = this.fileFor(symbol, month);
+      const temp = `${file}.tmp`;
+      fs.writeFileSync(temp, JSON.stringify(sortedMonth), 'utf-8');
+      fs.renameSync(temp, file);
+    }
 
+    const sorted = this.getCandles(symbol, MAX_CANDLES_PER_PAIR);
+    if (sorted.length > MAX_CANDLES_PER_PAIR) {
+      throw new Error(`Historical store limit reached (${MAX_CANDLES_PER_PAIR.toLocaleString()} candles per pair).`);
+    }
     return {
       symbol,
-      imported: byTime.size,
+      imported,
       totalStored: sorted.length,
       duplicates,
       rejected,
@@ -132,6 +179,7 @@ class HistoricalDataStore {
       count: candles.length,
       firstTimestamp: candles[0]?.timestamp ?? null,
       lastTimestamp: candles[candles.length - 1]?.timestamp ?? null,
+      monthsStored: candles.length ? new Set(candles.map(c => c.timestamp.slice(0, 7))).size : 0,
       sources: [...new Set(candles.map(c => c.source))],
     };
   }
