@@ -163,6 +163,10 @@ export interface ResearchSignal {
   grossReturnPips: number | null;
   estimatedSpreadPips: number;
   netReturnPips: number | null;
+  /** Assumed or observed binary-option payout at entry; recorded with each outcome. */
+  payoutPct?: number;
+  /** Binary-option profit/loss in stake units: +payout on win, -1 on loss, 0 on push. */
+  netReturnUnits?: number | null;
   outcomeResult: 'WIN' | 'LOSS' | 'SCRATCH' | 'PENDING' | 'CANCELLED';
   
   // Model Meta & 5-Minute Candle Synchronization
@@ -249,7 +253,8 @@ export interface StrategyDiscoveryMetrics {
   validationScoredTrades: number;
   trainWinRate: number;
   validationWinRate: number;
-  validationExpectedValuePips: number;
+  /** Validation expectancy in stake units per contract at the recorded binary payout. */
+  validationExpectedValueUnits: number;
   validationProfitFactor: number;
 }
 
@@ -266,7 +271,10 @@ export interface StrategyBacktestMetrics {
   testScoredSampleSize: number;
   testWins: number;
   testLosses: number;
-  expectedValuePips: number;
+  /** Historical binary payout used by the backtest (80% conservative floor). */
+  binaryPayoutPct: number;
+  /** Net profit/loss in stake units per contract, after binary settlement. */
+  expectedValueUnits: number;
   profitFactor: number;
   confidenceInterval95: [number, number];
   /** Win rates for the latest three consecutive 100-trade blocks in the untouched test. */
@@ -282,11 +290,16 @@ export interface StrategyPerformanceRecord {
   wins: number;
   losses: number;
   scratches: number;
+  /** Legacy pip fields retained for reading earlier research snapshots; never used for binary approval. */
   netPips: number;
   positivePips: number;
   negativePips: number;
+  /** Binary contract return units accumulated from outcomes collected under the new settlement model. */
+  netReturnUnits?: number;
+  positiveReturnUnits?: number;
+  negativeReturnUnits?: number;
   /** Recent unique completed outcomes used to calculate a rolling 300-trade approval window. */
-  scoredOutcomes?: Array<{ result: 'WIN' | 'LOSS'; netPips: number }>;
+  scoredOutcomes?: Array<{ result: 'WIN' | 'LOSS'; netReturnUnits: number; payoutPct: number }>;
   /** Recent signal IDs prevent the same outcome from being counted more than once. */
   signalIds?: string[];
   updatedAt: string;
@@ -302,6 +315,11 @@ export interface StrategyPaperMetrics {
   winRate: number;
   allTimeWinRate?: number;
   rollingWinRates: number[];
+  /** Binary-option return in stake units over the rolling scored outcomes. */
+  netReturnUnits: number;
+  /** Lowest payout represented in the rolling 300 completed outcomes. */
+  minimumPayoutPct: number;
+  /** Legacy field retained for old clients; not used for strategy approval. */
   netPips: number;
   profitFactor: number;
   confidenceInterval95: [number, number];
