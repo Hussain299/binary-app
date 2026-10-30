@@ -62,6 +62,7 @@ export interface MarketSessionInfo {
   totalTrades: number;
   wins: number;
   losses: number;
+  scratches: number;
   netPips: number;
   bestStrategy: string;
 }
