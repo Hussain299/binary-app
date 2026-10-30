@@ -110,7 +110,7 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
             <div className="col-span-2 md:col-span-4 text-neutral-400">
               {latestBacktest.name} · Test period: {latestBacktest.testPeriod.start} – {latestBacktest.testPeriod.end}
               <br />
-              95% confidence interval: {(latestBacktest.metrics.confidenceInterval95[0] * 100).toFixed(1)}%–{(latestBacktest.metrics.confidenceInterval95[1] * 100).toFixed(1)}%.
+              95% CI for net-positive rate (scored n={latestBacktest.metrics.scoredTradeSampleSize}): {(latestBacktest.metrics.confidenceInterval95[0] * 100).toFixed(1)}%–{(latestBacktest.metrics.confidenceInterval95[1] * 100).toFixed(1)}%.
             </div>
           </div>
         ) : (
