@@ -643,6 +643,7 @@ class DatabaseService {
       gene.accuracyStatus === 'BACKTESTED' &&
       gene.sampleCount >= 300 &&
       metrics.testScoredSampleSize >= 300 &&
+      metrics.trainScoredSampleSize >= 150 &&
       metrics.validationScoredSampleSize >= 150 &&
       metrics.testWinRate >= 0.70 &&
       metrics.validationWinRate >= 0.70 &&
