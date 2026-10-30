@@ -920,7 +920,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   1. Signal Confluence (Strength Score, Not Win Probability)
                 </span>
                 <p>
-                  The current rule-based signal engine combines technical confluences such as trend direction, wick geometry, RSI and range expansion. A larger confluence count is only a signal-strength heuristic; it does not establish a win rate. Performance is calculated separately from genuine historical tests and completed forward trades.
+                  The current rule-based signal engine combines technical confluences such as trend direction, wick geometry, RSI and range expansion. A larger confluence count is only a signal-strength heuristic; it does not establish a win rate. Performance is calculated separately from uploaded historical tests and completed forward paper outcomes.
                 </p>
               </div>
 
@@ -930,7 +930,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   2. Session-Segmented Calibration (Asia / London / Overlap / New York)
                 </span>
                 <p>
-                  Completed forward paper outcomes are grouped by their recorded market session. A session with no completed outcomes shows no win rate; a strategy-specific leader is withheld until at least 20 scored live trades exist.
+                  Completed forward paper outcomes are grouped by their recorded market session. A session with no completed outcomes shows no win rate; a strategy-specific leader is withheld until at least 20 scored forward paper outcomes exist.
                 </p>
               </div>
 
@@ -968,7 +968,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 <div>
                   <div className="text-xs text-neutral-400">Completed forward paper outcomes:</div>
                   <div className="text-2xl font-extrabold text-emerald-400 font-mono">
-                    {closedSignals.length ? `${calculatedWinRate}% forward paper win rate` : 'No completed live trades'}
+                    {closedSignals.length ? `${calculatedWinRate}% forward paper win rate` : 'No completed forward outcomes'}
                   </div>
                 </div>
                 <div className="text-right text-xs text-neutral-300 font-mono">
@@ -1442,7 +1442,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     Candidate Formula Generator
                   </span>
                   <p className="text-[11px] text-neutral-400">
-                    Generates candidate formulas. Validation and promotion require genuine historical out-of-sample evidence.
+                    Generates candidate formulas. Validation and promotion require out-of-sample evidence from uploaded historical candles.
                   </p>
                 </div>
                 <button
