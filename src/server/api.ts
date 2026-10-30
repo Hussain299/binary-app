@@ -132,7 +132,7 @@ apiRouter.get('/signals', (_req: Request, res: Response) => {
   });
 });
 
-// GET /api/sessions/accuracy — Verified performance breakdown by trading session
+// GET /api/sessions/accuracy — Observed forward-outcome breakdown by trading session
 apiRouter.get('/sessions/accuracy', (_req: Request, res: Response) => {
   res.json({
     sessions: db.getSessionAccuracyBreakdown(),
