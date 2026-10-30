@@ -638,8 +638,8 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     if (!gene.operatorParameters) {
       throw new Error('This legacy candidate has no stored executable coefficients. Generate a new candidate before validating it.');
     }
-    if (candles.some(c => c.source === 'synthetic')) {
-      throw new Error('Synthetic candles are prohibited in strategy validation.');
+    if (candles.some(c => c.source === 'synthetic' || c.source === 'test_fixture')) {
+      throw new Error('Synthetic and test-fixture candles are prohibited in strategy validation.');
     }
     const ordered = [...candles].sort((a, b) => a.timestampMs - b.timestampMs);
     for (let i = 1; i < ordered.length; i++) {
