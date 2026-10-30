@@ -909,12 +909,23 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     )) {
       throw new Error('Historical dataset contains invalid OHLC values.');
     }
-    const ordered = [...candles].sort((a, b) => a.timestampMs - b.timestampMs);
-    for (let i = 1; i < ordered.length; i++) {
-      if (ordered[i].timestampMs <= ordered[i - 1].timestampMs) {
-        throw new Error('Historical candles contain duplicate or non-monotonic timestamps.');
+    for (let i = 1; i < candles.length; i++) {
+      if (candles[i].timestampMs <= candles[i - 1].timestampMs) {
+        throw new Error('Historical candles must be strictly chronological with no duplicate timestamps.');
       }
     }
+
+    // IQ Option history exports can contain zero-volume, completely flat
+    // filler rows while the market is closed. Exclude them explicitly and
+    // record the exact count; never interpolate across those periods.
+    const isClosedMarketFiller = (c: Candle) =>
+      c.volume === 0 && c.open === c.high && c.high === c.low && c.low === c.close;
+    const excludedZeroVolumeFlatCandles = candles.filter(isClosedMarketFiller).length;
+    const ordered = candles.filter(c => !isClosedMarketFiller(c));
+    if (ordered.length < MIN_HISTORY) {
+      throw new Error(`Only ${ordered.length.toLocaleString()} usable candles remain after excluding ${excludedZeroVolumeFlatCandles.toLocaleString()} zero-volume flat market-closure rows; require ${MIN_HISTORY.toLocaleString()}.`);
+    }
+
     const minuteSteps = ordered.slice(1).filter((c, i) =>
       Math.abs((c.timestampMs - ordered[i].timestampMs) - 60_000) <= 5_000
     ).length;
@@ -934,9 +945,8 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     const rows: GeneResearchRow[] = [];
     const horizons: StrategyHorizon[] = [5, 10, 15, 20, 25, 30];
 
-    // One causal decision per five-minute slot: exactly three minutes before
-    // the next 5M open. Entry uses that M1 candle's open; expiry uses the M1
-    // candle that closes at the target time (its timestamp is target - 1 minute).
+    // Keep the existing schedule unchanged: predict exactly three minutes
+    // before the next five-minute candle opens, then settle at 5–30 minutes.
     for (let i = 60; i < ordered.length - 40; i++) {
       const candle = ordered[i];
       const decisionTime = candle.timestampMs + ONE_MIN_MS;
@@ -970,11 +980,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       candles: ordered, closes, ema9, ema21, rsi14, rows,
       trainEndMs, validationStartMs, validationEndMs, testStartMs,
       payoutPct: DEFAULT_BINARY_PAYOUT_PERCENT,
-    };
-    return {
-      candles: ordered, closes, ema9, ema21, rsi14, rows,
-      trainEndMs, validationStartMs, validationEndMs, testStartMs,
-      spreadPips: spreadMap[ordered[0].symbol] ?? 1.5,
+      excludedZeroVolumeFlatCandles,
     };
   }
 
@@ -1103,7 +1109,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     else if (validation.winRate < 0.70) failureReason = `Validation win rate ${(validation.winRate * 100).toFixed(1)}% is below 70%.`;
     else if (test.winRate < 0.70) failureReason = `Untouched test win rate ${(test.winRate * 100).toFixed(1)}% is below 70%.`;
     else if (blockRates.length !== 3 || blockRates.some(rate => rate < 0.70)) failureReason = 'One or more consecutive 100-trade test blocks fell below 70%.';
-    else if (test.netPips <= 0 || test.profitFactor < 1.15) failureReason = 'Net return or profit factor failed after modeled spread costs.';
+    else if (test.netReturnUnits <= 0 || test.profitFactor < 1.15) failureReason = 'Binary payout-adjusted return or profit factor failed at the 80% payout assumption.';
     else if (interval[0] < 0.60) failureReason = 'The 95% Wilson lower bound is below 60%.';
 
     const backtestMetrics: StrategyBacktestMetrics = {
@@ -1120,6 +1126,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       testWins: test.wins,
       testLosses: test.losses,
       binaryPayoutPct: test.payoutPct,
+      excludedZeroVolumeFlatCandles: data.excludedZeroVolumeFlatCandles,
       expectedValueUnits: Number(test.expectedValueUnits.toFixed(4)),
       profitFactor: Number(test.profitFactor.toFixed(2)),
       confidenceInterval95: interval,
@@ -1219,8 +1226,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
         validationScoredTrades: validation.scoredTrades,
         trainWinRate: Number(train.winRate.toFixed(4)),
         validationWinRate: Number(validation.winRate.toFixed(4)),
-        validationExpectedValueUnits: Number(validation.expectedValueUnits.toFixed(2)),
+        validationExpectedValueUnits: Number(validation.expectedValueUnits.toFixed(4)),
         validationProfitFactor: Number(validation.profitFactor.toFixed(2)),
+        minimumPayoutPct: data.payoutPct,
       };
       gene.accuracyStatus = 'UNVALIDATED';
       gene.verifiedAccuracy = 0;
