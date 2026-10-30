@@ -115,7 +115,6 @@ apiRouter.post('/analyze', async (req: Request, res: Response) => {
     res.json({
       symbol,
       source: 'historical-import',
-      qualityScore: 100,
       experiment: exp,
       reviews,
     });
