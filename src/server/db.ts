@@ -19,6 +19,7 @@ import {
   AutopilotLog,
   SynthesizedStrategyGene,
   LossAutopsy,
+  StrategyPerformanceRecord,
 } from '../types/index.js';
 import { getSessionFromTimestamp } from './dataFeeds.js';
 
@@ -32,6 +33,7 @@ interface DatabaseSchema {
   autopilotLogs: AutopilotLog[];
   synthesizedStrategies: SynthesizedStrategyGene[];
   lossAutopsies: LossAutopsy[];
+  strategyPerformance: Record<string, StrategyPerformanceRecord>;
   cronState: {
     lastRun: string | null;
     nextRun: string | null;
@@ -66,6 +68,24 @@ class DatabaseService {
         if (!parsed.autopilotLogs) parsed.autopilotLogs = [];
         if (!Array.isArray(parsed.synthesizedStrategies)) parsed.synthesizedStrategies = [];
         if (!Array.isArray(parsed.lossAutopsies)) parsed.lossAutopsies = [];
+        if (!parsed.strategyPerformance || typeof parsed.strategyPerformance !== 'object') parsed.strategyPerformance = {};
+        // Historical versions wrote fabricated strategy accuracy values. Never trust them
+        // without stored untouched-test evidence; quarantine all such legacy candidates.
+        if (Array.isArray(parsed.synthesizedStrategies)) {
+          parsed.synthesizedStrategies = parsed.synthesizedStrategies.map((gene: any) => {
+            if (!gene.backtestMetrics || !gene.accuracyStatus) {
+              return {
+                ...gene,
+                verifiedAccuracy: 0,
+                sampleCount: 0,
+                accuracyStatus: 'UNVALIDATED',
+                backtestMetrics: undefined,
+                status: 'EXPERIMENTING',
+              };
+            }
+            return gene;
+          });
+        }
         if (parsed.synthesizedStrategies.length === 0) {
           parsed.synthesizedStrategies = this.generateSeedSynthesizedGenes();
         }
@@ -168,6 +188,7 @@ class DatabaseService {
       autopilotLogs: [],
       synthesizedStrategies: this.generateSeedSynthesizedGenes(),
       lossAutopsies: [],
+      strategyPerformance: {},
       cronState: {
         lastRun: null,
         nextRun: null,
@@ -190,9 +211,10 @@ class DatabaseService {
         nonLinearOperator: 'tanh_polynomial',
         optimalHorizonMinutes: 10,
         sessionAffinity: 'ALL',
-        verifiedAccuracy: 84.8,
-        sampleCount: 142,
-        status: 'PROMOTED_ACTIVE',
+        verifiedAccuracy: 0,
+        sampleCount: 0,
+        accuracyStatus: 'UNVALIDATED',
+        status: 'EXPERIMENTING',
         scientificHypothesis: 'Non-linear polynomial expansion of rejection wicks against local fractal entropy isolates institutional limit absorptions before directional expansion.',
         whyHumansMissThis: 'Human chartists look for simple hammer candles; this formula computes fractional dimensional entropy divergence across consecutive multi-tick micro-wicks.',
         createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
@@ -208,9 +230,10 @@ class DatabaseService {
         nonLinearOperator: 'exponential_decay',
         optimalHorizonMinutes: 5,
         sessionAffinity: 'LONDON',
-        verifiedAccuracy: 83.2,
-        sampleCount: 198,
-        status: 'PROMOTED_ACTIVE',
+        verifiedAccuracy: 0,
+        sampleCount: 0,
+        accuracyStatus: 'UNVALIDATED',
+        status: 'EXPERIMENTING',
         scientificHypothesis: 'Calculates the second-derivative acceleration of EMA curvature multiplied by logarithmic elasticity, capturing order-flow impulses during European open volume surge.',
         whyHumansMissThis: 'Human traders only see moving averages crossing; they cannot visually compute the second-derivative acceleration or logarithmic elasticity curves.',
         createdAt: new Date(Date.now() - 3600000 * 4).toISOString(),
@@ -226,9 +249,10 @@ class DatabaseService {
         nonLinearOperator: 'fractal_power',
         optimalHorizonMinutes: 15,
         sessionAffinity: 'ASIA',
-        verifiedAccuracy: 86.4,
-        sampleCount: 167,
-        status: 'PROMOTED_ACTIVE',
+        verifiedAccuracy: 0,
+        sampleCount: 0,
+        accuracyStatus: 'UNVALIDATED',
+        status: 'EXPERIMENTING',
         scientificHypothesis: 'Measures continuous drift inflection points along the 20-period moving average with non-linear power-law scaling of price dispersion.',
         whyHumansMissThis: 'Human traders wait for fixed 70/30 RSI lines; this genetic equation detects continuous non-linear drift inflection points 3 candles before traditional indicators react.',
         createdAt: new Date(Date.now() - 3600000 * 3).toISOString(),
@@ -244,9 +268,10 @@ class DatabaseService {
         nonLinearOperator: 'tanh_polynomial',
         optimalHorizonMinutes: 30,
         sessionAffinity: 'OVERLAP',
-        verifiedAccuracy: 87.1,
-        sampleCount: 224,
-        status: 'PROMOTED_ACTIVE',
+        verifiedAccuracy: 0,
+        sampleCount: 0,
+        accuracyStatus: 'UNVALIDATED',
+        status: 'EXPERIMENTING',
         scientificHypothesis: 'Synthesizes cross-pair liquidity flow during peak London/New York overlap, predicting multi-candle macro continuation waves with 30m horizon.',
         whyHumansMissThis: 'Synthesizes multi-session inter-bank liquidity flow with non-linear volume acceleration across multiple currency pairs simultaneously.',
         createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
@@ -262,9 +287,10 @@ class DatabaseService {
         nonLinearOperator: 'harmonic_dispersion',
         optimalHorizonMinutes: 20,
         sessionAffinity: 'ALL',
-        verifiedAccuracy: 85.5,
-        sampleCount: 135,
-        status: 'PROMOTED_ACTIVE',
+        verifiedAccuracy: 0,
+        sampleCount: 0,
+        accuracyStatus: 'UNVALIDATED',
+        status: 'EXPERIMENTING',
         scientificHypothesis: 'Detects invisible multi-period volatility collapse right before energetic directional breakout across 4 consecutive 5M candles.',
         whyHumansMissThis: 'Price appears stagnant/choppy to human eyes, while the mathematical gene measures internal multi-candle tick variance collapsing to critical explosive thresholds.',
         createdAt: new Date(Date.now() - 3600000 * 1).toISOString(),
@@ -303,7 +329,7 @@ class DatabaseService {
 
     // Sort chronologically and keep last 2000 candles per pair
     const sorted = Array.from(existingMap.values()).sort((a, b) => a.timestampMs - b.timestampMs);
-    this.state.candles[symbol] = sorted.slice(-2000);
+    this.state.candles[symbol] = sorted.slice(-5000);
     this.scheduleSave();
   }
 
@@ -426,6 +452,7 @@ class DatabaseService {
 
     const exp: ResearchExperiment = {
       id: `exp_live_${sig.id}`,
+      experimentType: 'LIVE_TRADE',
       generation: this.state.generations.length + 1,
       name: `Live Trade Experiment: ${sig.symbol} ${sig.direction} (${sessionName})`,
       symbol: sig.symbol,
@@ -443,20 +470,20 @@ class DatabaseService {
       featuresUsed: sig.confluenceStrategies || [strategyName],
       metrics: {
         sampleSize: 1,
-        trainAccuracy: 0.75,
-        valAccuracy: 0.72,
+        trainAccuracy: 0,
+        valAccuracy: 0,
         testAccuracy: isWin ? 1.0 : 0.0,
         balancedAccuracy: isWin ? 1.0 : 0.0,
         precision: isWin ? 1.0 : 0.0,
         recall: isWin ? 1.0 : 0.0,
         f1Score: isWin ? 1.0 : 0.0,
-        brierScore: isWin ? 0.04 : 0.64,
-        calibrationError: isWin ? 0.12 : 0.70,
+        brierScore: 0,
+        calibrationError: 0,
         winRate: isWin ? 100 : 0,
         expectedValuePips: netPips,
         profitFactor: isWin ? 2.5 : 0.0,
         maxDrawdownPct: isWin ? 0.0 : 1.5,
-        confidenceInterval95: isWin ? [0.65, 0.95] : [0.20, 0.50],
+        confidenceInterval95: isWin ? [0.207, 1] : [0, 0.793],
         confusionMatrix: {
           tp: isWin && sig.direction === 'BUY' ? 1 : 0,
           fp: !isWin && sig.direction === 'BUY' ? 1 : 0,
@@ -560,7 +587,8 @@ class DatabaseService {
       const wins = sessSignals.filter(s => s.outcomeResult === 'WIN').length;
       const losses = sessSignals.filter(s => s.outcomeResult === 'LOSS').length;
       const netPips = Number(sessSignals.reduce((acc, s) => acc + (s.netReturnPips || 0), 0).toFixed(1));
-      const winRate = total > 0 ? Number(((wins / total) * 100).toFixed(1)) : sess.baselineWinRate;
+      const hasMeasuredData = total > 0;
+      const winRate = hasMeasuredData ? Number(((wins / total) * 100).toFixed(1)) : 0;
 
       // Find best strategy in this session
       const stratMap: Record<string, { wins: number; total: number }> = {};
@@ -588,6 +616,7 @@ class DatabaseService {
         istRange: sess.istRange,
         isActive: currentSession.id === sess.id,
         winRate,
+        hasMeasuredData,
         totalTrades: total,
         wins,
         losses,
@@ -625,7 +654,45 @@ class DatabaseService {
   }
 
   public getPromotedActiveStrategies(): SynthesizedStrategyGene[] {
-    return (this.state.synthesizedStrategies || []).filter(s => s.status === 'PROMOTED_ACTIVE');
+    return (this.state.synthesizedStrategies || []).filter(
+      s => s.status === 'PROMOTED_ACTIVE' &&
+        s.accuracyStatus === 'BACKTESTED' &&
+        !!s.backtestMetrics &&
+        s.sampleCount >= 200
+    );
+  }
+
+  public getSynthesizedStrategyById(id: string): SynthesizedStrategyGene | undefined {
+    return (this.state.synthesizedStrategies || []).find(s => s.id === id);
+  }
+
+  public updateSynthesizedStrategy(gene: SynthesizedStrategyGene): void {
+    if (!this.state.synthesizedStrategies) this.state.synthesizedStrategies = [];
+    const index = this.state.synthesizedStrategies.findIndex(s => s.id === gene.id);
+    if (index >= 0) this.state.synthesizedStrategies[index] = gene;
+    else this.state.synthesizedStrategies.unshift(gene);
+    this.scheduleSave();
+  }
+
+  public recordStrategyOutcome(signal: ResearchSignal): StrategyPerformanceRecord {
+    const strategyId = signal.strategyId || `rule:${signal.ruleFamily}`;
+    if (!this.state.strategyPerformance) this.state.strategyPerformance = {};
+    const existing = this.state.strategyPerformance[strategyId] || {
+      strategyId, trades: 0, wins: 0, losses: 0, scratches: 0, netPips: 0, updatedAt: new Date().toISOString(),
+    };
+    existing.trades += 1;
+    if (signal.outcomeResult === 'WIN') existing.wins += 1;
+    else if (signal.outcomeResult === 'LOSS') existing.losses += 1;
+    else existing.scratches += 1;
+    existing.netPips = Number((existing.netPips + (signal.netReturnPips || 0)).toFixed(1));
+    existing.updatedAt = new Date().toISOString();
+    this.state.strategyPerformance[strategyId] = existing;
+    this.scheduleSave();
+    return { ...existing };
+  }
+
+  public getStrategyPerformance(): StrategyPerformanceRecord[] {
+    return Object.values(this.state.strategyPerformance || {}).sort((a, b) => b.trades - a.trades);
   }
 
   // Autonomous Forensic Loss Autopsies & Self-Learning
