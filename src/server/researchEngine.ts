@@ -326,6 +326,8 @@ export class ResearchEngine {
 
     const metrics: ExperimentMetrics = {
       sampleSize: testTotal,
+      trainSampleSize: trainSet.length,
+      validationSampleSize: valSet.length,
       trainAccuracy,
       valAccuracy,
       testAccuracy,
