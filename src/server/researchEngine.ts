@@ -451,7 +451,7 @@ export class ResearchEngine {
       purgedWindowCandles: purgeSamples * 5,
       scientistHypothesis: `A train-fitted logistic-regression model using ${ruleFamily} features may predict direction at the scheduled ${horizonMinutes}-minute expiry.`,
       scientistDisproofCondition: `Disproven if untouched test directional accuracy is below 52%, or after modeled spread the test EV is not positive and profit factor is below 1.15.`,
-      engineerConfigNotes: `Logistic regression fitted on ${trainSet.length} training opportunities. Feature means/stds fitted on training only. Threshold ${selectedThreshold} tuned on ${validationSet.length} validation opportunities. Each opportunity uses the 3-minute advance alert, scheduled next M5 open and ${horizonMinutes}-minute expiry; modeled pair-specific modeled spread ${modeledSpreadPips} pips.`,
+      engineerConfigNotes: `Logistic regression fitted on ${trainSet.length} training opportunities. Feature means/stds fitted on training only. Threshold ${selectedThreshold} tuned on ${validationSet.length} validation opportunities. Each opportunity uses the 3-minute advance alert, scheduled next M5 open and ${horizonMinutes}-minute expiry; pair-specific modeled spread ${modeledSpreadPips} pips.`,
       auditorVerdict,
       auditorConcerns,
       createdAt: new Date().toISOString(),
@@ -609,11 +609,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     return atr;
   }
 
-  /**
-   * Infinite Evolutionary Strategy Synthesis Engine
-   * Autonomous genetic algorithm that combines multi-dimensional quantitative features,
-   * non-linear polynomial operators, and cross-bred parents into strategies never conceived by humans.
-   */
+  /** Samples a formula candidate and stores its exact executable parameters; this is not validation. */
   /**
    * Replays one executable strategy over chronological, uploaded one-minute candles.
    * Signals are evaluated only on completed candles, entered at the next 5-minute boundary,
@@ -815,6 +811,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     symbol: ForexSymbol,
     generation: number
   ): SynthesizedStrategyGene {
+    // Candidate feature/factor labels are sampled, not learned genetic parents.
     const parentConcepts = [
       'Fractal Volatility Matrix', 'Asymmetric Wick Rejection', 'Microstructure Flow',
       'Logarithmic Liquidity Decay', 'Second-Derivative EMA Curvature',
