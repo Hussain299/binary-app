@@ -269,7 +269,9 @@ export class AutonomousScheduler {
           // Checks if an evolved, multi-dimensional quantitative formula
           // with non-linear polynomial operators triggers on this candle
           // -------------------------------------------------------------
-          const promotedGenes = db.getPaperTradingStrategies();
+          const promotedGenes = db.getPaperTradingStrategies().sort((a, b) =>
+            Number(b.status === 'PROMOTED_ACTIVE') - Number(a.status === 'PROMOTED_ACTIVE')
+          );
           let novelGeneCandidate: {
             gene: typeof promotedGenes[0];
             direction: 'BUY' | 'SELL';
@@ -278,6 +280,9 @@ export class AutonomousScheduler {
           } | null = null;
 
           for (const gene of promotedGenes) {
+            // Forward verification must use the same pair whose historical data
+            // established the candidate's edge; never cross-apply a single-pair model.
+            if (gene.symbol && gene.symbol !== symbol) continue;
             if (gene.sessionAffinity !== 'ALL' && gene.sessionAffinity !== activeSession.id) {
               continue;
             }
@@ -323,7 +328,10 @@ export class AutonomousScheduler {
               synthesizedGeneId: gene.id,
               mathematicalFormula: gene.mathematicalFormula,
               whyHumansMissThis: gene.whyHumansMissThis,
-              notes: `[GENERATED CANDIDATE FORMULA]: ${gene.mathematicalFormula} | Edge: ${gene.whyHumansMissThis}`,
+              paperOnly: gene.status !== 'PROMOTED_ACTIVE',
+              notes: gene.status !== 'PROMOTED_ACTIVE'
+                ? `[PAPER ONLY — NOT APPROVED FOR ACTIONABLE TRADING] Forward validation sample. ${gene.mathematicalFormula}`
+                : `[APPROVED AFTER 300 HISTORICAL + 300 FORWARD OUTCOMES]: ${gene.mathematicalFormula} | Edge: ${gene.whyHumansMissThis}`,
             });
 
             createdSignals.push(signal);
@@ -474,7 +482,8 @@ export class AutonomousScheduler {
               confluenceStrategies: candidate.confluence,
               confluenceScore: candidate.confluenceScore,
               isStackedStrategy: true,
-              notes: `Confluence: [${candidate.confluence.join(' · ')}]. Dynamic ${dynamicExpiry}m expiry strictly on 5M candle open (${activeSession.name}).`,
+              paperOnly: true,
+              notes: `[PAPER ONLY — NOT APPROVED FOR ACTIONABLE TRADING] Confluence: [${candidate.confluence.join(' · ')}]. Dynamic ${dynamicExpiry}m expiry strictly on 5M candle open (${activeSession.name}).`,
             });
 
             createdSignals.push(signal);
@@ -530,36 +539,9 @@ export class AutonomousScheduler {
         }
       }
 
-      // 4b. Continuous Evolutionary Strategy Synthesis (every 2nd pulse)
-      // Autonomously cross-breeds and mutates multi-dimensional non-linear formulas
-      if (this.cycleCount % 2 === 0) {
-        const synthPair: ForexSymbol = FOREX_PAIRS[this.cycleCount % FOREX_PAIRS.length];
-        const synthCandles = candlesMap[synthPair] || [];
-        if (synthCandles.length >= 25) {
-          try {
-            let newGene = researchEngine.synthesizeInfiniteNovelStrategy(
-              synthCandles,
-              synthPair,
-              this.currentGeneration
-            );
-            const importedHistory = historicalDataStore.getCandles(synthPair);
-            if (importedHistory.length >= 10_000) {
-              try {
-                newGene = researchEngine.validateSynthesizedStrategy(newGene, importedHistory);
-              } catch (validationError: any) {
-                this.logMind('AUDITOR', `Candidate ${newGene.code} remains UNVALIDATED: ${validationError.message}`, synthPair);
-              }
-            }
-            this.logMind(
-              'SCIENTIST',
-              `[CANDIDATE SYNTHESIS]: ${newGene.code} (${newGene.name}). Status: ${newGene.status}. ${newGene.accuracyStatus === 'BACKTESTED' ? `Untouched test win rate: ${newGene.verifiedAccuracy}% across ${newGene.sampleCount} trades.` : 'No historical test has been completed yet.'}`,
-              synthPair
-            );
-          } catch (e: any) {
-            // Quiet skip
-          }
-        }
-      }
+      // Symbolic candidates are generated only through the dedicated 300-candidate
+      // historical search API. Do not create random unvalidated genes every live pulse
+      // or repeatedly backtest one candidate against the same imported dataset.
 
       // 5. Generational Evolution Synthesis (every 10 pulses)
       if (this.cycleCount % 10 === 0 && experimentsRun.length > 0) {
