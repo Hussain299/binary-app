@@ -86,12 +86,12 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
             <table className="w-full text-left font-mono text-xs">
               <thead className="bg-neutral-900/80 border-b border-neutral-800 text-neutral-400 uppercase text-[10px]">
                 <tr>
-                  <th className="py-2.5 px-4 font-semibold">Gen / Experiment</th>
+                  <th className="py-2.5 px-4 font-semibold">Type / Experiment</th>
                   <th className="py-2.5 px-4 font-semibold">Pair</th>
                   <th className="py-2.5 px-4 font-semibold">Rule & Horizon</th>
-                  <th className="py-2.5 px-4 font-semibold text-right">Train Acc</th>
-                  <th className="py-2.5 px-4 font-semibold text-right">Val Acc</th>
-                  <th className="py-2.5 px-4 font-semibold text-right">Test Acc</th>
+                  <th className="py-2.5 px-4 font-semibold text-right">Train Dir. Acc</th>
+                  <th className="py-2.5 px-4 font-semibold text-right">Val Dir. Acc</th>
+                  <th className="py-2.5 px-4 font-semibold text-right">Test Dir. Acc</th>
                   <th className="py-2.5 px-4 font-semibold text-right">F1 Score</th>
                   <th className="py-2.5 px-4 font-semibold text-right">Profit Factor</th>
                   <th className="py-2.5 px-4 font-semibold text-center">Auditor Verdict</th>
@@ -99,6 +99,7 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
               </thead>
               <tbody className="divide-y divide-neutral-850 bg-neutral-950">
                 {filtered.map(exp => {
+                  const isForwardObservation = exp.experimentType === 'LIVE_TRADE' || exp.experimentType === 'FORWARD_OBSERVATION';
                   return (
                     <tr
                       key={exp.id}
@@ -106,7 +107,7 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
                       className="hover:bg-neutral-900/60 cursor-pointer transition-colors"
                     >
                       <td className="py-2.5 px-4">
-                        <span className="text-neutral-500">{exp.experimentType === 'LIVE_TRADE' ? 'LIVE' : `G${exp.generation}`}</span> ·{' '}
+                        <span className="text-neutral-500">{exp.experimentType === 'LIVE_TRADE' ? 'FORWARD' : `G${exp.generation}`}</span> ·{' '}
                         <strong className="text-white">{exp.name}</strong>
                       </td>
                       <td className="py-2.5 px-4 text-neutral-300 font-semibold">{exp.symbol}</td>
@@ -157,7 +158,7 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
             <div className="flex justify-between items-center pb-3 border-b border-neutral-800">
               <div>
                 <span className="text-[10px] text-neutral-500 uppercase">
-                  {selectedExp.experimentType === 'LIVE_TRADE' ? 'Single Live Trade Record' : `Experiment Dossier G${selectedExp.generation}`}
+                  {selectedExp.experimentType === 'LIVE_TRADE' ? 'Single Forward Paper Observation' : `Experiment Dossier G${selectedExp.generation}`}
                 </span>
                 <h4 className="text-base font-bold text-white">{selectedExp.name}</h4>
               </div>
@@ -171,8 +172,8 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
 
             {selectedExp.experimentType === 'LIVE_TRADE' && (
               <div className="bg-neutral-950 p-3 rounded border border-neutral-800 space-y-1">
-                <div className="text-white font-semibold">Observed live outcome: {selectedExp.liveOutcome || 'RECORDED'}</div>
-                <div>One completed trade only. This record is not a historical backtest or a strategy win-rate estimate.</div>
+                <div className="text-white font-semibold">Observed forward outcome: {selectedExp.liveOutcome || 'RECORDED'}</div>
+                <div>One completed candle-based paper observation only. This record is not a broker fill, historical backtest or strategy win-rate estimate.</div>
                 <div>Net result: {selectedExp.metrics.expectedValuePips > 0 ? '+' : ''}{selectedExp.metrics.expectedValuePips.toFixed(1)} pips</div>
               </div>
             )}
