@@ -232,6 +232,58 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
+  await runTest('ENTRY_EXIT', 'Missing binary expiry candle is not replaced by a later candle', () => {
+    const baseTime = 1793282400000;
+    const signalCandle: Candle = {
+      symbol: 'EUR/USD',
+      timestamp: new Date(baseTime).toISOString(),
+      timestampMs: baseTime,
+      open: 1.085,
+      high: 1.086,
+      low: 1.084,
+      close: 1.0858,
+      volume: 120,
+      source: 'test_fixture',
+    };
+    const signal = entryExitEngine.createResearchSignal({
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      signalCandle,
+      ruleFamily: `test_missing_expiry_${Date.now()}`,
+      expiryMinutes: 10,
+      confidence: 0.7,
+      modelVersion: 'vTest',
+    });
+    const entryCandle: Candle = {
+      ...signalCandle,
+      timestamp: new Date(baseTime + 60_000).toISOString(),
+      timestampMs: baseTime + 60_000,
+      open: 1.0859,
+      high: 1.0868,
+      low: 1.0855,
+      close: 1.0865,
+    };
+    const laterCandle: Candle = {
+      ...entryCandle,
+      timestamp: new Date(baseTime + 12 * 60_000).toISOString(),
+      timestampMs: baseTime + 12 * 60_000,
+      open: 1.0865,
+      high: 1.0870,
+      low: 1.0860,
+      close: 1.0867,
+    };
+
+    entryExitEngine.evaluateSignals({ 'EUR/USD': [signalCandle, entryCandle] } as any, true);
+    entryExitEngine.evaluateSignals({ 'EUR/USD': [signalCandle, entryCandle, laterCandle] } as any, true);
+    const settled = db.getSignalById(signal.id);
+    if (!settled || settled.lifecycleState !== 'EXPIRED' || settled.outcomeResult !== 'CANCELLED') {
+      throw new Error(`A missing exact expiry candle must expire unscored, got ${settled?.lifecycleState}/${settled?.outcomeResult}.`);
+    }
+    if (settled.netReturnUnits !== null) {
+      throw new Error('A later candle must never be used to fabricate a binary settlement.');
+    }
+  });
+
   await runTest('ENTRY_EXIT', 'Ambiguous Candle Ordering Detection', () => {
     const baseTime = 1793282500000;
     const signalCandle: Candle = {
