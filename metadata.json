@@ -1,0 +1,6 @@
+{
+  "name": "SignalForge ML",
+  "description": "Autonomous Forex Research Intelligence platform with causal execution, multi-feed ingestion, walk-forward ML research trinity, and Cloudflare D1 export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

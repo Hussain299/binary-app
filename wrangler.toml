@@ -1,0 +1,19 @@
+# SignalForge ML — Cloudflare Workers & Pages Deployment Config
+name = "signalforge-api"
+main = "server.ts"
+compatibility_date = "2024-10-01"
+
+# Cloudflare D1 Database Binding
+[[d1_databases]]
+binding = "DB"
+database_name = "signalforge-db"
+database_id = "[CREATE AND RECORD AFTER D1 DATABASE CREATION]"
+migrations_dir = "migrations"
+
+# Cron Trigger for Autonomous Research Laboratory (Hourly)
+[triggers]
+crons = ["0 * * * *"]
+
+[vars]
+ENVIRONMENT = "production"
+DEFAULT_TIMEZONE = "Asia/Kolkata"
