@@ -281,7 +281,7 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
           Number(b.status === 'PAPER_TRADING') - Number(a.status === 'PAPER_TRADING') ||
           Number(!!b.backtestMetrics) - Number(!!a.backtestMetrics) ||
           (b.discoveryMetrics?.validationExpectedValueUnits ?? b.backtestMetrics?.validationWinRate ?? 0) -
-            (a.discoveryMetrics?.validationExpectedValuePips ?? a.backtestMetrics?.validationWinRate ?? 0) ||
+            (a.discoveryMetrics?.validationExpectedValueUnits ?? a.backtestMetrics?.validationWinRate ?? 0) ||
           (b.discoveryMetrics?.validationWinRate ?? 0) - (a.discoveryMetrics?.validationWinRate ?? 0)
         )
         .slice(0, 10)
@@ -293,10 +293,10 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
           testWinRate: gene.backtestMetrics?.testWinRate ?? 0,
           testScoredTrades: gene.backtestMetrics?.testScoredSampleSize ?? 0,
           validationWinRate: gene.discoveryMetrics?.validationWinRate ?? gene.backtestMetrics?.validationWinRate ?? 0,
-          validationExpectedValuePips: gene.discoveryMetrics?.validationExpectedValuePips ?? 0,
-          testExpectedValuePips: gene.backtestMetrics?.expectedValueUnits ?? 0,
+          validationExpectedValueUnits: gene.discoveryMetrics?.validationExpectedValueUnits ?? 0,
+          testExpectedValueUnits: gene.backtestMetrics?.expectedValueUnits ?? 0,
           testedOnHoldout: !!gene.backtestMetrics,
-          expectedValuePips: gene.discoveryMetrics?.validationExpectedValuePips ?? gene.backtestMetrics?.expectedValuePips ?? 0,
+          expectedValuePips: gene.discoveryMetrics?.validationExpectedValueUnits ?? gene.backtestMetrics?.expectedValueUnits ?? 0,
           testBlockWinRates: gene.backtestMetrics?.testBlockWinRates ?? [],
           reason: gene.validationFailureReason,
         }));
