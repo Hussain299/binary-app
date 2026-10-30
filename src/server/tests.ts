@@ -17,7 +17,7 @@ const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
       ...c,
       timestampMs,
       timestamp: new Date(timestampMs).toISOString(),
-      source: 'biquote' as const,
+      source: 'test_fixture' as const,
     };
   });
 
@@ -264,7 +264,7 @@ export async function runAllVerificationTests(): Promise<{
   // ==========================================
   await runTest('ML', 'Purged Walk-Forward Splits & Embargo Verification', () => {
     const candles = makeM1TestCandles('EUR/USD', 4000);
-    const exp = researchEngine.runWalkForwardExperiment('EUR/USD', candles, 'momentum_5', 10, 1);
+    const exp = researchEngine.runWalkForwardExperiment('EUR/USD', candles, 'momentum_5', 10, 1, { allowTestFixtures: true });
 
     if (exp.purgedWindowCandles < 10) {
       throw new Error(`Purged embargo must cover the 10m horizon, got ${exp.purgedWindowCandles} M1 candles.`);
@@ -286,7 +286,7 @@ export async function runAllVerificationTests(): Promise<{
     try {
       researchEngine.runWalkForwardExperiment('EUR/USD', synthetic, 'momentum_5', 10, 1);
     } catch (error: any) {
-      rejected = String(error.message).includes('genuine market candles');
+      rejected = String(error.message).includes('Synthetic and test-fixture candles are not eligible');
     }
     if (!rejected) throw new Error('Synthetic fallback candles were not rejected by the backtest engine.');
   });
@@ -309,7 +309,8 @@ export async function runAllVerificationTests(): Promise<{
       candles,
       'mean_reversion_20',
       5,
-      1
+      1,
+      { allowTestFixtures: true }
     );
 
     if (isNaN(exp.metrics.brierScore) || exp.metrics.brierScore < 0 || exp.metrics.brierScore > 1) {
@@ -322,7 +323,7 @@ export async function runAllVerificationTests(): Promise<{
 
   await runTest('RESEARCH', 'Skeptical Auditor Rejection of Overfitted Candidates', async () => {
     const candles = makeM1TestCandles('EUR/GBP', 4000);
-    const exp = researchEngine.runWalkForwardExperiment('EUR/GBP', candles, 'wick_reversal', 15, 1);
+    const exp = researchEngine.runWalkForwardExperiment('EUR/GBP', candles, 'wick_reversal', 15, 1, { allowTestFixtures: true });
     const reviews = await researchEngine.generateTrinityReviews(exp);
 
     const auditor = reviews.find(r => r.role === 'SKEPTICAL_AUDITOR');
