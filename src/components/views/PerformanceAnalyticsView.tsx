@@ -59,14 +59,14 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
             {completedSignals.length === 0 ? 'No data' : `${totalNetPips >= 0 ? '+' : ''}${totalNetPips.toFixed(1)}`}
           </span>
           <span className="text-[10px] text-neutral-400 block mt-1">
-            {avgNetPips === null ? 'No completed outcomes' : `${avgNetPips > 0 ? '+' : ''}${avgNetPips.toFixed(2)} pips per completed trade`}
+            {avgNetPips === null ? 'No completed outcomes' : `${avgNetPips > 0 ? '+' : ''}${avgNetPips.toFixed(2)} pips per completed forward outcome`}
           </span>
         </div>
 
         <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
           <span className="text-neutral-500 text-[10px] block uppercase">Historical Experiments</span>
           <span className="text-2xl font-bold text-white tabular-nums">{backtests.length}</span>
-          <span className="text-[10px] text-neutral-400 block mt-1">Backtests only · live records excluded</span>
+          <span className="text-[10px] text-neutral-400 block mt-1">Historical backtests only · forward observations excluded</span>
         </div>
 
         <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
@@ -121,7 +121,7 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
       <div className="bg-amber-950/20 border border-amber-900/50 rounded-lg p-4 flex gap-3 text-xs text-neutral-300">
         <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
         <div>
-          <strong className="text-amber-300">Cost-model limitation:</strong> Historical results use configured spread assumptions, not tick-by-tick broker bid/ask quotes, variable slippage or commission. They are research estimates, not guaranteed execution results. Always compare them with the forward outcome ledger.
+          <strong className="text-amber-300">Cost-model limitation:</strong> Historical results use configured spread assumptions, not tick-by-tick broker bid/ask quotes, variable slippage or commission. They are research estimates, not guaranteed execution results. Always compare them with the forward paper outcome ledger.
         </div>
       </div>
 
@@ -130,7 +130,7 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
           <Activity className="w-4 h-4 text-cyan-400" />
           Evidence policy
         </div>
-        Live win rate excludes scratches from the win/loss denominator but includes their net pips in cumulative PnL. Every rate is displayed with its scored sample count; total predictions and scratches are also reported. A single winning trade is never treated as proof that a strategy is validated.
+        Forward paper win rate excludes scratches from the win/loss denominator but includes their net pips in cumulative PnL. Every rate is displayed with its scored sample count; total predictions and scratches are also reported. A single winning trade is never treated as proof that a strategy is validated.
       </div>
     </div>
   );
