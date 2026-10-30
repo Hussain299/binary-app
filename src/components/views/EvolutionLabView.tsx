@@ -10,10 +10,10 @@ interface StrategySearchCandidate {
   testWinRate: number;
   testScoredTrades: number;
   validationWinRate: number;
-  validationExpectedValuePips: number;
-  testExpectedValuePips: number;
+  validationExpectedValueUnits: number;
+  testExpectedValueUnits: number;
   testedOnHoldout: boolean;
-  expectedValuePips: number;
+  expectedValueUnits: number;
   testBlockWinRates: number[];
   reason?: string;
 }
@@ -233,13 +233,13 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
                 <table className="w-full text-left text-[11px]">
                   <thead className="bg-neutral-950 text-neutral-500 uppercase">
                     <tr>
-                      <th className="p-2">Candidate / formula</th>
+                      <th className="p-2">Candidate / expression</th>
                       <th className="p-2">Validation WR</th>
-                      <th className="p-2">Validation EV</th>
+                      <th className="p-2">Validation EV (units/trade)</th>
                       <th className="p-2">Blind test WR</th>
                       <th className="p-2">Test n</th>
                       <th className="p-2">Test blocks</th>
-                      <th className="p-2">Test EV</th>
+                      <th className="p-2">Holdout EV (units/trade)</th>
                       <th className="p-2">Status</th>
                     </tr>
                   </thead>
