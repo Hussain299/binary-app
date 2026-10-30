@@ -173,7 +173,7 @@ export interface ResearchSignal {
   /** Measured historical test win rate only; undefined means not validated. */
   strategyWinRate?: number;
   strategyHistoricalSampleSize?: number;
-  strategyEvidenceStatus?: 'UNVALIDATED' | 'BACKTESTED';
+  strategyEvidenceStatus?: 'UNVALIDATED' | 'INSUFFICIENT_SAMPLE' | 'BACKTESTED';
   strategyId?: string;
   advanceNoticeMinutes?: number;
   candleOpenTimeUtc?: string;
