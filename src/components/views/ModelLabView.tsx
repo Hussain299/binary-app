@@ -23,12 +23,12 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
   const [selectedRule, setSelectedRule] = useState<RuleFamily>('momentum_5');
   const [selectedHorizon, setSelectedHorizon] = useState<number>(10);
   const [isRunning, setIsRunning] = useState<boolean>(false);
-  const [activeExp, setActiveExp] = useState<ResearchExperiment | null>(
-    experiments[0] || null
-  );
+  const [errorMessage, setErrorMessage] = useState<string>('');
+  const [activeExp, setActiveExp] = useState<ResearchExperiment | null>(null);
 
   const handleRunExperiment = async () => {
     setIsRunning(true);
+    setErrorMessage('');
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -39,20 +39,19 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
           horizon: selectedHorizon,
         }),
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        setActiveExp(data.experiment);
-        onExperimentComplete(data.experiment);
-      }
-    } catch (e) {
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Research experiment failed.');
+      setActiveExp(data.experiment);
+      onExperimentComplete(data.experiment);
+    } catch (e: any) {
+      setErrorMessage(e.message || 'Failed to run experiment.');
       console.error('Failed to run experiment:', e);
     } finally {
       setIsRunning(false);
     }
   };
 
-  const exp = activeExp || experiments[0];
+  const exp = activeExp || experiments.find(item => item.experimentType !== 'LIVE_TRADE') || null;
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-y-auto bg-neutral-950 p-6 space-y-6">
@@ -114,12 +113,17 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
         </button>
       </div>
 
+      {errorMessage && (
+        <div className="bg-rose-950/40 border border-rose-800 rounded-lg px-4 py-3 text-xs text-rose-200">
+          {errorMessage}
+        </div>
+      )}
       {exp ? (
         <div className="space-y-6">
           {/* Top Metric Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
             <div className="bg-neutral-900/60 border border-neutral-800 rounded p-3 text-xs font-mono">
-              <span className="text-neutral-500 text-[10px] block">Test Accuracy</span>
+              <span className="text-neutral-500 text-[10px] block">Untouched Test Accuracy · n={exp.metrics.sampleSize}</span>
               <span className="text-lg font-bold text-white tabular-nums">
                 {(exp.metrics.testAccuracy * 100).toFixed(1)}%
               </span>
@@ -163,7 +167,7 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
                 {exp.metrics.profitFactor}
               </span>
               <span className="text-[10px] text-neutral-400 block mt-0.5">
-                After 1.2 pip spread
+                After modeled 1.2 pip spread
               </span>
             </div>
 
@@ -190,19 +194,19 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
             {/* Visual Timeline Bar */}
             <div className="w-full h-8 bg-neutral-950 rounded flex overflow-hidden border border-neutral-800 text-[10px] font-semibold">
               <div className="w-[60%] bg-blue-950/70 border-r border-blue-800 flex items-center justify-center text-blue-300">
-                TRAIN (60%) · {exp.metrics.trainAccuracy * 100}% Acc
+                TRAIN · n={exp.metrics.trainSampleSize} · {(exp.metrics.trainAccuracy * 100).toFixed(1)}%
               </div>
               <div className="w-[5%] bg-neutral-900 border-r border-neutral-700 flex items-center justify-center text-neutral-500">
                 EMBARGO
               </div>
               <div className="w-[17%] bg-amber-950/70 border-r border-amber-800 flex items-center justify-center text-amber-300">
-                VAL (20%) · {exp.metrics.valAccuracy * 100}%
+                VAL · n={exp.metrics.validationSampleSize} · {(exp.metrics.valAccuracy * 100).toFixed(1)}%
               </div>
               <div className="w-[5%] bg-neutral-900 border-r border-neutral-700 flex items-center justify-center text-neutral-500">
                 EMBARGO
               </div>
               <div className="w-[13%] bg-emerald-950/70 flex items-center justify-center text-emerald-300">
-                TEST (20%) · {exp.metrics.testAccuracy * 100}%
+                TEST · n={exp.metrics.sampleSize} · {(exp.metrics.testAccuracy * 100).toFixed(1)}%
               </div>
             </div>
 
