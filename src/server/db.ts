@@ -643,7 +643,8 @@ class DatabaseService {
       metrics.validationWinRate >= 0.70 &&
       metrics.testBlockWinRates?.length === 3 &&
       metrics.testBlockWinRates.every(rate => rate >= 0.70) &&
-      metrics.expectedValuePips > 0 &&
+      metrics.binaryPayoutPct >= 80 &&
+      metrics.expectedValueUnits > 0 &&
       metrics.profitFactor >= 1.15 &&
       metrics.confidenceInterval95[0] >= 0.60;
   }
@@ -657,7 +658,8 @@ class DatabaseService {
       Array.isArray(metrics.rollingWinRates) &&
       metrics.rollingWinRates.length === 3 &&
       metrics.rollingWinRates.every(rate => rate >= 0.70) &&
-      metrics.netPips > 0 &&
+      metrics.minimumPayoutPct >= 80 &&
+      metrics.netReturnUnits > 0 &&
       metrics.profitFactor >= 1.15 &&
       metrics.confidenceInterval95[0] >= 0.60;
   }
@@ -697,42 +699,71 @@ class DatabaseService {
     const existing = this.state.strategyPerformance[strategyId] || {
       strategyId, trades: 0, wins: 0, losses: 0, scratches: 0,
       netPips: 0, positivePips: 0, negativePips: 0,
+      netReturnUnits: 0, positiveReturnUnits: 0, negativeReturnUnits: 0,
+      binaryTrades: 0, binaryWins: 0, binaryLosses: 0, binaryPushes: 0,
+      minimumPayoutPct: 100,
       scoredOutcomes: [], signalIds: [], updatedAt: new Date().toISOString(),
     };
-    existing.scoredOutcomes = Array.isArray(existing.scoredOutcomes) ? existing.scoredOutcomes : [];
+    existing.scoredOutcomes = Array.isArray(existing.scoredOutcomes)
+      ? existing.scoredOutcomes.filter(outcome =>
+          (outcome.result === 'WIN' || outcome.result === 'LOSS') &&
+          Number.isFinite(outcome.netReturnUnits) &&
+          Number.isFinite(outcome.payoutPct)
+        )
+      : [];
     existing.signalIds = Array.isArray(existing.signalIds) ? existing.signalIds : [];
+    existing.binaryTrades = Number.isFinite(existing.binaryTrades) ? existing.binaryTrades! : 0;
+    existing.binaryWins = Number.isFinite(existing.binaryWins) ? existing.binaryWins! : 0;
+    existing.binaryLosses = Number.isFinite(existing.binaryLosses) ? existing.binaryLosses! : 0;
+    existing.binaryPushes = Number.isFinite(existing.binaryPushes) ? existing.binaryPushes! : 0;
+    existing.netReturnUnits = Number.isFinite(existing.netReturnUnits) ? existing.netReturnUnits! : 0;
+    existing.positiveReturnUnits = Number.isFinite(existing.positiveReturnUnits) ? existing.positiveReturnUnits! : 0;
+    existing.negativeReturnUnits = Number.isFinite(existing.negativeReturnUnits) ? existing.negativeReturnUnits! : 0;
+    existing.minimumPayoutPct = Number.isFinite(existing.minimumPayoutPct) ? existing.minimumPayoutPct! : 100;
+
+    // Only settled binary outcomes count. Legacy pip-only observations are not
+    // eligible for the new payout-aware forward approval gate.
+    if (!['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult) ||
+        !Number.isFinite(signal.netReturnUnits) ||
+        !Number.isFinite(signal.payoutPct)) {
+      return { ...existing };
+    }
 
     // A duplicate lifecycle update must never inflate the trade sample.
     if (existing.signalIds.includes(signal.id)) return { ...existing };
     existing.signalIds.push(signal.id);
     if (existing.signalIds.length > 600) existing.signalIds = existing.signalIds.slice(-600);
 
-    if (!Number.isFinite(existing.positivePips)) existing.positivePips = 0;
-    if (!Number.isFinite(existing.negativePips)) existing.negativePips = 0;
+    const payoutPct = signal.payoutPct!;
+    const netUnits = signal.netReturnUnits!;
+    existing.binaryTrades += 1;
     existing.trades += 1;
-    const netPips = signal.netReturnPips ?? 0;
+    existing.minimumPayoutPct = Math.min(existing.minimumPayoutPct, payoutPct);
+    existing.netReturnUnits = Number((existing.netReturnUnits + netUnits).toFixed(4));
     if (signal.outcomeResult === 'WIN') {
+      existing.binaryWins += 1;
       existing.wins += 1;
-      existing.positivePips = Number((existing.positivePips + Math.max(0, netPips)).toFixed(1));
-      existing.scoredOutcomes.push({ result: 'WIN', netPips });
+      existing.positiveReturnUnits = Number((existing.positiveReturnUnits + Math.max(0, netUnits)).toFixed(4));
+      existing.scoredOutcomes.push({ result: 'WIN', netReturnUnits: netUnits, payoutPct });
     } else if (signal.outcomeResult === 'LOSS') {
+      existing.binaryLosses += 1;
       existing.losses += 1;
-      existing.negativePips = Number((existing.negativePips + Math.abs(Math.min(0, netPips))).toFixed(1));
-      existing.scoredOutcomes.push({ result: 'LOSS', netPips });
+      existing.negativeReturnUnits = Number((existing.negativeReturnUnits + Math.abs(Math.min(0, netUnits))).toFixed(4));
+      existing.scoredOutcomes.push({ result: 'LOSS', netReturnUnits: netUnits, payoutPct });
     } else {
+      existing.binaryPushes += 1;
       existing.scratches += 1;
     }
-    // Only the most recent 300 decisive outcomes are needed for the rolling approval test.
+
+    // Store only the newest 300 decisive outcomes for the approval window.
     if (existing.scoredOutcomes.length > 300) {
       existing.scoredOutcomes = existing.scoredOutcomes.slice(-300);
     }
-    existing.netPips = Number((existing.netPips + netPips).toFixed(1));
     existing.updatedAt = new Date().toISOString();
     this.state.strategyPerformance[strategyId] = existing;
 
     const gene = this.getSynthesizedStrategyById(strategyId);
     if (gene && gene.status !== 'REJECTED') {
-      const lifetimeScored = existing.wins + existing.losses;
       const recent = existing.scoredOutcomes;
       const recentWins = recent.filter(outcome => outcome.result === 'WIN').length;
       const recentRate = recent.length ? recentWins / recent.length : 0;
@@ -742,12 +773,12 @@ class DatabaseService {
               .filter(outcome => outcome.result === 'WIN').length / 100
           )
         : [];
-      const recentNetPips = recent.reduce((sum, outcome) => sum + outcome.netPips, 0);
-      const recentPositivePips = recent.reduce((sum, outcome) => sum + Math.max(0, outcome.netPips), 0);
-      const recentNegativePips = recent.reduce((sum, outcome) => sum + Math.abs(Math.min(0, outcome.netPips)), 0);
-      const recentProfitFactor = recentNegativePips > 0
-        ? recentPositivePips / recentNegativePips
-        : (recentPositivePips > 0 ? 99 : 0);
+      const recentNetUnits = recent.reduce((sum, outcome) => sum + outcome.netReturnUnits, 0);
+      const recentPositiveUnits = recent.reduce((sum, outcome) => sum + Math.max(0, outcome.netReturnUnits), 0);
+      const recentNegativeUnits = recent.reduce((sum, outcome) => sum + Math.abs(Math.min(0, outcome.netReturnUnits)), 0);
+      const recentProfitFactor = recentNegativeUnits > 0
+        ? recentPositiveUnits / recentNegativeUnits
+        : (recentPositiveUnits > 0 ? 99 : 0);
       const z = 1.96;
       const n = Math.max(1, recent.length);
       const denominator = 1 + (z * z) / n;
@@ -760,17 +791,19 @@ class DatabaseService {
         Math.max(0, Number((center - margin).toFixed(4))),
         Math.min(1, Number((center + margin).toFixed(4))),
       ];
-      const allTimeRate = lifetimeScored ? existing.wins / lifetimeScored : 0;
+      const lifetimeScored = existing.binaryWins + existing.binaryLosses;
       gene.paperMetrics = {
-        trades: existing.trades,
-        scoredTrades: lifetimeScored,
-        wins: existing.wins,
-        losses: existing.losses,
-        scratches: existing.scratches,
+        trades: existing.binaryTrades,
+        scoredTrades: recent.length,
+        wins: recentWins,
+        losses: recent.length - recentWins,
+        scratches: existing.binaryPushes,
         winRate: Number(recentRate.toFixed(4)),
-        allTimeWinRate: Number(allTimeRate.toFixed(4)),
+        allTimeWinRate: lifetimeScored ? Number((existing.binaryWins / lifetimeScored).toFixed(4)) : 0,
         rollingWinRates: rollingWinRates.map(rate => Number(rate.toFixed(4))),
-        netPips: Number(recentNetPips.toFixed(1)),
+        netReturnUnits: Number(recentNetUnits.toFixed(4)),
+        minimumPayoutPct: existing.minimumPayoutPct,
+        netPips: 0,
         profitFactor: Number(recentProfitFactor.toFixed(2)),
         confidenceInterval95: interval,
       };
@@ -782,7 +815,7 @@ class DatabaseService {
       if (gene.status === 'PAPER_TRADING' && forwardPassed) {
         gene.status = 'PROMOTED_ACTIVE';
       } else if (gene.status === 'PROMOTED_ACTIVE' && !forwardPassed) {
-        // The strategy loses approved status when its latest 300 outcomes no longer qualify.
+        // Approved status is lost when the latest binary 300-outcome window fails.
         gene.status = 'PAPER_TRADING';
       }
       const geneIndex = (this.state.synthesizedStrategies || []).findIndex(item => item.id === gene.id);
