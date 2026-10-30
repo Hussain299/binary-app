@@ -174,7 +174,7 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
               <div className="bg-neutral-950 p-3 rounded border border-neutral-800 space-y-1">
                 <div className="text-white font-semibold">Observed forward paper outcome: {selectedExp.liveOutcome || 'RECORDED'}</div>
                 <div>One completed candle-based paper observation only. This record is not a broker fill, historical backtest or strategy win-rate estimate.</div>
-                <div>Net result: {selectedExp.metrics.expectedValuePips > 0 ? '+' : ''}{selectedExp.metrics.expectedValuePips.toFixed(1)} pips</div>
+                <div>Net result: {(selectedExp.observedNetPips ?? 0) > 0 ? '+' : ''}{(selectedExp.observedNetPips ?? 0).toFixed(1)} pips</div>
               </div>
             )}
             <div>
@@ -210,7 +210,7 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
               </h5>
               <div className="bg-neutral-950 p-3 rounded border border-neutral-800 space-y-1">
                 <div className="font-semibold text-white">
-                  Verdict: <span className={selectedExp.auditorVerdict === 'ACCEPTED' ? 'text-emerald-400' : 'text-rose-400'}>{selectedExp.auditorVerdict}</span>
+                  Verdict: <span className={selectedExp.auditorVerdict === 'ACCEPTED' ? 'text-emerald-400' : selectedExp.auditorVerdict === 'PROVISIONAL' ? 'text-amber-400' : 'text-rose-400'}>{selectedExp.auditorVerdict}</span>
                 </div>
                 {selectedExp.auditorConcerns.map((c, i) => (
                   <div key={i} className="text-rose-300">
