@@ -1,9 +1,7 @@
 /**
- * SignalForge ML — Fully Autonomous Autopilot Engine
- * Operates as an independent AGI-like trading research intelligence:
- * Continuously senses market behavior -> Discovers patterns -> Formulates hypotheses ->
- * Verifies through purged walk-forward splits -> Audits against leakage & spread drag ->
- * Automatically emits and manages timed causal research signals.
+ * SignalForge ML — Scheduled signal and research coordinator.
+ * Collects market candles, manages causal signal lifecycles, validates candidates
+ * on imported history, and records forward paper-trading outcomes.
  */
 
 import {
@@ -24,7 +22,7 @@ import { historicalDataStore } from './historicalData.js';
 export class AutonomousScheduler {
   private isRunningCycle = false;
   private autopilotTimer: NodeJS.Timeout | null = null;
-  private autopilotIntervalMs = 20 * 1000; // Continuous rapid pulse every 20s
+  private autopilotIntervalMs = 20 * 1000; // Poll configured pairs every 20 seconds
   private currentGeneration = 1;
   private cycleCount = 0;
 
@@ -41,7 +39,7 @@ export class AutonomousScheduler {
 
     this.logMind(
       'MIND',
-      'Autonomous Research Intelligence online. Autopilot pulse initiated across 8 forex pairs.'
+      `Research coordinator online. 20-second pulse across ${FOREX_PAIRS.length} configured currency pairs.`
     );
 
     // Initial warm pulse immediately
