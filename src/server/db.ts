@@ -458,6 +458,7 @@ class DatabaseService {
    */
   public recordForwardObservation(sig: ResearchSignal): ResearchExperiment {
     const netPips = sig.netReturnPips ?? 0;
+    const netReturnUnits = sig.netReturnUnits ?? 0;
     const sessionName = sig.marketSessionName || 'Market Session';
     const strategyName = sig.strategyName || 'Algorithmic Strategy';
 
@@ -466,6 +467,8 @@ class DatabaseService {
       experimentType: 'FORWARD_OBSERVATION',
       liveOutcome: sig.outcomeResult === 'CANCELLED' || sig.outcomeResult === 'PENDING' ? 'SCRATCH' : sig.outcomeResult,
       observedNetPips: netPips,
+      observedNetReturnUnits: netReturnUnits,
+      observedPayoutPct: sig.payoutPct ?? 0,
       generation: this.state.generations.length + 1,
       name: `Forward Signal Outcome: ${sig.symbol} ${sig.direction} (${sessionName})`,
       symbol: sig.symbol,
@@ -479,6 +482,8 @@ class DatabaseService {
         marketSession: sig.marketSession || 'ASIA',
         confluenceScore: sig.confluenceScore ?? 0,
         observedNetPips: netPips,
+        observedNetReturnUnits: netReturnUnits,
+        observedPayoutPct: sig.payoutPct ?? 0,
         observedOutcome: sig.outcomeResult,
         isStackedStrategy: sig.isStackedStrategy ? 'true' : 'false',
       },
@@ -517,9 +522,9 @@ class DatabaseService {
         end: sig.actualExitTimeUtc || sig.predictionTimeUtc,
       },
       purgedWindowCandles: 0,
-      scientistHypothesis: `Forward observation for ${strategyName} during ${sessionName}. One trade is recorded as an outcome only; it is not evidence of a repeatable statistical edge.`,
-      scientistDisproofCondition: `No strategy-level conclusion can be drawn from one trade. Recorded outcome: ${sig.outcomeResult}; net result: ${netPips > 0 ? '+' : ''}${netPips} pips.`,
-      engineerConfigNotes: `Feed-based paper entry/exit estimate using ${sig.entrySource || 'market data'}. Entry: ${sig.actualEntryPrice}, Exit: ${sig.actualExitPrice}, Duration: ${sig.expiryMinutes}m; no broker fill is asserted.`,
+      scientistHypothesis: `Forward observation for ${strategyName} during ${sessionName}. One contract outcome is recorded at a binary payout of ${sig.payoutPct ?? 'unknown'}%; it is not evidence of a repeatable statistical edge.`,
+      scientistDisproofCondition: `No strategy-level conclusion can be drawn from one trade. Recorded binary outcome: ${sig.outcomeResult}; net return: ${netReturnUnits.toFixed(2)} stake units at ${sig.payoutPct ?? 'unknown'}% payout.`,
+      engineerConfigNotes: `Candle-based paper settlement using ${sig.entrySource || 'market data'}. Entry: ${sig.actualEntryPrice}, expiry: ${sig.actualExitPrice}, duration: ${sig.expiryMinutes}m, payout: ${sig.payoutPct ?? 'unknown'}% (${sig.payoutSource ?? 'unspecified'}); no broker fill is asserted.`,
       auditorVerdict: 'PROVISIONAL',
       auditorConcerns: ['Single forward trade recorded for outcome tracking only. This observation does not validate or reject a strategy.'],
       createdAt: new Date().toISOString(),
