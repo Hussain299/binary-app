@@ -398,12 +398,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           <span className="font-bold text-neutral-300 uppercase text-[10px] tracking-wider">Session Accuracy:</span>
         </div>
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          {(sessionData.length > 0 ? sessionData : [
-            { id: 'ASIA', shortName: 'Asia', winRate: 74.5, isActive: false, totalTrades: 0 },
-            { id: 'LONDON', shortName: 'London', winRate: 76.8, isActive: false, totalTrades: 0 },
-            { id: 'OVERLAP', shortName: 'Overlap', winRate: 81.2, isActive: true, totalTrades: 0 },
-            { id: 'NEW_YORK', shortName: 'New York', winRate: 75.6, isActive: false, totalTrades: 0 },
-          ]).map(s => (
+          {sessionData.length === 0 ? (
+            <span className="text-neutral-500">No completed session outcomes yet</span>
+          ) : sessionData.map(s => (
             <button
               key={s.id}
               onClick={() => setShowSessionsModal(true)}
@@ -420,7 +417,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 </span>
               )}
               <span>{s.shortName}:</span>
-              <strong className={s.isActive ? 'text-emerald-400' : 'text-neutral-200'}>{s.winRate}%</strong>
+              <strong className={s.isActive ? 'text-emerald-400' : 'text-neutral-200'}>{s.hasMeasuredData ? `${s.winRate}%` : '—'}</strong>
+              <span className="text-[9px] text-neutral-500">n={s.totalTrades}</span>
               {s.isActive && <span className="text-[9px] uppercase px-1 rounded bg-emerald-500/20 text-emerald-400">Live</span>}
             </button>
           ))}
@@ -909,7 +907,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   1. Multi-Strategy Stacking (Eliminating 50% Coin-Flip Setups)
                 </span>
                 <p>
-                  A single technical indicator often yields a 50% random coin-flip. To ensure an authentic statistical edge, the bot <strong>stacks 2 to 4 independent quantitative models</strong> (e.g. Trend Breakout + Liquidity Wick Sweep + RSI Oversold + Volume Flow). Signals only fire when <strong>multiple strategies confirm the exact same direction</strong>, driving accuracy to 78%–92%.
+                  The current rule-based signal engine combines technical confluences such as trend direction, wick geometry, RSI and range expansion. A larger confluence count is only a signal-strength heuristic; it does not establish a win rate. Performance is calculated separately from genuine historical tests and completed forward trades.
                 </p>
               </div>
 
@@ -919,12 +917,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   2. Session-Segmented Calibration (Asia / London / Overlap / New York)
                 </span>
                 <p>
-                  Forex market structure shifts drastically between sessions. The bot tracks live accuracy broken down by:
-                  <strong> Asian Session</strong> (05:30 AM - 12:30 PM IST),
-                  <strong> London Session</strong> (12:30 PM - 05:30 PM IST),
-                  <strong> London / NY Overlap</strong> (05:30 PM - 09:30 PM IST), and
-                  <strong> New York Session</strong> (09:30 PM - 02:30 AM IST).
-                  Strategy selection dynamically adapts to the active session's volatility profile.
+                  Completed real trades are grouped by their recorded market session. A session with no completed outcomes shows no win rate; a strategy-specific leader is withheld until at least 20 scored live trades exist.
                 </p>
               </div>
 
@@ -934,7 +927,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   3. Every Closed Trade is a Real Empirical Experiment
                 </span>
                 <p>
-                  The bot does not just rely on synthetic backtests. When a trade finishes, the engine records an empirical experiment (<code className="text-cyan-300 font-mono text-xs">exp_live_...</code>), updates the online model weights, and calibrates strategy confidence for future trades.
+                  When a trade finishes, its observed result is stored in a per-strategy forward outcome ledger and tagged as a single live-trade record. One trade does not update historical accuracy or qualify a strategy for promotion; performance is reported with its accumulated sample count.
                 </p>
               </div>
 
@@ -954,7 +947,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   5. Infinite Evolutionary Strategy Discovery (Non-Human Equations)
                 </span>
                 <p>
-                  Humans trade visual heuristics that algorithms front-run. The AI Genesis Engine synthesizes <strong>infinite non-linear equations</strong> combining hyperbolic tangents (<code className="text-cyan-300 font-mono text-xs">tanh</code>), second-derivative EMA curvature, and power-law wick elasticity, cross-breeding parent models across generations to discover non-human mathematical edges.
+                  The candidate generator samples operator families and coefficients and stores the exact executable parameters with each formula. Candidate generation alone provides no evidence of an edge; candidates must pass the untouched historical test and subsequent forward observation before promotion.
                 </p>
               </div>
 
@@ -962,7 +955,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 <div>
                   <div className="text-xs text-neutral-400">Observed completed live trades:</div>
                   <div className="text-2xl font-extrabold text-emerald-400 font-mono">
-                    {calculatedWinRate}% Verified Win Rate
+                    {closedSignals.length ? `${calculatedWinRate}% live win rate` : 'No completed live trades'}
                   </div>
                 </div>
                 <div className="text-right text-xs text-neutral-300 font-mono">
