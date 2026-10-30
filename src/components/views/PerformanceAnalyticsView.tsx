@@ -26,7 +26,7 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
   const avgNetPips = completedSignals.length > 0 ? totalNetPips / completedSignals.length : null;
 
   const backtests = experiments
-    .filter(experiment => experiment.experimentType !== 'LIVE_TRADE')
+    .filter(experiment => experiment.experimentType !== 'LIVE_TRADE' && experiment.experimentType !== 'FORWARD_OBSERVATION')
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   const latestBacktest = backtests[0] || null;
 
@@ -38,13 +38,13 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
           <span>Performance Analytics & Evidence</span>
         </h3>
         <p className="text-xs text-neutral-400 font-mono mt-1">
-          Completed forward trades and historical out-of-sample experiments are reported separately.
+          Candle-based forward paper outcomes and historical out-of-sample experiments are reported separately; broker fills are not connected.
         </p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono text-xs">
         <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-          <span className="text-neutral-500 text-[10px] block uppercase">Live Win Rate</span>
+          <span className="text-neutral-500 text-[10px] block uppercase">Forward Signal Win Rate</span>
           <span className="text-2xl font-bold text-emerald-400 tabular-nums">
             {winRate === null ? 'No data' : `${winRate.toFixed(1)}%`}
           </span>
@@ -54,7 +54,7 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
         </div>
 
         <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-          <span className="text-neutral-500 text-[10px] block uppercase">Cumulative Live Net Pips</span>
+          <span className="text-neutral-500 text-[10px] block uppercase">Cumulative Forward Net Pips</span>
           <span className={`text-2xl font-bold tabular-nums ${totalNetPips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
             {completedSignals.length === 0 ? 'No data' : `${totalNetPips >= 0 ? '+' : ''}${totalNetPips.toFixed(1)}`}
           </span>
@@ -90,12 +90,12 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
             <div className="bg-neutral-950 rounded border border-neutral-800 p-3">
               <span className="text-neutral-500 block text-[10px]">Test directional accuracy</span>
               <strong className="text-white text-lg">{(latestBacktest.metrics.testAccuracy * 100).toFixed(1)}%</strong>
-              <span className="text-neutral-500 block">n={latestBacktest.metrics.sampleSize}</span>
+              <span className="text-neutral-500 block">scored n={latestBacktest.metrics.scoredTradeSampleSize} / total n={latestBacktest.metrics.sampleSize}</span>
             </div>
             <div className="bg-neutral-950 rounded border border-neutral-800 p-3">
               <span className="text-neutral-500 block text-[10px]">Net-positive trade rate</span>
               <strong className="text-emerald-300 text-lg">{(latestBacktest.metrics.winRate * 100).toFixed(1)}%</strong>
-              <span className="text-neutral-500 block">After modeled spread</span>
+              <span className="text-neutral-500 block">After modeled spread · scored n={latestBacktest.metrics.scoredTradeSampleSize}</span>
             </div>
             <div className="bg-neutral-950 rounded border border-neutral-800 p-3">
               <span className="text-neutral-500 block text-[10px]">Expected value</span>
@@ -130,7 +130,7 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
           <Activity className="w-4 h-4 text-cyan-400" />
           Evidence policy
         </div>
-        Live win rate excludes scratches from the win/loss denominator but includes their net pips in cumulative PnL. Every rate is displayed with its sample count. A single winning trade is never treated as proof that a strategy is validated.
+        Live win rate excludes scratches from the win/loss denominator but includes their net pips in cumulative PnL. Every rate is displayed with its scored sample count; total predictions and scratches are also reported. A single winning trade is never treated as proof that a strategy is validated.
       </div>
     </div>
   );
