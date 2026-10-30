@@ -19,7 +19,8 @@ const app = express();
 const PORT = 3000;
 const HOST = '0.0.0.0';
 
-app.use(express.json());
+// Historical OHLC imports can be several megabytes; keep an explicit bounded limit.
+app.use(express.json({ limit: '100mb' }));
 
 // API Routes
 app.use('/api', apiRouter);
