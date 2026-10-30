@@ -297,11 +297,31 @@ export async function runAllVerificationTests(): Promise<{
   await runTest('RESEARCH', 'Generated strategy remains unvalidated until historical testing', () => {
     const candles = dataFeedEngine.generateRealisticHistoricalCandles('EUR/USD', 100);
     const gene = researchEngine.synthesizeInfiniteNovelStrategy(candles, 'EUR/USD', 99);
+    if (!gene.genome || gene.genome.version !== 1 || !gene.genome.signature || gene.genome.complexity < 1) {
+      throw new Error('Generated candidate must contain a persisted executable symbolic genome.');
+    }
     if (gene.verifiedAccuracy !== 0 || gene.sampleCount !== 0) {
       throw new Error('New candidate must not contain a fabricated accuracy or sample count.');
     }
     if (gene.status !== 'EXPERIMENTING' || gene.accuracyStatus !== 'UNVALIDATED') {
       throw new Error('New candidate must remain unvalidated and out of the promoted pool.');
+    }
+    const closes = candles.map(candle => candle.close);
+    const evaluated = researchEngine.evaluateSynthesizedGeneSignal(
+      gene,
+      candles[99],
+      candles[98],
+      closes,
+      closes,
+      closes,
+      closes.map(() => 50),
+      99
+    );
+    if (!Number.isFinite(evaluated.conviction) || !['BUY', 'SELL'].includes(evaluated.direction)) {
+      throw new Error('The saved symbolic genome must be executable by the live evaluator.');
+    }
+    if (!evaluated.rationale.includes('Symbolic genome score')) {
+      throw new Error('The candidate was not evaluated through its symbolic genome.');
     }
   });
 
