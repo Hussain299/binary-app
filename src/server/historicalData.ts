@@ -8,7 +8,8 @@ import path from 'path';
 import { Candle, ForexSymbol } from '../types/index.js';
 
 const ROOT = path.resolve(process.cwd(), 'data', 'historical');
-const MAX_CANDLES_PER_PAIR = 500_000;
+const MAX_CANDLES_PER_PAIR = 1_900_000; // Approximately five years of active-session M1 FX candles.
+const MAX_IMPORT_BATCH = 20_000;
 const ALLOWED_SOURCES = new Set(['biquote', 'dukascopy', 'yahoo', 'imported']);
 
 export interface HistoricalImportResult {
@@ -47,8 +48,8 @@ class HistoricalDataStore {
     if (!Array.isArray(input) || input.length === 0) {
       throw new Error('Provide a non-empty candles array.');
     }
-    if (input.length > MAX_CANDLES_PER_PAIR) {
-      throw new Error(`A single import is limited to ${MAX_CANDLES_PER_PAIR.toLocaleString()} candles per pair.`);
+    if (input.length > MAX_IMPORT_BATCH) {
+      throw new Error(`A single import batch is limited to ${MAX_IMPORT_BATCH.toLocaleString()} candles. Uploads are chunked automatically by the UI.`);
     }
 
     const byTime = new Map<number, Candle>();
