@@ -141,7 +141,7 @@ apiRouter.get('/sessions/accuracy', (_req: Request, res: Response) => {
   });
 });
 
-// GET /api/strategies/synthesized — Infinite Non-Human Genetic Strategies Pool
+// GET /api/strategies/synthesized — Candidate, paper-trading and forward-approved strategy pool
 apiRouter.get('/strategies/synthesized', (_req: Request, res: Response) => {
   const all = db.getSynthesizedStrategies();
   const promoted = db.getPromotedActiveStrategies();
@@ -275,7 +275,7 @@ apiRouter.post('/evolution/run', async (_req: Request, res: Response) => {
 apiRouter.get('/evolution/state', (_req: Request, res: Response) => {
   const generations = db.getGenerations();
   const experiments = db.getExperiments();
-  const historicalExperiments = experiments.filter(e => e.experimentType !== 'LIVE_TRADE');
+  const historicalExperiments = experiments.filter(e => e.experimentType !== 'LIVE_TRADE' && e.experimentType !== 'FORWARD_OBSERVATION');
   const accepted = historicalExperiments.filter(e => e.auditorVerdict === 'ACCEPTED');
   const rejected = historicalExperiments.filter(e => e.auditorVerdict === 'REJECTED');
 
@@ -323,8 +323,8 @@ apiRouter.get('/system/health', (_req: Request, res: Response) => {
     dbPath: 'data/signalforge.db.json',
     totalCandlesStored: db.getTotalCandlesCount(),
     activeSignalsCount: db.getActiveSignals().length,
-    totalExperimentsRun: db.getExperiments().filter(e => e.experimentType !== 'LIVE_TRADE').length,
-    totalLiveObservations: db.getExperiments().filter(e => e.experimentType === 'LIVE_TRADE').length,
+    totalExperimentsRun: db.getExperiments().filter(e => e.experimentType !== 'LIVE_TRADE' && e.experimentType !== 'FORWARD_OBSERVATION').length,
+    totalForwardObservations: db.getExperiments().filter(e => e.experimentType === 'LIVE_TRADE' || e.experimentType === 'FORWARD_OBSERVATION').length,
     lastCronRun: cron.lastRun,
     nextCronRun: cron.nextRun,
     isCronRunning: cron.isRunning,
@@ -368,7 +368,7 @@ apiRouter.get('/autopilot/logs', (_req: Request, res: Response) => {
 apiRouter.get('/autopilot/status', (_req: Request, res: Response) => {
   res.json({
     status: 'ACTIVE_AUTOPILOT',
-    mode: 'AUTONOMOUS_AGI_RESEARCH',
+    mode: 'AUTOMATED_SIGNAL_AND_RESEARCH',
     activeSignalsCount: db.getActiveSignals().length,
     totalCandles: db.getTotalCandlesCount(),
     pairsMonitored: FOREX_PAIRS.length,
