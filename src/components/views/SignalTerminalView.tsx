@@ -27,7 +27,7 @@ import {
   Cpu,
   Microscope,
 } from 'lucide-react';
-import { AutopilotLog, MarketSessionInfo, ResearchSignal, SynthesizedStrategyGene, LossAutopsy, FOREX_PAIRS } from '../../types/index.js';
+import { AutopilotLog, MarketSessionInfo, ResearchSignal, SynthesizedStrategyGene, LossAutopsy, FOREX_PAIRS, StrategyPerformanceRecord } from '../../types/index.js';
 import { AutopilotStream } from '../AutopilotStream.tsx';
 
 interface SignalTerminalViewProps {
@@ -55,6 +55,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
   const [sessionData, setSessionData] = useState<MarketSessionInfo[]>([]);
   const [synthesizedStrategies, setSynthesizedStrategies] = useState<SynthesizedStrategyGene[]>([]);
+  const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformanceRecord[]>([]);
   const [isEvolvingStrategy, setIsEvolvingStrategy] = useState<boolean>(false);
   const [historyImportPair, setHistoryImportPair] = useState<string>('EUR/USD');
   const [isImportingHistory, setIsImportingHistory] = useState<boolean>(false);
@@ -94,9 +95,25 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     }
   };
 
+  const fetchStrategyPerformance = async () => {
+    try {
+      const res = await fetch('/api/strategies/performance');
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.strategies) setStrategyPerformance(data.strategies);
+      }
+    } catch (e) {
+      console.warn('Failed to fetch forward strategy performance:', e);
+    }
+  };
+
+  const getForwardPerformance = (strategyId?: string) =>
+    strategyPerformance.find(item => item.strategyId === (strategyId || '')) || null;
+
   useEffect(() => {
     fetchSessions();
     fetchSynthesizedStrategies();
+    fetchStrategyPerformance();
   }, [signals.length]);
 
   const handleEvolveStrategy = async () => {
@@ -793,6 +810,18 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                         </span>
                       </div>
 
+                      {(() => {
+                        const forward = getForwardPerformance(sig.strategyId);
+                        const scoredTrades = forward ? forward.wins + forward.losses : 0;
+                        return (
+                          <div className="text-[10px] font-mono text-neutral-400 pt-1">
+                            Forward results: {forward && forward.trades > 0
+                              ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored trades` : 'No scored outcomes'} · ${forward.scratches} scratches · ${forward.netPips > 0 ? '+' : ''}${forward.netPips.toFixed(1)} net pips`
+                              : 'No completed live trades yet'}
+                          </div>
+                        );
+                      })()}
+
                       {sig.mathematicalFormula && (
                         <div className="mt-1 p-2 rounded-lg bg-cyan-950/40 border border-cyan-800/70 font-mono text-[10px] text-cyan-200 flex items-center justify-between gap-1 overflow-x-auto scrollbar-none">
                           <span className="text-cyan-400 font-bold shrink-0">Equation:</span>
@@ -1124,6 +1153,17 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   {selectedSignal.strategyEvidenceStatus === 'BACKTESTED' && typeof selectedSignal.strategyWinRate === 'number' ? `${selectedSignal.strategyWinRate.toFixed(1)}% Historical test WR · n=${selectedSignal.strategyHistoricalSampleSize || 0}` : 'Historical result not validated'}
                 </span>
               </div>
+              {(() => {
+                const forward = getForwardPerformance(selectedSignal.strategyId);
+                const scoredTrades = forward ? forward.wins + forward.losses : 0;
+                return (
+                  <div className="text-[11px] text-neutral-400 pt-2">
+                    Forward results: {forward && forward.trades > 0
+                      ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored trades` : 'No scored outcomes'} · ${forward.scratches} scratches · ${forward.netPips > 0 ? '+' : ''}${forward.netPips.toFixed(1)} net pips`
+                      : 'No completed live trades yet'}
+                  </div>
+                );
+              })()}
               {selectedSignal.confluenceStrategies && selectedSignal.confluenceStrategies.length > 0 && (
                 <div className="pt-2 border-t border-neutral-850 space-y-1">
                   <span className="text-[10px] text-purple-400 font-bold uppercase block">
@@ -1334,7 +1374,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       <span className={`text-sm font-bold ${sess.netPips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {sess.netPips > 0 ? '+' : ''}{sess.netPips} Pips
                       </span>
-                      <span className="text-[9px] text-neutral-500 block">({sess.wins}W / {sess.losses}L · {sess.totalTrades} trades)</span>
+                      <span className="text-[9px] text-neutral-500 block">({sess.wins}W / {sess.losses}L / {sess.scratches} scratches · {sess.totalTrades} total)</span>
                     </div>
                   </div>
 
