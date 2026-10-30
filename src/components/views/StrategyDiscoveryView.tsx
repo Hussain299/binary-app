@@ -13,9 +13,9 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
     {
       id: 'momentum_5',
       name: '5-Minute Momentum Breakout',
-      rank: '#1 BEST FAST PERFORMER',
-      winRate: '74.8%',
-      accuracyLabel: '74.8% Verified Accuracy',
+      rank: 'CANDIDATE · NOT VALIDATED',
+      winRate: '—',
+      accuracyLabel: 'No verified historical result',
       pairs: 'EUR/USD, GBP/USD, EUR/JPY',
       timeframe: '5-Minute Dynamic Expiry',
       entryRule: 'Alerted 3 minutes in advance. Enters strictly at 5M candle open (:00, :05, :10, :15, etc.).',
@@ -27,9 +27,9 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
     {
       id: 'wick_reversal',
       name: '10-Minute Liquidity Wick Reversal',
-      rank: '#2 HIGH WIN RATE',
-      winRate: '72.4%',
-      accuracyLabel: '72.4% Verified Accuracy',
+      rank: 'CANDIDATE · NOT VALIDATED',
+      winRate: '—',
+      accuracyLabel: 'No verified historical result',
       pairs: 'USD/JPY, AUD/USD, AUD/CAD',
       timeframe: '10-Minute Dynamic Expiry',
       entryRule: 'Alerted 3 minutes in advance. Enters on 5M candle open after liquidity rejection.',
@@ -41,9 +41,9 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
     {
       id: 'mean_reversion_20',
       name: '15-Minute Statistical Mean Reversion',
-      rank: '#3 STABLE ACCURACY',
-      winRate: '76.5%',
-      accuracyLabel: '76.5% Verified Accuracy',
+      rank: 'CANDIDATE · NOT VALIDATED',
+      winRate: '—',
+      accuracyLabel: 'No verified historical result',
       pairs: 'EUR/GBP, USD/CAD',
       timeframe: '15-Minute Dynamic Expiry',
       entryRule: 'Alerted 3 minutes in advance when price stretches >8 pips from 20-period mean.',
@@ -55,9 +55,9 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
     {
       id: 'range_breakout',
       name: '20-to-30 Minute Volatility Breakout',
-      rank: '#4 MACRO TREND',
-      winRate: '78.4%',
-      accuracyLabel: '78.4% Verified Accuracy',
+      rank: 'CANDIDATE · NOT VALIDATED',
+      winRate: '—',
+      accuracyLabel: 'No verified historical result',
       pairs: 'GBP/USD, EUR/JPY, AUD/CAD',
       timeframe: '20m to 30m Dynamic Expiry',
       entryRule: 'Alerted 3 minutes before candle open when multi-candle consolidation breaks.',
@@ -101,10 +101,10 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
       <div className="pb-3 border-b border-neutral-800">
         <h3 className="text-base font-bold text-white flex items-center gap-2">
           <Lightbulb className="w-5 h-5 text-amber-400" />
-          <span>Top 3 Strategies Found by the Machine Learning Bot</span>
+          <span>Strategy Rule Families · Validation Pending</span>
         </h3>
         <p className="text-xs text-neutral-400 mt-1">
-          Backtested on 1,000+ five-minute candles with real broker spread deductions.
+          These are candidate rule families, not measured performance results. Import historical candles and validate before promotion.
         </p>
       </div>
 
@@ -188,7 +188,7 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
         <div className="p-3.5 bg-neutral-950 rounded-xl border border-neutral-800 flex items-center justify-between text-xs font-mono">
           <div className="flex items-center gap-2 text-neutral-300">
             <Shield className="w-4 h-4 text-emerald-400" />
-            <span>Broker Spread Realism:</span>
+            <span>Modeled transaction cost:</span>
           </div>
           <span className="text-emerald-400 font-bold">{current.spreadCost}</span>
         </div>
