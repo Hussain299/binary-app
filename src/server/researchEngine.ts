@@ -242,7 +242,14 @@ export class ResearchEngine {
 
     const isJpy = symbol.includes('JPY');
     const pipFactor = isJpy ? 100 : 10000;
-    const modeledSpreadPips = 1.2;
+    const pairSpreads: Record<string, number> = {
+      'EUR/USD': 1.1, 'GBP/USD': 1.6, 'USD/JPY': 1.2, 'EUR/JPY': 1.8,
+      'AUD/USD': 1.4, 'USD/CAD': 1.7, 'EUR/GBP': 1.2, 'AUD/CAD': 1.8,
+      'AUD/CHF': 1.9, 'AUD/JPY': 1.7, 'AUD/NZD': 2.0, 'EUR/AUD': 1.9,
+      'EUR/CAD': 1.8, 'EUR/CHF': 1.6, 'EUR/NZD': 2.2, 'GBP/AUD': 2.2,
+      'GBP/CAD': 2.0, 'GBP/CHF': 2.1, 'GBP/JPY': 2.0, 'GBP/NZD': 2.4,
+    };
+    const modeledSpreadPips = pairSpreads[symbol] ?? 1.5;
 
     const evaluateSet = (items: typeof dataset, threshold: number) => {
       let trades = 0, correct = 0, tp = 0, fp = 0, tn = 0, fn = 0;
@@ -365,8 +372,8 @@ export class ResearchEngine {
     if (trainAccuracy - valAccuracy > 0.10) {
       auditorConcerns.push(`Training directional accuracy exceeds validation by more than 10 percentage points.`);
     }
-    if (testTotal < 100) {
-      auditorConcerns.push(`Insufficient untouched test trades (${testTotal}); minimum 100 required for acceptance.`);
+    if (scoredTestTrades < 100) {
+      auditorConcerns.push(`Insufficient untouched scored WIN/LOSS outcomes (${scoredTestTrades}); minimum 100 required for acceptance.`);
     }
     if (testAccuracy < 0.52) {
       auditorConcerns.push(`Out-of-sample directional accuracy below 52% (${testAccuracy}).`);
@@ -379,7 +386,7 @@ export class ResearchEngine {
     }
 
     let auditorVerdict: 'ACCEPTED' | 'REJECTED' | 'PROVISIONAL' = 'ACCEPTED';
-    if (auditorConcerns.length >= 2 || testAccuracy < 0.50 || testTotal < 100) {
+    if (auditorConcerns.length >= 2 || testAccuracy < 0.50 || scoredTestTrades < 100) {
       auditorVerdict = 'REJECTED';
     } else if (auditorConcerns.length === 1) {
       auditorVerdict = 'PROVISIONAL';
@@ -444,7 +451,7 @@ export class ResearchEngine {
       purgedWindowCandles: purgeSamples * 5,
       scientistHypothesis: `A train-fitted logistic-regression model using ${ruleFamily} features may predict direction at the scheduled ${horizonMinutes}-minute expiry.`,
       scientistDisproofCondition: `Disproven if untouched test directional accuracy is below 52%, or after modeled spread the test EV is not positive and profit factor is below 1.15.`,
-      engineerConfigNotes: `Logistic regression fitted on ${trainSet.length} training opportunities. Feature means/stds fitted on training only. Threshold ${selectedThreshold} tuned on ${validationSet.length} validation opportunities. Each opportunity uses the 3-minute advance alert, scheduled next M5 open and ${horizonMinutes}-minute expiry; modeled spread ${modeledSpreadPips} pips.`,
+      engineerConfigNotes: `Logistic regression fitted on ${trainSet.length} training opportunities. Feature means/stds fitted on training only. Threshold ${selectedThreshold} tuned on ${validationSet.length} validation opportunities. Each opportunity uses the 3-minute advance alert, scheduled next M5 open and ${horizonMinutes}-minute expiry; modeled pair-specific modeled spread ${modeledSpreadPips} pips.`,
       auditorVerdict,
       auditorConcerns,
       createdAt: new Date().toISOString(),
@@ -454,10 +461,7 @@ export class ResearchEngine {
     return experiment;
   }
 
-  /**
-   * Generates in-depth multi-role reviews from the Scientist, Engineer, and Skeptical Auditor.
-   * If Gemini API key is present, calls gemini-3.8-flash for synthesis; otherwise uses structured analytical engine.
-   */
+  /** Creates deterministic role-based review notes from the recorded metrics and audit flags. */
   public async generateTrinityReviews(exp: ResearchExperiment): Promise<AgentReview[]> {
     const reviews: AgentReview[] = [];
     const nowIso = new Date().toISOString();
