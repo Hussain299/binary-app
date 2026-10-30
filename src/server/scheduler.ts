@@ -280,6 +280,9 @@ export class AutonomousScheduler {
           } | null = null;
 
           for (const gene of promotedGenes) {
+            // Forward verification must use the same pair whose historical data
+            // established the candidate's edge; never cross-apply a single-pair model.
+            if (gene.symbol && gene.symbol !== symbol) continue;
             if (gene.sessionAffinity !== 'ALL' && gene.sessionAffinity !== activeSession.id) {
               continue;
             }
