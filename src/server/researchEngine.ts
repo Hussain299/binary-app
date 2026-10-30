@@ -42,6 +42,7 @@ export class ResearchEngine {
     candle: Candle;
     features: number[];
     labels: Record<number, number>; // horizon -> 1 (UP) or 0 (DOWN)
+    futureMoves: Record<number, number>;
   }> {
     const n = candles.length;
     if (n < 30) return [];
