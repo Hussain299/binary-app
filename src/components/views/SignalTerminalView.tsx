@@ -498,9 +498,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           >
             <Dna className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
             <span className="hidden sm:inline">Candidates</span>
-            <span className="sm:hidden">Genesis</span>
+            <span className="sm:hidden">Candidates</span>
             <span className="px-1.5 py-0.2 rounded bg-cyan-500/20 text-[10px] text-cyan-300 font-mono font-bold">
-              {synthesizedStrategies.filter(s => s.status === 'PROMOTED_ACTIVE').length || 5}
+              {synthesizedStrategies.filter(s => s.status === 'PROMOTED_ACTIVE').length}
             </span>
           </button>
 
@@ -549,7 +549,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   Closed Trades Performance
                 </span>
                 <div className="text-xl sm:text-2xl font-black font-mono text-white">
-                  {closedSignals.length ? `${calculatedWinRate}% Live win rate` : 'No completed live trades'}
+                  {closedSignals.length ? `${calculatedWinRate}% Live win rate` : 'No completed forward outcomes'}
                 </div>
               </div>
             </div>
@@ -768,7 +768,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                                   <strong className="text-amber-400">Lesson:</strong> {sig.lossAutopsy.lessonsLearned[0]}
                                 </div>
                                 <div className="text-cyan-300 truncate">
-                                  <strong className="text-neutral-400">Antidote Strategy:</strong> {sig.lossAutopsy.antidoteStrategyName}
+                                  <strong className="text-neutral-400">Unvalidated Filter Candidate:</strong> {sig.lossAutopsy.antidoteStrategyName}
                                 </div>
                               </div>
                             )}
@@ -966,7 +966,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
               <div className="bg-emerald-950/40 p-3.5 rounded-xl border border-emerald-800/80 flex items-center justify-between">
                 <div>
-                  <div className="text-xs text-neutral-400">Observed completed live trades:</div>
+                  <div className="text-xs text-neutral-400">Completed forward paper outcomes:</div>
                   <div className="text-2xl font-extrabold text-emerald-400 font-mono">
                     {closedSignals.length ? `${calculatedWinRate}% live win rate` : 'No completed live trades'}
                   </div>
@@ -1195,7 +1195,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       NOVEL NON-HUMAN MATHEMATICAL FORMULA
                     </span>
                     <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono text-[9px] font-bold">
-                      Evolved AI Genesis
+                      Evolved Strategy Candidates
                     </span>
                   </div>
                   <div className="p-2.5 rounded-lg bg-cyan-950/40 font-mono text-cyan-200 text-xs border border-cyan-800/70 overflow-x-auto">
@@ -1231,7 +1231,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   </div>
                   <div className="p-3 rounded-xl bg-rose-950/30 border border-rose-900/60 text-xs text-neutral-300 space-y-2">
                     <div>
-                      <strong className="text-rose-300 block mb-1 text-[11px]">Causal Diagnostic Analysis:</strong>
+                      <strong className="text-rose-300 block mb-1 text-[11px]">Rule-based Diagnostic:</strong>
                       <p className="leading-relaxed text-[11px] text-neutral-300">
                         {selectedSignal.lossAutopsy.rootCauseExplanation}
                       </p>
