@@ -245,6 +245,8 @@ export interface StrategyPerformanceRecord {
   losses: number;
   scratches: number;
   netPips: number;
+  positivePips: number;
+  negativePips: number;
   updatedAt: string;
 }
 
@@ -255,6 +257,8 @@ export interface StrategyPaperMetrics {
   scratches: number;
   winRate: number;
   netPips: number;
+  profitFactor: number;
+  confidenceInterval95: [number, number];
 }
 
 export interface SynthesizedStrategyGene {
@@ -280,7 +284,7 @@ export interface SynthesizedStrategyGene {
   backtestMetrics?: StrategyBacktestMetrics;
   paperMetrics?: StrategyPaperMetrics;
   livePerformance?: StrategyPerformanceRecord;
-  status: 'PROMOTED_ACTIVE' | 'EXPERIMENTING' | 'MUTATING';
+  status: 'PROMOTED_ACTIVE' | 'PAPER_TRADING' | 'EXPERIMENTING' | 'MUTATING' | 'REJECTED';
   scientificHypothesis: string;
   whyHumansMissThis: string;
   createdAt: string;
