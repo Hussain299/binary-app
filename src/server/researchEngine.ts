@@ -1148,11 +1148,23 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     candles: Candle[],
     searchBatchId: string,
     baseGeneration: number,
-    onProgress: (progress: { completed: number; passedHistorical: number; insufficientSample: number; rejected: number }) => void
+    onProgress: (progress: {
+      completed: number;
+      passedHistorical: number;
+      insufficientSample: number;
+      rejected: number;
+      replicationFinalists: number;
+    }) => void
   ): Promise<SynthesizedStrategyGene[]> {
     const data = this.prepareGeneResearchData(candles);
-    // Freeze parents before this run. Select parents only with train/validation
-    // evidence; never use the untouched test result to choose or breed descendants.
+    const trainRows = data.rows.filter(row => row.candle.timestampMs < data.trainEndMs);
+    const validationRows = data.rows.filter(row =>
+      row.candle.timestampMs >= data.validationStartMs &&
+      row.candle.timestampMs < data.validationEndMs
+    );
+
+    // Freeze parents before this run. Only train/validation evidence may
+    // influence generation and finalist selection; the final test stays sealed.
     const parentPool = db.getSynthesizedStrategies()
       .filter(gene =>
         !!gene.genome &&
@@ -1164,27 +1176,127 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       .sort((a, b) =>
         (b.backtestMetrics?.validationWinRate ?? 0) - (a.backtestMetrics?.validationWinRate ?? 0)
       ).slice(0, 30);
-    const results: SynthesizedStrategyGene[] = [];
+
+    const candidates: Array<{
+      gene: SynthesizedStrategyGene;
+      trainScoredTrades: number;
+      validationScoredTrades: number;
+      trainWinRate: number;
+      validationWinRate: number;
+      validationExpectedValuePips: number;
+      validationProfitFactor: number;
+    }> = [];
     const signatures = new Set<string>();
-    let passedHistorical = 0, insufficientSample = 0, rejected = 0;
+    let insufficientSample = 0;
+    let rejected = 0;
+
+    // Stage 1: search and rank all 300 expressions on discovery data only.
+    // No candidate is evaluated on the untouched final test in this loop.
     for (let i = 0; i < 300; i++) {
-      let gene = this.synthesizeInfiniteNovelStrategy(candles, symbol, baseGeneration + i, parentPool, searchBatchId, false);
+      let gene = this.synthesizeInfiniteNovelStrategy(
+        candles, symbol, baseGeneration + i, parentPool, searchBatchId, false
+      );
       let attempts = 0;
       while (signatures.has(gene.genome?.signature || '') && attempts < 20) {
-        gene = this.synthesizeInfiniteNovelStrategy(candles, symbol, baseGeneration + 300 + i + attempts, parentPool, searchBatchId, false);
+        gene = this.synthesizeInfiniteNovelStrategy(
+          candles, symbol, baseGeneration + 300 + i + attempts, parentPool, searchBatchId, false
+        );
         attempts++;
       }
       if (gene.genome) signatures.add(gene.genome.signature);
-      const validated = this.validateGeneAgainstPreparedData(gene, data);
-      if (validated.status === 'PAPER_TRADING') passedHistorical++;
-      else if (validated.accuracyStatus === 'INSUFFICIENT_SAMPLE') insufficientSample++;
-      else rejected++;
-      results.push(validated);
-      onProgress({ completed: i + 1, passedHistorical, insufficientSample, rejected });
-      // Yield so the API can expose progress while the CPU-bound candidate tests run.
+
+      const train = this.simulateGeneRows(gene, trainRows, data);
+      const validation = this.simulateGeneRows(gene, validationRows, data);
+      gene.discoveryMetrics = {
+        trainScoredTrades: train.scoredTrades,
+        validationScoredTrades: validation.scoredTrades,
+        trainWinRate: Number(train.winRate.toFixed(4)),
+        validationWinRate: Number(validation.winRate.toFixed(4)),
+        validationExpectedValuePips: Number(validation.expectedValuePips.toFixed(2)),
+        validationProfitFactor: Number(validation.profitFactor.toFixed(2)),
+      };
+      gene.accuracyStatus = 'UNVALIDATED';
+      gene.verifiedAccuracy = 0;
+      gene.sampleCount = 0;
+      gene.status = 'EXPERIMENTING';
+      gene.validationFailureReason = undefined;
+
+      if (train.scoredTrades < 150 || validation.scoredTrades < 150) {
+        insufficientSample++;
+      } else if (validation.expectedValuePips <= 0 || validation.profitFactor < 1.05) {
+        rejected++;
+      }
+
+      db.addSynthesizedStrategy(gene);
+      candidates.push({
+        gene,
+        trainScoredTrades: train.scoredTrades,
+        validationScoredTrades: validation.scoredTrades,
+        trainWinRate: train.winRate,
+        validationWinRate: validation.winRate,
+        validationExpectedValuePips: validation.expectedValuePips,
+        validationProfitFactor: validation.profitFactor,
+      });
+      onProgress({
+        completed: i + 1,
+        passedHistorical: 0,
+        insufficientSample,
+        rejected,
+        replicationFinalists: 0,
+      });
+      // Yield to the API polling loop without opening the holdout test.
       await new Promise<void>(resolve => setTimeout(resolve, 0));
     }
-    return results;
+
+    // Pre-register a small finalist set by validation expectancy. The untouched
+    // test period is exposed only to these finalists, never used to rank all 300.
+    const finalists = candidates
+      .filter(candidate =>
+        candidate.trainScoredTrades >= 150 &&
+        candidate.validationScoredTrades >= 150 &&
+        candidate.validationExpectedValuePips > 0 &&
+        candidate.validationProfitFactor >= 1.05
+      )
+      .sort((a, b) =>
+        b.validationExpectedValuePips - a.validationExpectedValuePips ||
+        b.validationWinRate - a.validationWinRate
+      )
+      .slice(0, 10);
+    const finalistIds = new Set(finalists.map(candidate => candidate.gene.id));
+
+    for (const candidate of candidates) {
+      if (!finalistIds.has(candidate.gene.id)) {
+        const m = candidate.gene.discoveryMetrics!;
+        candidate.gene.validationFailureReason =
+          candidate.trainScoredTrades < 150 || candidate.validationScoredTrades < 150
+            ? `Discovery sample too small (train ${candidate.trainScoredTrades}, validation ${candidate.validationScoredTrades}; require 150 each).`
+            : `Not selected for untouched-test replication: validation EV ${m.validationExpectedValuePips.toFixed(2)} pips, PF ${m.validationProfitFactor.toFixed(2)}.`;
+        db.updateSynthesizedStrategy(candidate.gene);
+      }
+    }
+
+    // Stage 2: open the sealed test only for the preselected validation finalists.
+    let passedHistorical = 0, holdoutInsufficient = 0, holdoutRejected = 0;
+    const resultById = new Map<string, SynthesizedStrategyGene>();
+    for (const finalist of finalists) {
+      const replicated = this.validateGeneAgainstPreparedData(finalist.gene, data);
+      resultById.set(replicated.id, replicated);
+      if (replicated.status === 'PAPER_TRADING') passedHistorical++;
+      else if (replicated.accuracyStatus === 'INSUFFICIENT_SAMPLE') holdoutInsufficient++;
+      else holdoutRejected++;
+      onProgress({
+        completed: 300,
+        passedHistorical,
+        insufficientSample: insufficientSample + holdoutInsufficient,
+        rejected: rejected + holdoutRejected,
+        replicationFinalists: finalists.length,
+      });
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+    }
+
+    return candidates.map(candidate =>
+      resultById.get(candidate.gene.id) || candidate.gene
+    );
   }
 
   /**
