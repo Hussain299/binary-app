@@ -278,6 +278,7 @@ export interface SynthesizedStrategyGene {
   accuracyStatus?: 'UNVALIDATED' | 'BACKTESTED';
   backtestMetrics?: StrategyBacktestMetrics;
   paperMetrics?: StrategyPaperMetrics;
+  livePerformance?: StrategyPerformanceRecord;
   status: 'PROMOTED_ACTIVE' | 'EXPERIMENTING' | 'MUTATING';
   scientificHypothesis: string;
   whyHumansMissThis: string;
