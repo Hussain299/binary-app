@@ -14,6 +14,7 @@ interface StrategySearchCandidate {
   testExpectedValueUnits: number;
   testedOnHoldout: boolean;
   expectedValueUnits: number;
+  minimumPayoutPct: number;
   testBlockWinRates: number[];
   reason?: string;
 }
@@ -269,7 +270,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
               </div>
             )}
             <p className="text-[10px] text-neutral-500">
-              All 300 candidates are ranked without touching the final holdout. Only up to 10 preselected validation finalists are replayed on the untouched holdout. A historical pass still needs a separate 300-outcome forward paper run before approved alerts. Forward paper outcomes are candle-based observations, not broker fills.
+              All 300 candidates are ranked on train/validation only. Up to 10 preselected finalists are replayed on the untouched holdout. Binary results assume an 80% payout unless broker payout is recorded. A historical pass still needs 300 forward paper outcomes. Paper outcomes use candle prices, not broker fills.
             </p>
           </div>
         )}
