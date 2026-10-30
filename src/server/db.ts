@@ -510,10 +510,8 @@ class DatabaseService {
       scientistHypothesis: `Live hypothesis: ${strategyName} ${sig.isStackedStrategy ? '(Stacked Confluence)' : ''} maintains statistical alpha during ${sessionName}.`,
       scientistDisproofCondition: `Disproved if net spread-adjusted pips fall below -0.5 pips. Observed: ${netPips > 0 ? '+' : ''}${netPips} pips.`,
       engineerConfigNotes: `Execution verified on ${sig.entrySource || 'feed'}. Entry: ${sig.actualEntryPrice}, Exit: ${sig.actualExitPrice}, Duration: ${sig.expiryMinutes}m.`,
-      auditorVerdict: isWin ? 'ACCEPTED' : 'REJECTED',
-      auditorConcerns: isWin
-        ? ['Trade passed positive expectancy hurdle. Alpha retained.']
-        : ['Adverse excursion breached target horizon. Strategy requires additional confluence stacking before re-arming.'],
+      auditorVerdict: 'PROVISIONAL',
+      auditorConcerns: ['Single forward trade recorded for outcome tracking only. This observation does not validate or reject a strategy.'],
       createdAt: new Date().toISOString(),
     };
 
