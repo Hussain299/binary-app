@@ -215,8 +215,8 @@ class DatabaseService {
         sampleCount: 0,
         accuracyStatus: 'UNVALIDATED',
         status: 'EXPERIMENTING',
-        scientificHypothesis: 'Non-linear polynomial expansion of rejection wicks against local fractal entropy isolates institutional limit absorptions before directional expansion.',
-        whyHumansMissThis: 'Human chartists look for simple hammer candles; this formula computes fractional dimensional entropy divergence across consecutive multi-tick micro-wicks.',
+        scientificHypothesis: 'Candidate hypothesis: non-linear rejection-wick features combined with local price variation may help identify short-term directional changes.',
+        whyHumansMissThis: 'Candidate design rationale: combine wick shape with recent price variation; performance must be established by historical and forward testing.',
         createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
       },
       {
@@ -234,8 +234,8 @@ class DatabaseService {
         sampleCount: 0,
         accuracyStatus: 'UNVALIDATED',
         status: 'EXPERIMENTING',
-        scientificHypothesis: 'Calculates the second-derivative acceleration of EMA curvature multiplied by logarithmic elasticity, capturing order-flow impulses during European open volume surge.',
-        whyHumansMissThis: 'Human traders only see moving averages crossing; they cannot visually compute the second-derivative acceleration or logarithmic elasticity curves.',
+        scientificHypothesis: 'Candidate hypothesis: EMA curvature and volatility changes may help identify directional movement during the London session.',
+        whyHumansMissThis: 'Candidate design rationale: combine moving-average curvature with volatility changes; no advantage is assumed before testing.',
         createdAt: new Date(Date.now() - 3600000 * 4).toISOString(),
       },
       {
@@ -253,8 +253,8 @@ class DatabaseService {
         sampleCount: 0,
         accuracyStatus: 'UNVALIDATED',
         status: 'EXPERIMENTING',
-        scientificHypothesis: 'Measures continuous drift inflection points along the 20-period moving average with non-linear power-law scaling of price dispersion.',
-        whyHumansMissThis: 'Human traders wait for fixed 70/30 RSI lines; this genetic equation detects continuous non-linear drift inflection points 3 candles before traditional indicators react.',
+        scientificHypothesis: 'Candidate hypothesis: changes in price dispersion around a 20-period moving average may help identify short-term drift changes.',
+        whyHumansMissThis: 'Candidate design rationale: measure gradual changes in drift rather than relying only on fixed RSI levels; no early-detection advantage is assumed.',
         createdAt: new Date(Date.now() - 3600000 * 3).toISOString(),
       },
       {
@@ -272,8 +272,8 @@ class DatabaseService {
         sampleCount: 0,
         accuracyStatus: 'UNVALIDATED',
         status: 'EXPERIMENTING',
-        scientificHypothesis: 'Synthesizes cross-pair liquidity flow during peak London/New York overlap, predicting multi-candle macro continuation waves with 30m horizon.',
-        whyHumansMissThis: 'Synthesizes multi-session inter-bank liquidity flow with non-linear volume acceleration across multiple currency pairs simultaneously.',
+        scientificHypothesis: 'Candidate hypothesis: volatility and price movement during the London/New York overlap may contain useful information for a longer-horizon continuation setup.',
+        whyHumansMissThis: 'Candidate design rationale: combine session timing and volatility features; this candidate does not measure inter-bank order flow.',
         createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
       },
       {
@@ -291,8 +291,8 @@ class DatabaseService {
         sampleCount: 0,
         accuracyStatus: 'UNVALIDATED',
         status: 'EXPERIMENTING',
-        scientificHypothesis: 'Detects invisible multi-period volatility collapse right before energetic directional breakout across 4 consecutive 5M candles.',
-        whyHumansMissThis: 'Price appears stagnant/choppy to human eyes, while the mathematical gene measures internal multi-candle tick variance collapsing to critical explosive thresholds.',
+        scientificHypothesis: 'Candidate hypothesis: a contraction in recent volatility may precede a larger directional move.',
+        whyHumansMissThis: 'Candidate design rationale: measure changes in recent candle ranges; the existence and size of any edge must be validated.',
         createdAt: new Date(Date.now() - 3600000 * 1).toISOString(),
       },
     ];
@@ -518,7 +518,7 @@ class DatabaseService {
   }
 
   /**
-   * Computes verified performance breakdown across all 4 market sessions
+   * Computes observed forward-outcome breakdown across all 4 market sessions
    * (Asia, London, Overlap, New York).
    */
   public getSessionAccuracyBreakdown(): MarketSessionInfo[] {
