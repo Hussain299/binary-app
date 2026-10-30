@@ -27,7 +27,7 @@ import {
   Cpu,
   Microscope,
 } from 'lucide-react';
-import { AutopilotLog, MarketSessionInfo, ResearchSignal, SynthesizedStrategyGene, LossAutopsy } from '../../types/index.js';
+import { AutopilotLog, MarketSessionInfo, ResearchSignal, SynthesizedStrategyGene, LossAutopsy, FOREX_PAIRS } from '../../types/index.js';
 import { AutopilotStream } from '../AutopilotStream.tsx';
 
 interface SignalTerminalViewProps {
@@ -56,6 +56,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const [sessionData, setSessionData] = useState<MarketSessionInfo[]>([]);
   const [synthesizedStrategies, setSynthesizedStrategies] = useState<SynthesizedStrategyGene[]>([]);
   const [isEvolvingStrategy, setIsEvolvingStrategy] = useState<boolean>(false);
+  const [historyImportPair, setHistoryImportPair] = useState<string>('EUR/USD');
+  const [isImportingHistory, setIsImportingHistory] = useState<boolean>(false);
+  const [historyImportMessage, setHistoryImportMessage] = useState<string>('');
+  const [validatingGeneId, setValidatingGeneId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState<number>(Date.now());
 
   // Real-time 1-second ticking timer for candle countdowns
@@ -111,6 +115,106 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     }
   };
 
+  const parseCsvLine = (line: string): string[] => {
+    const cells: string[] = [];
+    let value = '';
+    let quoted = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"' && line[i + 1] === '"' && quoted) { value += '"'; i++; }
+      else if (ch === '"') quoted = !quoted;
+      else if (ch === ',' && !quoted) { cells.push(value.trim()); value = ''; }
+      else value += ch;
+    }
+    cells.push(value.trim());
+    return cells;
+  };
+
+  const handleImportHistoricalFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setIsImportingHistory(true);
+    setHistoryImportMessage('');
+    try {
+      const rawText = await file.text();
+      let candles: any[] = [];
+      if (file.name.toLowerCase().endsWith('.json')) {
+        const parsed = JSON.parse(rawText);
+        candles = Array.isArray(parsed) ? parsed : (parsed.candles || parsed.data || []);
+      } else {
+        const lines = rawText.split(/\r?\n/).filter(line => line.trim().length > 0);
+        if (lines.length < 2) throw new Error('CSV must include a header row and at least one candle.');
+        const headers = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase().replace(/[ _-]/g, ''));
+        const indexOf = (...names: string[]) => headers.findIndex(h => names.includes(h));
+        const timeIndex = indexOf('timestamp', 'time', 'date', 'datetime', 'gmttime', 'timestampms');
+        const openIndex = indexOf('open', 'o');
+        const highIndex = indexOf('high', 'h');
+        const lowIndex = indexOf('low', 'l');
+        const closeIndex = indexOf('close', 'c');
+        const volumeIndex = indexOf('volume', 'vol', 'v');
+        if ([timeIndex, openIndex, highIndex, lowIndex, closeIndex].some(i => i < 0)) {
+          throw new Error('CSV headers must contain timestamp/time, open, high, low and close columns.');
+        }
+        candles = lines.slice(1).map(line => {
+          const cells = parseCsvLine(line);
+          return {
+            timestamp: cells[timeIndex],
+            open: Number(cells[openIndex]),
+            high: Number(cells[highIndex]),
+            low: Number(cells[lowIndex]),
+            close: Number(cells[closeIndex]),
+            volume: volumeIndex >= 0 ? Number(cells[volumeIndex]) : 0,
+          };
+        });
+      }
+      if (!candles.length) throw new Error('No candle rows were found in the selected file.');
+      const res = await fetch('/api/research/candles/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: historyImportPair, candles }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Historical import failed.');
+      setHistoryImportMessage(
+        `Imported ${data.result.imported.toLocaleString()} valid candles for ${historyImportPair}. Stored total: ${data.result.totalStored.toLocaleString()}. Rejected rows: ${data.result.rejected}.`
+      );
+    } catch (error: any) {
+      setHistoryImportMessage(error.message || 'Could not import historical candles.');
+    } finally {
+      setIsImportingHistory(false);
+      event.target.value = '';
+    }
+  };
+
+  const handleValidateGene = async (geneId: string, symbol?: string) => {
+    setValidatingGeneId(geneId);
+    setHistoryImportMessage('');
+    try {
+      const res = await fetch('/api/strategies/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ geneId, symbol: symbol || historyImportPair }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Strategy validation failed.');
+      await fetchSynthesizedStrategies();
+      setHistoryImportMessage(
+        `${data.gene.name}: untouched-test win rate ${data.gene.verifiedAccuracy}% from ${data.gene.sampleCount} trades. Status: ${data.gene.status}.`
+      );
+    } catch (error: any) {
+      setHistoryImportMessage(error.message || 'Strategy validation failed.');
+    } finally {
+      setValidatingGeneId(null);
+    }
+  };
+
+  const validatedGenes = synthesizedStrategies.filter(
+    gene => gene.accuracyStatus === 'BACKTESTED' && !!gene.backtestMetrics
+  );
+  const averageTestWinRate = validatedGenes.length
+    ? (validatedGenes.reduce((sum, gene) => sum + (gene.backtestMetrics?.testWinRate || 0), 0) / validatedGenes.length * 100).toFixed(1)
+    : null;
+
   // 5-Minute Candle Synchronization
   const FIVE_MIN_MS = 5 * 60 * 1000;
   const current5mOpenMs = Math.floor(nowMs / FIVE_MIN_MS) * FIVE_MIN_MS;
@@ -158,7 +262,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const calculatedWinRate =
     closedSignals.length > 0
       ? ((totalWins / closedSignals.length) * 100).toFixed(1)
-      : '76.5';
+      : 'No verified outcomes';
   const totalNetPips = Number(
     closedSignals.reduce((acc, s) => acc + (s.netReturnPips || 0), 0).toFixed(1)
   );
@@ -1188,12 +1292,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {(sessionData.length > 0 ? sessionData : [
-                { id: 'ASIA', name: 'Asian Session (Tokyo/Sydney)', shortName: 'Asia', utcRange: '00:00 - 07:00 UTC', istRange: '05:30 AM - 12:30 PM IST', winRate: 74.5, totalTrades: 0, wins: 0, losses: 0, netPips: 0, bestStrategy: '15-Min Mean Reversion + RSI Extreme', isActive: false },
-                { id: 'LONDON', name: 'London Session (European Open)', shortName: 'London', utcRange: '07:00 - 12:00 UTC', istRange: '12:30 PM - 05:30 PM IST', winRate: 76.8, totalTrades: 0, wins: 0, losses: 0, netPips: 0, bestStrategy: '5-Min Momentum Breakout + EMA Cross', isActive: false },
-                { id: 'OVERLAP', name: 'London / New York Overlap (Peak Volatility)', shortName: 'Overlap', utcRange: '12:00 - 16:00 UTC', istRange: '05:30 PM - 09:30 PM IST', winRate: 81.2, totalTrades: 0, wins: 0, losses: 0, netPips: 0, bestStrategy: '10-Min Liquidity Wick Reversal + Squeeze', isActive: true },
-                { id: 'NEW_YORK', name: 'New York Session (US Afternoon)', shortName: 'New York', utcRange: '16:00 - 21:00 UTC', istRange: '09:30 PM - 02:30 AM IST', winRate: 75.6, totalTrades: 0, wins: 0, losses: 0, netPips: 0, bestStrategy: '20-Min Volatility Range Breakout', isActive: false },
-              ]).map(sess => (
+              {sessionData.map(sess => (
                 <div
                   key={sess.id}
                   className={`p-3.5 rounded-xl border flex flex-col justify-between space-y-2.5 ${
@@ -1224,14 +1323,14 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   <div className="grid grid-cols-2 gap-2 pt-2 border-t border-neutral-800/80 text-xs font-mono">
                     <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
                       <span className="text-[10px] text-neutral-400 block uppercase">Win Rate</span>
-                      <span className="text-base font-extrabold text-emerald-400">{sess.winRate}%</span>
+                      <span className="text-base font-extrabold text-emerald-400">{sess.hasMeasuredData ? `${sess.winRate}%` : "No data"}</span>
                     </div>
                     <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
                       <span className="text-[10px] text-neutral-400 block uppercase">Verified PnL</span>
                       <span className={`text-sm font-bold ${sess.netPips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {sess.netPips > 0 ? '+' : ''}{sess.netPips} Pips
                       </span>
-                      <span className="text-[9px] text-neutral-500 block">({sess.wins}W / {sess.losses}L)</span>
+                      <span className="text-[9px] text-neutral-500 block">({sess.wins}W / {sess.losses}L · {sess.totalTrades} trades)</span>
                     </div>
                   </div>
 
@@ -1292,7 +1391,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     Autonomous Genetic Engine
                   </span>
                   <p className="text-[11px] text-neutral-400">
-                    Mutates, tests, and promotes non-human formulas into live 5-minute trade execution
+                    Generates candidate formulas. Validation and promotion require genuine historical out-of-sample evidence.
                   </p>
                 </div>
                 <button
@@ -1321,12 +1420,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
                   <span className="text-[10px] text-neutral-400 block uppercase">Verified Edge</span>
                   <span className="text-sm font-extrabold text-emerald-400">
-                    {synthesizedStrategies.length > 0
-                      ? (
-                          synthesizedStrategies.reduce((a, b) => a + b.verifiedAccuracy, 0) /
-                          synthesizedStrategies.length
-                        ).toFixed(1)
-                      : '83.8'}% Acc
+                    {averageTestWinRate ? `${averageTestWinRate}% test WR` : 'No validated results'}
                   </span>
                 </div>
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
@@ -1336,6 +1430,27 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   </span>
                 </div>
               </div>
+            </div>
+
+            <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-4 space-y-3">
+              <div>
+                <h4 className="text-sm font-bold text-white">Import genuine historical candles</h4>
+                <p className="text-[11px] text-neutral-400 mt-1">Upload a 1-minute CSV or JSON dataset. At least 10,000 valid real candles are required for strategy validation; synthetic fallback data is rejected.</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={historyImportPair}
+                  onChange={e => setHistoryImportPair(e.target.value)}
+                  className="bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-xs text-white"
+                >
+                  {FOREX_PAIRS.map(pair => <option key={pair} value={pair}>{pair}</option>)}
+                </select>
+                <label className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs text-white cursor-pointer">
+                  {isImportingHistory ? 'Importing…' : 'Choose CSV / JSON'}
+                  <input type="file" accept=".csv,.json,application/json,text/csv" className="hidden" disabled={isImportingHistory} onChange={handleImportHistoricalFile} />
+                </label>
+              </div>
+              {historyImportMessage && <p className="text-[11px] text-cyan-200 break-words">{historyImportMessage}</p>}
             </div>
 
             {/* WHY NON-HUMAN FORMULAS BEAT 50% COIN-FLIPS */}
@@ -1356,7 +1471,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 <span className="uppercase font-bold tracking-wider">
                   Active Synthesized Genetic Pool ({synthesizedStrategies.length})
                 </span>
-                <span className="text-[11px] text-emerald-400">Promoted &gt;75% Win Rate</span>
+                <span className="text-[11px] text-neutral-400">Promotion requires untouched-test evidence</span>
               </div>
 
               {synthesizedStrategies.map((gene, idx) => {
@@ -1396,7 +1511,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                           </span>
                         )}
                         <span className="px-2.5 py-0.5 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-800/80 text-xs font-mono font-black">
-                          {gene.verifiedAccuracy}% Win Rate
+                          {gene.backtestMetrics ? `${gene.backtestMetrics.testWinRate * 100}% Test WR · n=${gene.sampleCount}` : 'UNVALIDATED'}
                         </span>
                       </div>
                     </div>
@@ -1413,6 +1528,30 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                         {gene.mathematicalFormula}
                       </div>
                     </div>
+
+                    {gene.backtestMetrics && (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono bg-neutral-900/60 border border-neutral-800 rounded-lg p-3">
+                        <div><span className="text-neutral-500 block">Train · n={gene.backtestMetrics.trainSampleSize}</span><strong className="text-neutral-200">{(gene.backtestMetrics.trainWinRate * 100).toFixed(1)}%</strong></div>
+                        <div><span className="text-neutral-500 block">Validation · n={gene.backtestMetrics.validationSampleSize}</span><strong className="text-neutral-200">{(gene.backtestMetrics.validationWinRate * 100).toFixed(1)}%</strong></div>
+                        <div><span className="text-neutral-500 block">Untouched test · n={gene.backtestMetrics.testSampleSize}</span><strong className="text-emerald-300">{(gene.backtestMetrics.testWinRate * 100).toFixed(1)}%</strong></div>
+                        <div><span className="text-neutral-500 block">EV / Profit factor</span><strong className="text-neutral-200">{gene.backtestMetrics.expectedValuePips.toFixed(2)} pips · {gene.backtestMetrics.profitFactor.toFixed(2)}</strong></div>
+                        <div className="col-span-2 sm:col-span-4 text-neutral-500">95% Wilson interval: {(gene.backtestMetrics.confidenceInterval95[0] * 100).toFixed(1)}%–{(gene.backtestMetrics.confidenceInterval95[1] * 100).toFixed(1)}%</div>
+                      </div>
+                    )}
+                    {gene.livePerformance && (
+                      <div className="text-[11px] font-mono text-neutral-300 bg-neutral-900/60 border border-neutral-800 rounded-lg p-3">
+                        Forward results: {gene.livePerformance.wins}W / {gene.livePerformance.losses}L / {gene.livePerformance.scratches} scratches · {gene.livePerformance.trades} completed trades · {gene.livePerformance.netPips > 0 ? '+' : ''}{gene.livePerformance.netPips.toFixed(1)} net pips
+                      </div>
+                    )}
+                    {gene.accuracyStatus !== 'BACKTESTED' && (
+                      <button
+                        onClick={() => handleValidateGene(gene.id, gene.symbol)}
+                        disabled={validatingGeneId === gene.id}
+                        className="px-3 py-2 rounded-lg bg-cyan-900/60 border border-cyan-700 text-cyan-200 text-[11px] font-semibold disabled:opacity-50"
+                      >
+                        {validatingGeneId === gene.id ? 'Validating against imported history…' : `Validate against ${gene.symbol || historyImportPair} history`}
+                      </button>
+                    )}
 
                     {/* Parents & Lineage */}
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
