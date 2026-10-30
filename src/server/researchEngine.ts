@@ -304,7 +304,7 @@ export class ResearchEngine {
         calibrationError: calibrationErrorSum / Math.max(1, items.length),
         winRate: wins / Math.max(1, scoredTrades),
         expectedValuePips: totalPips / denominator,
-        profitFactor: positivePips / Math.max(0.01, negativePips),
+        profitFactor: negativePips > 0 ? positivePips / negativePips : (positivePips > 0 ? 99 : 0),
         totalPips,
         maxDrawdown,
         positivePips,
@@ -369,9 +369,7 @@ export class ResearchEngine {
     const winRate = Number(testMetrics.winRate.toFixed(3));
     const profitFactor = Number(testMetrics.profitFactor.toFixed(2));
     const totalPips = testMetrics.totalPips;
-    const maxDrawdownPct = Number(
-      ((testMetrics.maxDrawdown / Math.max(50, Math.abs(testMetrics.totalPips) + 50)) * 100).toFixed(1)
-    );
+    const maxDrawdownPips = Number(testMetrics.maxDrawdown.toFixed(2));
 
     const auditorConcerns: string[] = [];
     if (trainAccuracy - valAccuracy > 0.10) {
@@ -413,7 +411,7 @@ export class ResearchEngine {
       winRate,
       expectedValuePips: Number(testMetrics.expectedValuePips.toFixed(2)),
       profitFactor,
-      maxDrawdownPct,
+      maxDrawdownPips,
       confidenceInterval95: [ciLow, ciHigh],
       confusionMatrix: { tp: testMetrics.tp, fp: testMetrics.fp, tn: testMetrics.tn, fn: testMetrics.fn },
     };
