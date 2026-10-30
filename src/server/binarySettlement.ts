@@ -22,8 +22,8 @@ export function calculateBinarySettlement(
   if (!Number.isFinite(entryPrice) || !Number.isFinite(expiryPrice) || entryPrice <= 0 || expiryPrice <= 0) {
     throw new Error('Binary settlement requires finite positive entry and expiry prices.');
   }
-  if (!Number.isFinite(payoutPct) || payoutPct < DEFAULT_BINARY_PAYOUT_PERCENT || payoutPct > 100) {
-    throw new Error(`Binary payout must be between ${DEFAULT_BINARY_PAYOUT_PERCENT}% and 100%.`);
+  if (!Number.isFinite(payoutPct) || payoutPct < 0 || payoutPct > 100) {
+    throw new Error('Binary payout must be between 0% and 100%.');
   }
   const priceMove = direction === 'BUY' ? expiryPrice - entryPrice : entryPrice - expiryPrice;
   const epsilon = Math.max(1e-12, Math.abs(entryPrice) * 1e-12);
