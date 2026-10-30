@@ -28,7 +28,7 @@ export interface SignalCreationParams {
   strategyName?: string;
   strategyWinRate?: number;
   strategyHistoricalSampleSize?: number;
-  strategyEvidenceStatus?: 'UNVALIDATED' | 'BACKTESTED';
+  strategyEvidenceStatus?: 'UNVALIDATED' | 'INSUFFICIENT_SAMPLE' | 'BACKTESTED';
   strategyId?: string;
   candleOpenTimeUtc?: string;
   candleCloseTimeUtc?: string;
