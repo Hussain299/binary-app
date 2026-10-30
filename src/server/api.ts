@@ -120,6 +120,58 @@ apiRouter.get('/signals', (_req: Request, res: Response) => {
   res.json({
     signals: db.getSignals(),
     activeCount: db.getActiveSignals().length,
+    sessions: db.getSessionAccuracyBreakdown(),
+  });
+});
+
+// GET /api/sessions/accuracy — Verified performance breakdown by trading session
+apiRouter.get('/sessions/accuracy', (_req: Request, res: Response) => {
+  res.json({
+    sessions: db.getSessionAccuracyBreakdown(),
+    marketTime: dataFeedEngine.getMarketSessions(),
+  });
+});
+
+// GET /api/strategies/synthesized — Infinite Non-Human Genetic Strategies Pool
+apiRouter.get('/strategies/synthesized', (_req: Request, res: Response) => {
+  const all = db.getSynthesizedStrategies();
+  const promoted = db.getPromotedActiveStrategies();
+  res.json({
+    strategies: all,
+    promotedCount: promoted.length,
+    totalCount: all.length,
+    generationsCount: db.getGenerations().length,
+  });
+});
+
+// POST /api/strategies/evolve — Trigger immediate evolutionary synthesis of a novel strategy
+apiRouter.post('/strategies/evolve', async (_req: Request, res: Response) => {
+  try {
+    const pair: ForexSymbol = FOREX_PAIRS[Math.floor(Math.random() * FOREX_PAIRS.length)];
+    const { candles } = await dataFeedEngine.fetchCandles(pair, 60);
+    const generations = db.getGenerations();
+    const currentGen = (generations[0]?.generation || 7) + 1;
+    const newGene = researchEngine.synthesizeInfiniteNovelStrategy(candles, pair, currentGen);
+    
+    res.json({
+      success: true,
+      gene: newGene,
+      strategies: db.getSynthesizedStrategies(),
+      promotedCount: db.getPromotedActiveStrategies().length,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/signals/clear-history — Purges closed trade history while keeping active/pending signals
+apiRouter.post('/signals/clear-history', (_req: Request, res: Response) => {
+  db.clearClosedSignalsHistory();
+  res.json({
+    success: true,
+    message: 'Closed signals history cleared successfully',
+    signals: db.getSignals(),
+    activeCount: db.getActiveSignals().length,
   });
 });
 
@@ -186,6 +238,16 @@ apiRouter.get('/research/history', (_req: Request, res: Response) => {
 apiRouter.get('/research/agents', (_req: Request, res: Response) => {
   res.json({
     reviews: db.getReviews(),
+  });
+});
+
+// GET /api/research/autopsies — Forensic Loss Investigations & Evolved Antidotes
+apiRouter.get('/research/autopsies', (_req: Request, res: Response) => {
+  const autopsies = db.getLossAutopsies();
+  res.json({
+    autopsies,
+    totalCount: autopsies.length,
+    timestamp: new Date().toISOString(),
   });
 });
 

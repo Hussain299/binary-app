@@ -4,7 +4,7 @@
  * Includes gap detection, duplicate elimination, UTC normalization, and health scoring.
  */
 
-import { Candle, ForexSymbol, ProviderHealth } from '../types/index.js';
+import { Candle, ForexSymbol, MarketSessionId, MarketSessionInfo, ProviderHealth } from '../types/index.js';
 import { db } from './db.js';
 
 interface RawCandle {
@@ -26,6 +26,18 @@ export class DataFeedEngine {
     'USD/CAD': 1.3895,
     'EUR/GBP': 0.8345,
     'AUD/CAD': 0.9125,
+    'AUD/CHF': 0.5740,
+    'AUD/JPY': 99.85,
+    'AUD/NZD': 1.0875,
+    'EUR/AUD': 1.6480,
+    'EUR/CAD': 1.5030,
+    'EUR/CHF': 0.9470,
+    'EUR/NZD': 1.7920,
+    'GBP/AUD': 1.9720,
+    'GBP/CAD': 1.8010,
+    'GBP/CHF': 1.1340,
+    'GBP/JPY': 198.20,
+    'GBP/NZD': 2.1460,
   };
 
   /**
@@ -384,24 +396,83 @@ export class DataFeedEngine {
   }
 
   /**
-   * Returns current active market sessions based on UTC hour
+   * Returns current active market sessions and timezone metadata
    */
   public getMarketSessions() {
     const now = new Date();
     const utcHour = now.getUTCHours();
+    const currentSession = getSessionFromTimestamp(now);
 
     return {
+      activeSessionId: currentSession.id,
+      activeSessionName: currentSession.name,
       sydney: utcHour >= 22 || utcHour < 7,
       tokyo: utcHour >= 0 && utcHour < 9,
-      london: utcHour >= 8 && utcHour < 16,
-      newYork: utcHour >= 13 && utcHour < 21,
+      london: utcHour >= 7 && utcHour < 16,
+      newYork: utcHour >= 12 && utcHour < 21,
+      overlap: utcHour >= 12 && utcHour < 16,
       currentUtcHour: utcHour,
       currentUtcIso: now.toISOString(),
       currentIst: new Intl.DateTimeFormat('en-IN', {
         timeZone: 'Asia/Kolkata',
-        dateStyle: 'medium',
-        timeStyle: 'medium',
-      }).format(now),
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      }).format(now).toUpperCase() + ' IST',
+    };
+  }
+}
+
+/**
+ * Deterministically resolves the forex market session for any UTC timestamp.
+ * 4 Recognized Institutional Sessions:
+ * 1. ASIA (Tokyo/Sydney): 00:00 - 07:00 UTC (05:30 - 12:30 IST)
+ * 2. LONDON: 07:00 - 12:00 UTC (12:30 - 17:30 IST)
+ * 3. OVERLAP (London + New York Peak): 12:00 - 16:00 UTC (17:30 - 21:30 IST)
+ * 4. NEW_YORK (Afternoon NY): 16:00 - 21:00 UTC (21:30 - 02:30 IST)
+ */
+export function getSessionFromTimestamp(timestampUtc: string | Date | number): {
+  id: MarketSessionId;
+  name: string;
+  shortName: string;
+  utcRange: string;
+  istRange: string;
+} {
+  const d = new Date(timestampUtc);
+  const hour = d.getUTCHours();
+
+  if (hour >= 12 && hour < 16) {
+    return {
+      id: 'OVERLAP',
+      name: 'London / New York Overlap',
+      shortName: 'Overlap',
+      utcRange: '12:00 - 16:00 UTC',
+      istRange: '05:30 PM - 09:30 PM IST',
+    };
+  } else if (hour >= 7 && hour < 12) {
+    return {
+      id: 'LONDON',
+      name: 'London Session',
+      shortName: 'London',
+      utcRange: '07:00 - 12:00 UTC',
+      istRange: '12:30 PM - 05:30 PM IST',
+    };
+  } else if (hour >= 16 && hour < 21) {
+    return {
+      id: 'NEW_YORK',
+      name: 'New York Session',
+      shortName: 'New York',
+      utcRange: '16:00 - 21:00 UTC',
+      istRange: '09:30 PM - 02:30 AM IST',
+    };
+  } else {
+    return {
+      id: 'ASIA',
+      name: 'Asian Session',
+      shortName: 'Asia',
+      utcRange: '00:00 - 07:00 UTC',
+      istRange: '05:30 AM - 12:30 PM IST',
     };
   }
 }

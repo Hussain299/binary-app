@@ -11,7 +11,19 @@ export type ForexSymbol =
   | 'AUD/USD'
   | 'USD/CAD'
   | 'EUR/GBP'
-  | 'AUD/CAD';
+  | 'AUD/CAD'
+  | 'AUD/CHF'
+  | 'AUD/JPY'
+  | 'AUD/NZD'
+  | 'EUR/AUD'
+  | 'EUR/CAD'
+  | 'EUR/CHF'
+  | 'EUR/NZD'
+  | 'GBP/AUD'
+  | 'GBP/CAD'
+  | 'GBP/CHF'
+  | 'GBP/JPY'
+  | 'GBP/NZD';
 
 export const FOREX_PAIRS: ForexSymbol[] = [
   'EUR/USD',
@@ -22,7 +34,36 @@ export const FOREX_PAIRS: ForexSymbol[] = [
   'USD/CAD',
   'EUR/GBP',
   'AUD/CAD',
+  'AUD/CHF',
+  'AUD/JPY',
+  'AUD/NZD',
+  'EUR/AUD',
+  'EUR/CAD',
+  'EUR/CHF',
+  'EUR/NZD',
+  'GBP/AUD',
+  'GBP/CAD',
+  'GBP/CHF',
+  'GBP/JPY',
+  'GBP/NZD',
 ];
+
+export type MarketSessionId = 'ASIA' | 'LONDON' | 'OVERLAP' | 'NEW_YORK';
+
+export interface MarketSessionInfo {
+  id: MarketSessionId;
+  name: string;
+  shortName: string;
+  utcRange: string;
+  istRange: string;
+  isActive: boolean;
+  winRate: number;
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  netPips: number;
+  bestStrategy: string;
+}
 
 export interface AppNotification {
   id: string;
@@ -133,6 +174,63 @@ export interface ResearchSignal {
   candleCloseTimeUtc?: string;
   candleOpenTimeIst?: string;
   candleCloseTimeIst?: string;
+  marketSession?: MarketSessionId;
+  marketSessionName?: string;
+  confluenceStrategies?: string[];
+  confluenceScore?: number;
+  isStackedStrategy?: boolean;
+  isNovelAiSynthesized?: boolean;
+  synthesizedGeneId?: string;
+  mathematicalFormula?: string;
+  whyHumansMissThis?: string;
+  lossAutopsy?: LossAutopsy;
+}
+
+export interface LossAutopsy {
+  id: string;
+  signalId: string;
+  symbol: ForexSymbol;
+  direction: SignalDirection;
+  strategyName: string;
+  mathematicalFormula?: string;
+  entryPrice: number;
+  exitPrice: number;
+  grossReturnPips: number;
+  netReturnPips: number;
+  spreadPips: number;
+  marketSession: string;
+  rootCause:
+    | 'SPREAD_EXPANSION_SLIPPAGE'
+    | 'MICRO_WICK_FALSE_ABSORPTION'
+    | 'MOMENTUM_EXHAUSTION_DIVERGENCE'
+    | 'SESSION_BOUNDARY_LIQUIDITY_VACUUM'
+    | 'NON_LINEAR_OPERATOR_OVERFITTING';
+  rootCauseExplanation: string;
+  lessonsLearned: string[];
+  antidoteStrategyGeneId: string;
+  antidoteStrategyName: string;
+  antidoteFormula: string;
+  antidoteOperator: string;
+  timestamp: string;
+}
+
+export interface SynthesizedStrategyGene {
+  id: string;
+  name: string;
+  code: string;
+  generation: number;
+  mathematicalFormula: string;
+  parents: string[];
+  mutationRate: number;
+  nonLinearOperator: 'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion';
+  optimalHorizonMinutes: 5 | 10 | 15 | 20 | 25 | 30;
+  sessionAffinity: MarketSessionId | 'ALL';
+  verifiedAccuracy: number;
+  sampleCount: number;
+  status: 'PROMOTED_ACTIVE' | 'EXPERIMENTING' | 'MUTATING';
+  scientificHypothesis: string;
+  whyHumansMissThis: string;
+  createdAt: string;
 }
 
 export type RuleFamily =

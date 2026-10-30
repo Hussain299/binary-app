@@ -183,7 +183,7 @@ export async function runAllVerificationTests(): Promise<{
       source: 'synthetic',
     };
 
-    entryExitEngine.evaluateSignals({ 'EUR/USD': [signalCandle, triggerCandle] } as any);
+    entryExitEngine.evaluateSignals({ 'EUR/USD': [signalCandle, triggerCandle] } as any, true);
 
     const updated = db.getSignalById(sig.id);
     if (!updated || updated.lifecycleState !== 'ACTIVE') {
@@ -238,7 +238,7 @@ export async function runAllVerificationTests(): Promise<{
       source: 'synthetic',
     };
 
-    entryExitEngine.evaluateSignals({ 'GBP/USD': [signalCandle, extremeCandle] } as any);
+    entryExitEngine.evaluateSignals({ 'GBP/USD': [signalCandle, extremeCandle] } as any, true);
     const evaluated = db.getSignalById(sig.id);
 
     if (evaluated?.lifecycleState !== 'AMBIGUOUS') {

@@ -7,12 +7,14 @@
 import {
   Candle,
   ForexSymbol,
+  MarketSessionId,
   ResearchSignal,
   SignalDirection,
   SignalLifecycleEvent,
   SignalLifecycleState,
 } from '../types/index.js';
 import { db } from './db.js';
+import { getSessionFromTimestamp } from './dataFeeds.js';
 
 export interface SignalCreationParams {
   symbol: ForexSymbol;
@@ -27,6 +29,13 @@ export interface SignalCreationParams {
   strategyWinRate?: number;
   candleOpenTimeUtc?: string;
   candleCloseTimeUtc?: string;
+  confluenceStrategies?: string[];
+  confluenceScore?: number;
+  isStackedStrategy?: boolean;
+  isNovelAiSynthesized?: boolean;
+  synthesizedGeneId?: string;
+  mathematicalFormula?: string;
+  whyHumansMissThis?: string;
 }
 
 export class EntryExitEngine {
@@ -40,6 +49,18 @@ export class EntryExitEngine {
     'USD/CAD': 1.7,
     'EUR/GBP': 1.2,
     'AUD/CAD': 1.8,
+    'AUD/CHF': 1.9,
+    'AUD/JPY': 1.7,
+    'AUD/NZD': 2.0,
+    'EUR/AUD': 1.9,
+    'EUR/CAD': 1.8,
+    'EUR/CHF': 1.6,
+    'EUR/NZD': 2.2,
+    'GBP/AUD': 2.2,
+    'GBP/CAD': 2.0,
+    'GBP/CHF': 2.1,
+    'GBP/JPY': 2.0,
+    'GBP/NZD': 2.4,
   };
 
   /**
@@ -81,8 +102,7 @@ export class EntryExitEngine {
     // For live trading, anchor directly to the current clock Date.now(); tests anchor to signalCandleMs
     const refMs = isTest ? signalCandleMs : Date.now();
     let next5mCandleOpenMs = Math.ceil(refMs / FIVE_MIN_MS) * FIVE_MIN_MS;
-    // Ensure advance preparation window (minimum 60s before 5M candle open)
-    if (next5mCandleOpenMs - refMs < 60 * 1000) {
+    if (next5mCandleOpenMs <= refMs) {
       next5mCandleOpenMs += FIVE_MIN_MS;
     }
     const next5mCandleCloseMs = next5mCandleOpenMs + (expiryMinutes * 60 * 1000);
@@ -205,6 +225,15 @@ export class EntryExitEngine {
       candleCloseTimeUtc,
       candleOpenTimeIst,
       candleCloseTimeIst,
+      marketSession: getSessionFromTimestamp(now).id,
+      marketSessionName: getSessionFromTimestamp(now).name,
+      confluenceStrategies: params.confluenceStrategies || [defaultStrategyName],
+      confluenceScore: params.confluenceScore || 1,
+      isStackedStrategy: params.isStackedStrategy ?? false,
+      isNovelAiSynthesized: params.isNovelAiSynthesized ?? false,
+      synthesizedGeneId: params.synthesizedGeneId,
+      mathematicalFormula: params.mathematicalFormula,
+      whyHumansMissThis: params.whyHumansMissThis,
     };
 
     return db.addSignal(signal);
@@ -214,8 +243,8 @@ export class EntryExitEngine {
    * Evaluates active research signals against newly arrived completed candles.
    * Advances states through the causal state machine.
    */
-  public evaluateSignals(candlesMap: Record<ForexSymbol, Candle[]>): ResearchSignal[] {
-    const activeSignals = db.getActiveSignals(true);
+  public evaluateSignals(candlesMap: Record<ForexSymbol, Candle[]>, includeTest: boolean = false): ResearchSignal[] {
+    const activeSignals = db.getActiveSignals(includeTest);
     const updatedSignals: ResearchSignal[] = [];
 
     for (const signal of activeSignals) {
@@ -360,13 +389,14 @@ export class EntryExitEngine {
       }
 
       // 2. Process ACTIVE state
-      if (signal.lifecycleState === 'ACTIVE' && signal.plannedExitTimeUtc && signal.actualEntryPrice) {
+      if (!changed && signal.lifecycleState === 'ACTIVE' && signal.plannedExitTimeUtc && signal.actualEntryPrice) {
         const plannedExitMs = Date.parse(signal.plannedExitTimeUtc);
         const newestCandle = candles[candles.length - 1];
         const nowMs = Date.now();
         
-        // Find candle at or immediately after the planned exit time
-        const exitCandle = candles.find(c => c.timestampMs >= plannedExitMs);
+        const isTest = signal.ruleFamily?.startsWith('test_');
+        // Find candle at or immediately after the planned exit time, or use current candle if live clock reached expiry
+        const exitCandle = candles.find(c => c.timestampMs >= plannedExitMs) || (!isTest && nowMs >= plannedExitMs ? newestCandle : null);
 
         if (exitCandle) {
           const isJpy = signal.symbol.includes('JPY');
