@@ -5,8 +5,8 @@
  * the affected monthly partitions, avoiding repeated full-history rewrites
  * when importing several years of candles.
  *
- * User-imported data is schema/continuity checked, but the application cannot
- * independently authenticate the provider or prove the contents are genuine.
+ * User-imported data is schema-checked. The importer cannot independently
+ * authenticate the provider; timestamp alignment is checked by the research pipeline.
  */
 import fs from 'fs';
 import path from 'path';
@@ -142,15 +142,36 @@ class HistoricalDataStore {
 
     this.ensureRoot();
     let imported = 0;
-    for (const [month, incoming] of byMonth) {
+    const prefix = this.prefixFor(symbol);
+    const existingMonths = fs.readdirSync(ROOT)
+      .filter(name => name.startsWith(prefix) && /^\d{6}\.json$/.test(name.slice(prefix.length)))
+      .map(name => name.slice(prefix.length, -5));
+    const allMonths = new Set([...existingMonths, ...byMonth.keys()]);
+    const changedPartitions = new Map<string, Candle[]>();
+    let totalAfterImport = 0;
+
+    // Check the full post-merge size before writing any partition. getCandles()
+    // truncates its return value, so it cannot detect an over-capacity store after writing.
+    for (const month of allMonths) {
       const merged = new Map<number, Candle>();
       for (const candle of this.readMonth(symbol, month)) merged.set(candle.timestampMs, candle);
-      for (const candle of incoming.values()) {
-        if (merged.has(candle.timestampMs)) duplicates++;
-        else imported++;
-        merged.set(candle.timestampMs, candle);
+      const incoming = byMonth.get(month);
+      if (incoming) {
+        for (const candle of incoming.values()) {
+          if (merged.has(candle.timestampMs)) duplicates++;
+          else imported++;
+          merged.set(candle.timestampMs, candle);
+        }
+        changedPartitions.set(month, Array.from(merged.values()).sort((a, b) => a.timestampMs - b.timestampMs));
       }
-      const sortedMonth = Array.from(merged.values()).sort((a, b) => a.timestampMs - b.timestampMs);
+      totalAfterImport += merged.size;
+    }
+
+    if (totalAfterImport > MAX_CANDLES_PER_PAIR) {
+      throw new Error(`Historical store limit reached (${MAX_CANDLES_PER_PAIR.toLocaleString()} candles per pair); no files were changed.`);
+    }
+
+    for (const [month, sortedMonth] of changedPartitions) {
       const file = this.fileFor(symbol, month);
       const temp = `${file}.tmp`;
       fs.writeFileSync(temp, JSON.stringify(sortedMonth), 'utf-8');
@@ -158,9 +179,6 @@ class HistoricalDataStore {
     }
 
     const sorted = this.getCandles(symbol, MAX_CANDLES_PER_PAIR);
-    if (sorted.length > MAX_CANDLES_PER_PAIR) {
-      throw new Error(`Historical store limit reached (${MAX_CANDLES_PER_PAIR.toLocaleString()} candles per pair).`);
-    }
     return {
       symbol,
       imported,
