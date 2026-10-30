@@ -59,7 +59,7 @@ export default function App() {
           if (!notifiedIdsRef.current.has(sig.id)) {
             notifiedIdsRef.current.add(sig.id);
             const ageSec = Math.floor((nowMs - Date.parse(sig.predictionTimeUtc)) / 1000);
-            if (ageSec <= 180 && ['WAITING_FOR_ENTRY', 'ACTIVE'].includes(sig.lifecycleState)) {
+            if (!sig.paperOnly && ageSec <= 180 && ['WAITING_FOR_ENTRY', 'ACTIVE'].includes(sig.lifecycleState)) {
               // Play chime and show toast banner with 3-minute advance notice and IST timings
               soundNotificationService.playSignalAlertSound();
               soundNotificationService.sendBrowserNotification(
