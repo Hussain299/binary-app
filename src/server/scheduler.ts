@@ -144,7 +144,7 @@ export class AutonomousScheduler {
               sig.id
             );
           } else if (sig.lifecycleState === 'CLOSED') {
-            const tradeExp = db.recordTradeExperiment(sig);
+            const tradeExp = db.recordForwardObservation(sig);
             db.recordStrategyOutcome(sig);
 
             // AGI Autonomous Forensic Loss Investigation & Self-Correction Engine
@@ -178,7 +178,7 @@ export class AutonomousScheduler {
                 'EXECUTION',
                 `Position closed for ${sig.symbol} ${sig.direction} at ${sig.actualExitPrice}. Net: ${
                   sig.netReturnPips! > 0 ? '+' : ''
-                }${sig.netReturnPips} pips (${sig.outcomeResult}). Converted into Live Experiment ${tradeExp.id}.`,
+                }${sig.netReturnPips} pips (${sig.outcomeResult}). Recorded as a forward paper observation ${tradeExp.id}.`,
                 sig.symbol,
                 sig.id
               );
