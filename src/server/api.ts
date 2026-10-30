@@ -378,9 +378,21 @@ apiRouter.post('/signals/evaluate', async (_req: Request, res: Response) => {
     }
 
     const updated = entryExitEngine.evaluateSignals(candlesMap);
+    const completed = updated.filter(signal =>
+      signal.lifecycleState === 'CLOSED' &&
+      ['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult)
+    );
+    // A settled outcome is written once to the forward journal and strategy
+    // ledger. recordStrategyOutcome de-duplicates signal IDs and uses only
+    // payout-aware stake units for the 300-outcome approval window.
+    for (const signal of completed) {
+      db.recordForwardObservation(signal);
+      db.recordStrategyOutcome(signal);
+    }
     res.json({
       evaluatedCount: db.getActiveSignals().length,
       transitionedCount: updated.length,
+      completedOutcomesRecorded: completed.length,
       signals: db.getSignals().slice(0, 50),
     });
   } catch (err: any) {
