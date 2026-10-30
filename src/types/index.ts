@@ -92,7 +92,7 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
-  source: 'biquote' | 'dukascopy' | 'yahoo' | 'synthetic' | 'imported';
+  source: 'biquote' | 'dukascopy' | 'yahoo' | 'synthetic' | 'imported' | 'test_fixture';
 }
 
 export interface ProviderHealth {
