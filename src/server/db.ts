@@ -526,7 +526,7 @@ class DatabaseService {
   public getSessionAccuracyBreakdown(): MarketSessionInfo[] {
     const currentSession = getSessionFromTimestamp(new Date());
     const closedSignals = this.getSignals().filter(
-      s => s.lifecycleState === 'CLOSED' && ['WIN', 'LOSS'].includes(s.outcomeResult)
+      s => s.lifecycleState === 'CLOSED' && ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
     );
 
     const sessions: Array<{
@@ -535,77 +535,44 @@ class DatabaseService {
       shortName: string;
       utcRange: string;
       istRange: string;
-      baselineWinRate: number;
-      defaultBestStrategy: string;
     }> = [
-      {
-        id: 'ASIA',
-        name: 'Asian Session (Tokyo/Sydney)',
-        shortName: 'Asia',
-        utcRange: '00:00 - 07:00 UTC',
-        istRange: '05:30 AM - 12:30 PM IST',
-        baselineWinRate: 74.5,
-        defaultBestStrategy: '15-Min Mean Reversion + RSI Extreme',
-      },
-      {
-        id: 'LONDON',
-        name: 'London Session (European Open)',
-        shortName: 'London',
-        utcRange: '07:00 - 12:00 UTC',
-        istRange: '12:30 PM - 05:30 PM IST',
-        baselineWinRate: 76.8,
-        defaultBestStrategy: '5-Min Momentum Breakout + EMA Cross',
-      },
-      {
-        id: 'OVERLAP',
-        name: 'London / New York Overlap (Peak Volatility)',
-        shortName: 'Overlap',
-        utcRange: '12:00 - 16:00 UTC',
-        istRange: '05:30 PM - 09:30 PM IST',
-        baselineWinRate: 81.2,
-        defaultBestStrategy: '10-Min Liquidity Wick Reversal + Squeeze',
-      },
-      {
-        id: 'NEW_YORK',
-        name: 'New York Session (US Afternoon)',
-        shortName: 'New York',
-        utcRange: '16:00 - 21:00 UTC',
-        istRange: '09:30 PM - 02:30 AM IST',
-        baselineWinRate: 75.6,
-        defaultBestStrategy: '20-Min Volatility Range Breakout',
-      },
+      { id: 'ASIA', name: 'Asian Session (Tokyo/Sydney)', shortName: 'Asia', utcRange: '00:00 - 07:00 UTC', istRange: '05:30 AM - 12:30 PM IST' },
+      { id: 'LONDON', name: 'London Session (European Open)', shortName: 'London', utcRange: '07:00 - 12:00 UTC', istRange: '12:30 PM - 05:30 PM IST' },
+      { id: 'OVERLAP', name: 'London / New York Overlap (Peak Volatility)', shortName: 'Overlap', utcRange: '12:00 - 16:00 UTC', istRange: '05:30 PM - 09:30 PM IST' },
+      { id: 'NEW_YORK', name: 'New York Session (US Afternoon)', shortName: 'New York', utcRange: '16:00 - 21:00 UTC', istRange: '09:30 PM - 02:30 AM IST' },
     ];
 
     return sessions.map(sess => {
-      // Find all closed signals in this session
       const sessSignals = closedSignals.filter(s => {
         if (s.marketSession) return s.marketSession === sess.id;
         const sigTime = s.actualEntryTimeUtc || s.predictionTimeUtc;
         return getSessionFromTimestamp(sigTime).id === sess.id;
       });
-
-      const total = sessSignals.length;
       const wins = sessSignals.filter(s => s.outcomeResult === 'WIN').length;
       const losses = sessSignals.filter(s => s.outcomeResult === 'LOSS').length;
+      const scratches = sessSignals.filter(s => s.outcomeResult === 'SCRATCH').length;
+      const scoredTrades = wins + losses;
+      const hasMeasuredData = scoredTrades > 0;
+      const winRate = hasMeasuredData ? Number(((wins / scoredTrades) * 100).toFixed(1)) : 0;
       const netPips = Number(sessSignals.reduce((acc, s) => acc + (s.netReturnPips || 0), 0).toFixed(1));
-      const hasMeasuredData = total > 0;
-      const winRate = hasMeasuredData ? Number(((wins / total) * 100).toFixed(1)) : 0;
 
-      // Find best strategy in this session
-      const stratMap: Record<string, { wins: number; total: number }> = {};
-      for (const s of sessSignals) {
-        const name = s.strategyName || 'Core Strategy';
-        if (!stratMap[name]) stratMap[name] = { wins: 0, total: 0 };
-        stratMap[name].total++;
-        if (s.outcomeResult === 'WIN') stratMap[name].wins++;
+      const stratMap: Record<string, { wins: number; losses: number }> = {};
+      for (const signal of sessSignals) {
+        if (signal.outcomeResult === 'SCRATCH') continue;
+        const name = signal.strategyName || signal.ruleFamily || 'Unclassified Strategy';
+        if (!stratMap[name]) stratMap[name] = { wins: 0, losses: 0 };
+        if (signal.outcomeResult === 'WIN') stratMap[name].wins++;
+        else if (signal.outcomeResult === 'LOSS') stratMap[name].losses++;
       }
-      let bestStrategy = sess.defaultBestStrategy;
-      let bestRate = 0;
+      let bestStrategy = 'Insufficient strategy-specific live trades (20 required)';
+      let bestRate = -1;
       for (const [name, stats] of Object.entries(stratMap)) {
-        const rate = (stats.wins / stats.total) * 100;
-        if (rate > bestRate && stats.total >= 1) {
+        const sample = stats.wins + stats.losses;
+        if (sample < 20) continue;
+        const rate = (stats.wins / sample) * 100;
+        if (rate > bestRate) {
           bestRate = rate;
-          bestStrategy = `${name} (${rate.toFixed(0)}% Live)`;
+          bestStrategy = `${name} (${rate.toFixed(1)}% across ${sample} live trades)`;
         }
       }
 
@@ -618,9 +585,10 @@ class DatabaseService {
         isActive: currentSession.id === sess.id,
         winRate,
         hasMeasuredData,
-        totalTrades: total,
+        totalTrades: sessSignals.length,
         wins,
         losses,
+        scratches,
         netPips,
         bestStrategy,
       };
