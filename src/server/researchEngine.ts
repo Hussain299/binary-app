@@ -24,14 +24,8 @@ export class ResearchEngine {
   private ai: GoogleGenAI | null = null;
 
   constructor() {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
-      try {
-        this.ai = new GoogleGenAI();
-      } catch (e) {
-        console.warn('[ResearchEngine] GoogleGenAI initialization deferred:', e);
-      }
-    }
+    // Model parameters are fitted locally by the deterministic training routine below.
+    // The Gemini client remains unused in this research path; narrative reviews are rule-based.
   }
 
   /**
@@ -519,7 +513,7 @@ Market Regime Observation: This pattern demonstrates highest signal density when
 - Overfit Delta: Train Acc ${(exp.metrics.trainAccuracy * 100).toFixed(1)}% vs Val Acc ${(exp.metrics.valAccuracy * 100).toFixed(1)}% (Delta: ${((exp.metrics.trainAccuracy - exp.metrics.valAccuracy) * 100).toFixed(1)}%).
 - Probabilistic Calibration: Brier score is ${exp.metrics.brierScore} (Calibration error: ${(exp.metrics.calibrationError * 100).toFixed(1)}%).
 - Transaction Cost Sensitivity: Evaluated against institutional spread of ${exp.parameters.spreadModeledPips} pips. Resulting profit factor is ${exp.metrics.profitFactor}.
-${exp.auditorConcerns.length > 0 ? `Identified Vulnerabilities:\n${exp.auditorConcerns.map(c => `• ${c}`).join('\n')}` : '• No critical data leakage or fatal overfit flags found.'}
+${exp.auditorConcerns.length > 0 ? `Identified Vulnerabilities:\n${exp.auditorConcerns.map(c => `• ${c}`).join('\n')}` : '• No configured audit threshold was breached in this run; this is not a guarantee of future performance.'}
 Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool consideration.' : 'REJECTED. Not eligible for signal generation promotion.'}`,
       timestamp: nowIso,
       verdict: exp.auditorVerdict === 'ACCEPTED' ? 'PROCEED' : 'REJECT',
