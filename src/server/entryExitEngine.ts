@@ -463,6 +463,21 @@ export class EntryExitEngine {
           });
 
           changed = true;
+        } else if (
+          (isTest || nowMs >= plannedExitMs) &&
+          newestCandle.timestampMs + 60_000 > plannedExitMs
+        ) {
+          // The contract expiry minute has passed, but its exact M1 close is
+          // absent. Mark the observation unscored instead of settling a later bar.
+          signal.lifecycleState = 'EXPIRED';
+          signal.outcomeResult = 'CANCELLED';
+          signal.lifecycleHistory.push({
+            timestamp: new Date().toISOString(),
+            fromState: 'ACTIVE',
+            toState: 'EXPIRED',
+            reason: `Exact binary expiry candle was missing at ${signal.plannedExitTimeUtc}; no later candle was substituted, so no WIN/LOSS was recorded.`,
+          });
+          changed = true;
         }
       }
 
