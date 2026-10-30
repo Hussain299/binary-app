@@ -397,7 +397,7 @@ export interface SystemHealthState {
   totalCandlesStored: number;
   activeSignalsCount: number;
   totalExperimentsRun: number;
-  totalLiveObservations?: number;
+  totalForwardObservations?: number;
   lastCronRun: string | null;
   nextCronRun: string | null;
   isCronRunning: boolean;
