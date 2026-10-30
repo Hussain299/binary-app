@@ -114,7 +114,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     fetchSessions();
     fetchSynthesizedStrategies();
     fetchStrategyPerformance();
-  }, [signals.length]);
+  }, [signals]);
 
   const handleEvolveStrategy = async () => {
     setIsEvolvingStrategy(true);
@@ -122,7 +122,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
       const res = await fetch('/api/strategies/evolve', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
-        if (data?.strategies) setSynthesizedStrategies(data.strategies);
+        await fetchSynthesizedStrategies();
+        await fetchStrategyPerformance();
         onEvaluateSignals();
       }
     } catch (err) {
@@ -1588,13 +1589,17 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       </div>
                     )}
                     {gene.accuracyStatus !== 'BACKTESTED' && (
-                      <button
-                        onClick={() => handleValidateGene(gene.id, gene.symbol)}
-                        disabled={validatingGeneId === gene.id}
-                        className="px-3 py-2 rounded-lg bg-cyan-900/60 border border-cyan-700 text-cyan-200 text-[11px] font-semibold disabled:opacity-50"
-                      >
-                        {validatingGeneId === gene.id ? 'Validating against imported history…' : `Validate against ${gene.symbol || historyImportPair} history`}
-                      </button>
+                      gene.operatorParameters ? (
+                        <button
+                          onClick={() => handleValidateGene(gene.id, gene.symbol)}
+                          disabled={validatingGeneId === gene.id}
+                          className="px-3 py-2 rounded-lg bg-cyan-900/60 border border-cyan-700 text-cyan-200 text-[11px] font-semibold disabled:opacity-50"
+                        >
+                          {validatingGeneId === gene.id ? 'Validating against imported history…' : `Validate against ${gene.symbol || historyImportPair} history`}
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-neutral-500">Legacy candidate has no stored executable coefficients. Generate a new candidate to validate it.</span>
+                      )
                     )}
 
                     {/* Parents & Lineage */}
