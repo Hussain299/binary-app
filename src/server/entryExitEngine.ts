@@ -352,8 +352,8 @@ export class EntryExitEngine {
           const candleOpenMs = Date.parse(signal.candleOpenTimeUtc);
           const newestCandle = candles[candles.length - 1];
           const nowMs = Date.now();
-          if (newestCandle.timestampMs >= candleOpenMs || nowMs >= candleOpenMs) {
-            const entryCandle = candles.find(c => c.timestampMs >= candleOpenMs) || newestCandle;
+          const entryCandle = candles.find(c => Math.abs(c.timestampMs - candleOpenMs) <= 5_000);
+          if (entryCandle) {
             const entryFillPrice = entryCandle.open;
             const entryTimeUtc = signal.candleOpenTimeUtc;
             const plannedExitMs = candleOpenMs + (signal.expiryMinutes || 5) * 60 * 1000;
@@ -369,10 +369,21 @@ export class EntryExitEngine {
               timestamp: new Date().toISOString(),
               fromState: 'WAITING_FOR_ENTRY',
               toState: 'ACTIVE',
-              reason: `Trade opened strictly at 5M Candle Open (${signal.candleOpenTimeIst || entryTimeUtc}) at price ${entryFillPrice}. Expiry: ${signal.expiryMinutes} Min duration (${signal.candleCloseTimeIst || plannedExitTimeUtc}).`,
+              reason: `Trade opened on the exact 5M candle boundary (${signal.candleOpenTimeIst || entryTimeUtc}) at price ${entryFillPrice}. Expiry: ${signal.expiryMinutes} minutes (${signal.candleCloseTimeIst || plannedExitTimeUtc}).`,
               price: entryFillPrice,
             });
 
+            changed = true;
+          } else if (newestCandle.timestampMs > candleOpenMs + 5_000) {
+            // Do not substitute a later candle for a missed exact M5 open.
+            signal.lifecycleState = 'EXPIRED';
+            signal.outcomeResult = 'CANCELLED';
+            signal.lifecycleHistory.push({
+              timestamp: new Date().toISOString(),
+              fromState: 'WAITING_FOR_ENTRY',
+              toState: 'EXPIRED',
+              reason: `Exact 5M entry candle was unavailable at ${signal.candleOpenTimeUtc}; no late substitute entry was taken.`,
+            });
             changed = true;
           }
         }
@@ -402,8 +413,15 @@ export class EntryExitEngine {
         const nowMs = Date.now();
         
         const isTest = signal.ruleFamily?.startsWith('test_');
-        // Find candle at or immediately after the planned exit time, or use current candle if live clock reached expiry
-        const exitCandle = candles.find(c => c.timestampMs >= plannedExitMs) || (!isTest && nowMs >= plannedExitMs ? newestCandle : null);
+        // Match the historical replay exactly: the M1 candle opened one minute
+        // before expiry closes at the binary contract's target expiry timestamp.
+        // Never use a later candle as a substitute when the target candle is missing.
+        const targetExitCandle = candles.find(c =>
+          Math.abs((c.timestampMs + 60_000) - plannedExitMs) <= 5_000
+        );
+        const exitCandle = targetExitCandle && (isTest || nowMs >= plannedExitMs)
+          ? targetExitCandle
+          : null;
 
         if (exitCandle) {
           const isJpy = signal.symbol.includes('JPY');
