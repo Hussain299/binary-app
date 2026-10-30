@@ -306,6 +306,23 @@ export async function runAllVerificationTests(): Promise<{
     if (gene.status !== 'EXPERIMENTING' || gene.accuracyStatus !== 'UNVALIDATED') {
       throw new Error('New candidate must remain unvalidated and out of the promoted pool.');
     }
+    const closes = candles.map(candle => candle.close);
+    const evaluated = researchEngine.evaluateSynthesizedGeneSignal(
+      gene,
+      candles[99],
+      candles[98],
+      closes,
+      closes,
+      closes,
+      closes.map(() => 50),
+      99
+    );
+    if (!Number.isFinite(evaluated.conviction) || !['BUY', 'SELL'].includes(evaluated.direction)) {
+      throw new Error('The saved symbolic genome must be executable by the live evaluator.');
+    }
+    if (!evaluated.rationale.includes('Symbolic genome score')) {
+      throw new Error('The candidate was not evaluated through its symbolic genome.');
+    }
   });
 
   await runTest('ML', 'Probabilistic Calibration & Brier Score Calculation', () => {
