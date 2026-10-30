@@ -323,7 +323,7 @@ export class AutonomousScheduler {
               synthesizedGeneId: gene.id,
               mathematicalFormula: gene.mathematicalFormula,
               whyHumansMissThis: gene.whyHumansMissThis,
-              notes: `[NOVEL NON-HUMAN FORMULA]: ${gene.mathematicalFormula} | Edge: ${gene.whyHumansMissThis}`,
+              notes: `[GENERATED CANDIDATE FORMULA]: ${gene.mathematicalFormula} | Edge: ${gene.whyHumansMissThis}`,
             });
 
             createdSignals.push(signal);
@@ -557,7 +557,7 @@ export class AutonomousScheduler {
             }
             this.logMind(
               'SCIENTIST',
-              `[CANDIDATE SYNTHESIS]: ${newGene.code} (${newGene.name}). Status: ${newGene.status}. ${newGene.accuracyStatus === 'BACKTESTED' ? `Untouched test win rate: ${newGene.verifiedAccuracy}% across ${newGene.sampleCount} trades.` : 'No genuine historical validation yet.'}`,
+              `[CANDIDATE SYNTHESIS]: ${newGene.code} (${newGene.name}). Status: ${newGene.status}. ${newGene.accuracyStatus === 'BACKTESTED' ? `Untouched test win rate: ${newGene.verifiedAccuracy}% across ${newGene.sampleCount} trades.` : 'No historical test has been completed yet.'}`,
               synthPair
             );
           } catch (e: any) {
