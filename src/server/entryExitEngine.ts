@@ -14,6 +14,7 @@ import {
   SignalLifecycleState,
 } from '../types/index.js';
 import { db } from './db.js';
+import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
 import { getSessionFromTimestamp } from './dataFeeds.js';
 
 export interface SignalCreationParams {
@@ -23,6 +24,9 @@ export interface SignalCreationParams {
   ruleFamily: string;
   expiryMinutes?: number;
   confidence: number;
+  /** Broker-observed payout where available; otherwise use the 80% research floor. */
+  payoutPct?: number;
+  payoutSource?: 'ASSUMED_MINIMUM' | 'BROKER_OBSERVED';
   modelVersion: string;
   notes?: string;
   strategyName?: string;
@@ -210,6 +214,9 @@ export class EntryExitEngine {
       grossReturnPips: null,
       estimatedSpreadPips: this.spreadsPips[params.symbol] || 1.5,
       netReturnPips: null,
+      payoutPct: params.payoutPct ?? DEFAULT_BINARY_PAYOUT_PERCENT,
+      payoutSource: params.payoutSource ?? 'ASSUMED_MINIMUM',
+      netReturnUnits: null,
       outcomeResult: 'PENDING',
       ruleFamily: params.ruleFamily,
       modelVersion: params.modelVersion,
@@ -403,27 +410,37 @@ export class EntryExitEngine {
           const pipFactor = isJpy ? 100 : 10000;
           const exitPrice = exitCandle.close;
           const entryPrice = signal.actualEntryPrice;
-
-          let rawDiff = signal.direction === 'BUY' ? exitPrice - entryPrice : entryPrice - exitPrice;
-          let grossPips = Number((rawDiff * pipFactor).toFixed(1));
-          let netPips = Number((grossPips - signal.estimatedSpreadPips).toFixed(1));
-
-          let outcome: 'WIN' | 'LOSS' | 'SCRATCH' = 'SCRATCH';
-          if (netPips > 0.5) outcome = 'WIN';
-          else if (netPips < -0.5) outcome = 'LOSS';
+          const payoutPct = signal.payoutPct ?? DEFAULT_BINARY_PAYOUT_PERCENT;
+          const settlement = calculateBinarySettlement(
+            signal.direction,
+            entryPrice,
+            exitPrice,
+            payoutPct
+          );
+          const grossPips = Number((
+            (signal.direction === 'BUY' ? exitPrice - entryPrice : entryPrice - exitPrice) * pipFactor
+          ).toFixed(1));
 
           signal.actualExitTimeUtc = exitCandle.timestamp;
           signal.actualExitPrice = exitPrice;
-          signal.grossReturnPips = grossPips;
-          signal.netReturnPips = netPips;
-          signal.outcomeResult = outcome;
+          signal.grossReturnPips = grossPips; // Informational price movement only; not the contract P/L.
+          signal.netReturnPips = null; // Binary options are not scored using forex pip spreads.
+          signal.netReturnUnits = settlement.netReturnUnits;
+          signal.payoutPct = payoutPct;
+          signal.payoutSource = signal.payoutSource ?? 'ASSUMED_MINIMUM';
+          signal.outcomeResult = settlement.outcome;
           signal.lifecycleState = 'CLOSED';
 
+          const unitText = settlement.netReturnUnits > 0
+            ? `+${settlement.netReturnUnits.toFixed(2)} stake units`
+            : settlement.netReturnUnits < 0
+              ? `${settlement.netReturnUnits.toFixed(2)} stake units`
+              : '0.00 stake units (push)';
           signal.lifecycleHistory.push({
             timestamp: new Date().toISOString(),
             fromState: 'ACTIVE',
             toState: 'CLOSED',
-            reason: `Position reached planned expiry (${signal.plannedExitTimeUtc}). Closed at ${exitPrice} on candle ${exitCandle.timestamp}. Net Return: ${netPips > 0 ? '+' : ''}${netPips} pips (${outcome}).`,
+            reason: `Binary contract expired at ${signal.plannedExitTimeUtc}. Entry ${entryPrice}; expiry ${exitPrice}; payout ${payoutPct}% (${signal.payoutSource}); result ${settlement.outcome}; return ${unitText}.`,
             price: exitPrice,
           });
 
