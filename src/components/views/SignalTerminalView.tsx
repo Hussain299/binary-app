@@ -1600,7 +1600,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     )}
                     {gene.forwardPerformance && (
                       <div className="text-[11px] font-mono text-neutral-300 bg-neutral-900/60 border border-neutral-800 rounded-lg p-3">
-                        Forward results: {gene.livePerformance.wins}W / {gene.livePerformance.losses}L / {gene.livePerformance.scratches} scratches · {gene.livePerformance.trades} completed trades · {gene.livePerformance.netPips > 0 ? '+' : ''}{gene.livePerformance.netPips.toFixed(1)} net pips
+                        Forward paper results: {gene.forwardPerformance.wins}W / {gene.forwardPerformance.losses}L / {gene.forwardPerformance.scratches} scratches · {gene.forwardPerformance.trades} completed trades · {gene.forwardPerformance.netPips > 0 ? '+' : ''}{gene.livePerformance.netPips.toFixed(1)} net pips
                       </div>
                     )}
                     {gene.accuracyStatus !== 'BACKTESTED' && (
