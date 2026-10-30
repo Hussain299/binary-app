@@ -1444,7 +1444,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-neutral-850 text-xs font-mono">
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
-                  <span className="text-[10px] text-neutral-400 block uppercase">Promoted Live</span>
+                  <span className="text-[10px] text-neutral-400 block uppercase">Forward Approved</span>
                   <span className="text-sm font-extrabold text-cyan-400">
                     {synthesizedStrategies.filter(s => s.status === 'PROMOTED_ACTIVE').length} Strategies
                   </span>
@@ -1514,6 +1514,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
               {synthesizedStrategies.map((gene, idx) => {
                 const isPromoted = gene.status === 'PROMOTED_ACTIVE';
+                const isPaperTrading = gene.status === 'PAPER_TRADING';
                 return (
                   <div
                     key={gene.id || idx}
@@ -1539,13 +1540,20 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
                       <div className="flex items-center gap-2">
                         {isPromoted ? (
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-bold flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                            PROMOTED (LIVE)
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-bold">
+                            FORWARD APPROVED
+                          </span>
+                        ) : isPaperTrading ? (
+                          <span className="px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800 text-xs font-mono font-bold">
+                            PAPER TRADING
+                          </span>
+                        ) : gene.status === 'REJECTED' ? (
+                          <span className="px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800 text-xs font-mono">
+                            REJECTED
                           </span>
                         ) : (
                           <span className="px-2 py-0.5 rounded bg-neutral-800 text-neutral-400 text-xs font-mono">
-                            EXPERIMENTING
+                            UNVALIDATED / RESEARCH
                           </span>
                         )}
                         <span className="px-2.5 py-0.5 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-800/80 text-xs font-mono font-black">
