@@ -165,6 +165,7 @@ export interface ResearchSignal {
   netReturnPips: number | null;
   /** Assumed or observed binary-option payout at entry; recorded with each outcome. */
   payoutPct?: number;
+  payoutSource?: 'ASSUMED_MINIMUM' | 'BROKER_OBSERVED';
   /** Binary-option profit/loss in stake units: +payout on win, -1 on loss, 0 on push. */
   netReturnUnits?: number | null;
   outcomeResult: 'WIN' | 'LOSS' | 'SCRATCH' | 'PENDING' | 'CANCELLED';
@@ -256,6 +257,7 @@ export interface StrategyDiscoveryMetrics {
   /** Validation expectancy in stake units per contract at the recorded binary payout. */
   validationExpectedValueUnits: number;
   validationProfitFactor: number;
+  minimumPayoutPct?: number;
 }
 
 export interface StrategyBacktestMetrics {
@@ -273,6 +275,7 @@ export interface StrategyBacktestMetrics {
   testLosses: number;
   /** Historical binary payout used by the backtest (80% conservative floor). */
   binaryPayoutPct: number;
+  excludedZeroVolumeFlatCandles: number;
   /** Net profit/loss in stake units per contract, after binary settlement. */
   expectedValueUnits: number;
   profitFactor: number;
@@ -297,6 +300,10 @@ export interface StrategyPerformanceRecord {
   /** Binary contract return units accumulated from outcomes collected under the new settlement model. */
   netReturnUnits?: number;
   positiveReturnUnits?: number;
+  binaryTrades?: number;
+  binaryWins?: number;
+  binaryLosses?: number;
+  binaryPushes?: number;
   negativeReturnUnits?: number;
   /** Recent unique completed outcomes used to calculate a rolling 300-trade approval window. */
   scoredOutcomes?: Array<{ result: 'WIN' | 'LOSS'; netReturnUnits: number; payoutPct: number }>;
