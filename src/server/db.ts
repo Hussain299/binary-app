@@ -441,8 +441,8 @@ class DatabaseService {
   }
 
   /**
-   * Automatically turns every completed trade into a real experiment.
-   * Records execution outcome, verifies edge, and feeds the online learning model.
+   * Stores a single completed forward observation. It is not a backtest and does not
+   * independently validate a strategy or train model weights.
    */
   public recordTradeExperiment(sig: ResearchSignal): ResearchExperiment {
     const isWin = sig.outcomeResult === 'WIN';
@@ -476,13 +476,13 @@ class DatabaseService {
         trainAccuracy: 0,
         valAccuracy: 0,
         testAccuracy: isWin ? 1.0 : 0.0,
-        balancedAccuracy: isWin ? 1.0 : 0.0,
-        precision: isWin ? 1.0 : 0.0,
-        recall: isWin ? 1.0 : 0.0,
-        f1Score: isWin ? 1.0 : 0.0,
+        balancedAccuracy: 0,
+        precision: 0,
+        recall: 0,
+        f1Score: 0,
         brierScore: 0,
         calibrationError: 0,
-        winRate: isWin ? 100 : 0,
+        winRate: 0,
         expectedValuePips: netPips,
         profitFactor: 0,
         maxDrawdownPct: 0,
