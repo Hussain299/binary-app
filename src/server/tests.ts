@@ -9,6 +9,7 @@ import { dataFeedEngine } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
+import { calculateBinarySettlement } from './binarySettlement.js';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -54,6 +55,25 @@ export async function runAllVerificationTests(): Promise<{
       });
     }
   };
+
+  await runTest('DATA', 'Binary payout settlement (win, loss, push and payout floor)', () => {
+    const win = calculateBinarySettlement('BUY', 1.10000, 1.10010, 80);
+    if (win.outcome !== 'WIN' || win.netReturnUnits !== 0.8) {
+      throw new Error('A winning binary contract must return +0.80 stake units at an 80% payout.');
+    }
+    const loss = calculateBinarySettlement('BUY', 1.10010, 1.10000, 80);
+    if (loss.outcome !== 'LOSS' || loss.netReturnUnits !== -1) {
+      throw new Error('A losing binary contract must return -1.00 stake units.');
+    }
+    const push = calculateBinarySettlement('SELL', 1.10000, 1.10000, 80);
+    if (push.outcome !== 'SCRATCH' || push.netReturnUnits !== 0) {
+      throw new Error('An exact strike tie must be recorded as a zero-return push.');
+    }
+    const lowPayout = calculateBinarySettlement('BUY', 1.1, 1.1001, 75);
+    if (lowPayout.netReturnUnits !== 0.75) {
+      throw new Error('Observed payout must be reflected exactly in the binary return.');
+    }
+  });
 
   // ==========================================
   // 1. DATA TESTS
