@@ -434,31 +434,26 @@ export class AutonomousScheduler {
               dynamicExpiry = 10;
               ruleFamily = 'wick_reversal';
               strategyName = `Stacked: 10-Min Liquidity Wick + ${hasRsi ? 'RSI Reversal' : 'Trend Retest'}`;
-              winRate = 0;
             } else if (hasMeanRev && hasRsi) {
               // 15 Min: Statistical Mean Reversion + RSI Extreme Pullback
               dynamicExpiry = 15;
               ruleFamily = 'mean_reversion_20';
               strategyName = 'Stacked: 15-Min Mean Reversion + RSI Divergence';
-              winRate = 0;
             } else if (hasMomentum && candidate.confluence.some(item => item.includes('20-Bar'))) {
               // 20 Min: Volatility Range Breakout (4-candle expansion)
               dynamicExpiry = 20;
               ruleFamily = 'range_breakout';
               strategyName = 'Stacked: 20-Min Volatility Range Breakout';
-              winRate = 0;
             } else if (hasMeanRev && hasWick) {
               // 25 Min: Structural Swing Reversal (5-candle channel bounce)
               dynamicExpiry = 25;
               ruleFamily = 'volatility_squeeze';
               strategyName = 'Stacked: 25-Min Structural Swing Reversal';
-              winRate = 0;
             } else {
               // 30 Min: Macro Session Trend Continuation (6-candle session flow)
               dynamicExpiry = 30;
               ruleFamily = 'order_flow_imbalance';
               strategyName = `Stacked: 30-Min ${activeSession.shortName} Macro Trend Flow`;
-              winRate = 0;
             }
 
             // Deterministic signal-strength score from rule confluence; not a calibrated probability.
