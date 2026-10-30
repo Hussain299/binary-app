@@ -296,6 +296,8 @@ export type RuleFamily =
 
 export interface ExperimentMetrics {
   sampleSize: number;
+  trainSampleSize: number;
+  validationSampleSize: number;
   trainAccuracy: number;
   valAccuracy: number;
   testAccuracy: number;
