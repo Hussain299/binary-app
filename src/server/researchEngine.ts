@@ -155,7 +155,7 @@ export class ResearchEngine {
 
     // Chronological 60/20/20 split with independent embargoes. Never reuse
     // validation samples as test samples when the test window is too small.
-    const purgeEmbargo = Math.max(30, horizonMinutes);
+    const purgeEmbargo = horizonMinutes;
     const trainEnd = Math.floor(total * 0.60);
     const valStart = trainEnd + purgeEmbargo;
     const valEnd = Math.min(total, valStart + Math.floor(total * 0.20));
@@ -169,7 +169,7 @@ export class ResearchEngine {
       );
     }
 
-    // Feature Scaling: Fit min/max strictly on TRAIN data only!
+    // Feature standardization: fit mean and standard deviation strictly on TRAIN data only.
     const featureCount = trainSet[0].features.length;
     const means = new Array(featureCount).fill(0);
     const stds = new Array(featureCount).fill(0);
@@ -342,13 +342,13 @@ export class ResearchEngine {
     const auditorConcerns: string[] = [];
     if (trainAccuracy - valAccuracy > 0.10) {
       auditorConcerns.push(
-        `High overfitting detected: Train accuracy (${trainAccuracy}) exceeds Validation (${valAccuracy}) by >12%.`
+        `High overfitting detected: Train accuracy (${trainAccuracy}) exceeds Validation (${valAccuracy}) by >10%.`
       );
     }
     if (testTotal < 100) auditorConcerns.push(`Insufficient untouched test sample size (${testTotal}); minimum 100 required.`);
     if (testAccuracy < 0.52) {
       auditorConcerns.push(
-        `Out-of-sample edge below random walk threshold (${testAccuracy} <= 0.51).`
+        `Out-of-sample edge below minimum research threshold (${testAccuracy} < 0.52).`
       );
     }
     if (brierScore > 0.25) {
@@ -358,7 +358,7 @@ export class ResearchEngine {
     }
     if (profitFactor < 1.15 || totalPips / testTotal <= 0) {
       auditorConcerns.push(
-        `Unfavorable transaction cost resilience: Profit factor ${profitFactor} < 1.10 after spread deductions.`
+        `Unfavorable transaction cost resilience: Profit factor ${profitFactor} < 1.15 after spread deductions.`
       );
     }
 
