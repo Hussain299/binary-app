@@ -253,6 +253,7 @@ export interface StrategyPerformanceRecord {
 
 export interface StrategyPaperMetrics {
   trades: number;
+  scoredTrades: number;
   wins: number;
   losses: number;
   scratches: number;
