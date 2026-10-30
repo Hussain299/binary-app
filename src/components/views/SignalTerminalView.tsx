@@ -186,15 +186,28 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
         });
       }
       if (!candles.length) throw new Error('No candle rows were found in the selected file.');
-      const res = await fetch('/api/research/candles/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol: historyImportPair, candles }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Historical import failed.');
+      const batchSize = 20_000;
+      let imported = 0;
+      let rejected = 0;
+      let totalStored = 0;
+      for (let offset = 0; offset < candles.length; offset += batchSize) {
+        const batch = candles.slice(offset, offset + batchSize);
+        const res = await fetch('/api/research/candles/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol: historyImportPair, candles: batch }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Historical import failed at row ${offset + 1}.`);
+        imported += data.result.imported;
+        rejected += data.result.rejected;
+        totalStored = data.result.totalStored;
+        setHistoryImportMessage(
+          `Importing ${historyImportPair}: ${Math.min(offset + batch.length, candles.length).toLocaleString()} / ${candles.length.toLocaleString()} rows processed…`
+        );
+      }
       setHistoryImportMessage(
-        `Imported ${data.result.imported.toLocaleString()} valid candles for ${historyImportPair}. Stored total: ${data.result.totalStored.toLocaleString()}. Rejected rows: ${data.result.rejected}.`
+        `Imported ${imported.toLocaleString()} valid candles for ${historyImportPair}. Stored total: ${totalStored.toLocaleString()}. Rejected rows: ${rejected}.`
       );
     } catch (error: any) {
       setHistoryImportMessage(error.message || 'Could not import historical candles.');
