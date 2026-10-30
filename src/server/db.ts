@@ -80,7 +80,7 @@ class DatabaseService {
                 gene.backtestMetrics.validationWinRate < 0.70 ||
                 !Array.isArray(gene.backtestMetrics.testBlockWinRates) ||
                 gene.backtestMetrics.testBlockWinRates.length !== 3 ||
-                gene.backtestMetrics.testBlockWinRates.some((rate: number) => rate < 0.65)) {
+                gene.backtestMetrics.testBlockWinRates.some((rate: number) => rate < 0.70)) {
               return {
                 ...gene,
                 verifiedAccuracy: 0,
@@ -638,7 +638,7 @@ class DatabaseService {
       metrics.testWinRate >= 0.70 &&
       metrics.validationWinRate >= 0.70 &&
       metrics.testBlockWinRates?.length === 3 &&
-      metrics.testBlockWinRates.every(rate => rate >= 0.65) &&
+      metrics.testBlockWinRates.every(rate => rate >= 0.70) &&
       metrics.expectedValuePips > 0 &&
       metrics.profitFactor >= 1.15 &&
       metrics.confidenceInterval95[0] >= 0.60;
@@ -653,7 +653,7 @@ class DatabaseService {
       gene.paperMetrics.scoredTrades >= 300 &&
       gene.paperMetrics.winRate >= 0.70 &&
       gene.paperMetrics.rollingWinRates.length === 3 &&
-      gene.paperMetrics.rollingWinRates.every(rate => rate >= 0.65) &&
+      gene.paperMetrics.rollingWinRates.every(rate => rate >= 0.70) &&
       gene.paperMetrics.netPips > 0 &&
       gene.paperMetrics.profitFactor >= 1.15 &&
       gene.paperMetrics.confidenceInterval95[0] >= 0.60
@@ -769,7 +769,7 @@ class DatabaseService {
         recent.length === 300 &&
         recentRate >= 0.70 &&
         rollingWinRates.length === 3 &&
-        rollingWinRates.every(rate => rate >= 0.65) &&
+        rollingWinRates.every(rate => rate >= 0.70) &&
         recentNetPips > 0 &&
         recentProfitFactor >= 1.15 &&
         interval[0] >= 0.60;
