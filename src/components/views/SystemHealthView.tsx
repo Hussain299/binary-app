@@ -96,7 +96,7 @@ export const SystemHealthView: React.FC = () => {
               <span className="text-xl font-bold text-white tabular-nums">
                 {health.activeSignalsCount} active / {health.totalExperimentsRun} backtests
               </span>
-              <span className="text-[10px] text-neutral-400 block mt-1">{health.totalLiveObservations || 0} individual live observations</span>
+              <span className="text-[10px] text-neutral-400 block mt-1">{health.totalForwardObservations || 0} forward paper observations</span>
             </div>
           </div>
 
