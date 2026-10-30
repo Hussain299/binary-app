@@ -220,6 +220,8 @@ export interface LossAutopsy {
 }
 
 export interface StrategyBacktestMetrics {
+  trainSampleSize: number;
+  validationSampleSize: number;
   trainWinRate: number;
   validationWinRate: number;
   testWinRate: number;
