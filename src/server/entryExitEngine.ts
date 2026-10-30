@@ -39,6 +39,7 @@ export interface SignalCreationParams {
   synthesizedGeneId?: string;
   mathematicalFormula?: string;
   whyHumansMissThis?: string;
+  paperOnly?: boolean;
 }
 
 export class EntryExitEngine {
@@ -232,6 +233,7 @@ export class EntryExitEngine {
       synthesizedGeneId: params.synthesizedGeneId,
       mathematicalFormula: params.mathematicalFormula,
       whyHumansMissThis: params.whyHumansMissThis,
+      paperOnly: params.paperOnly ?? false,
     };
 
     return db.addSignal(signal);
