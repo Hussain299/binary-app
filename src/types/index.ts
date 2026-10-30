@@ -58,6 +58,7 @@ export interface MarketSessionInfo {
   istRange: string;
   isActive: boolean;
   winRate: number;
+  hasMeasuredData: boolean;
   totalTrades: number;
   wins: number;
   losses: number;
@@ -90,7 +91,7 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
-  source: 'biquote' | 'dukascopy' | 'yahoo' | 'synthetic';
+  source: 'biquote' | 'dukascopy' | 'yahoo' | 'synthetic' | 'imported';
 }
 
 export interface ProviderHealth {
@@ -214,6 +215,31 @@ export interface LossAutopsy {
   timestamp: string;
 }
 
+export interface StrategyBacktestMetrics {
+  trainWinRate: number;
+  validationWinRate: number;
+  testWinRate: number;
+  testAccuracy: number;
+  testSampleSize: number;
+  testWins: number;
+  testLosses: number;
+  expectedValuePips: number;
+  profitFactor: number;
+  confidenceInterval95: [number, number];
+  trainPeriod: { start: string; end: string };
+  validationPeriod: { start: string; end: string };
+  testPeriod: { start: string; end: string };
+}
+
+export interface StrategyPaperMetrics {
+  trades: number;
+  wins: number;
+  losses: number;
+  scratches: number;
+  winRate: number;
+  netPips: number;
+}
+
 export interface SynthesizedStrategyGene {
   id: string;
   name: string;
@@ -225,8 +251,13 @@ export interface SynthesizedStrategyGene {
   nonLinearOperator: 'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion';
   optimalHorizonMinutes: 5 | 10 | 15 | 20 | 25 | 30;
   sessionAffinity: MarketSessionId | 'ALL';
+  /** Measured untouched-test win rate. Zero means no verified result exists. */
   verifiedAccuracy: number;
+  /** Number of out-of-sample test trades, never a generated estimate. */
   sampleCount: number;
+  accuracyStatus?: 'UNVALIDATED' | 'BACKTESTED';
+  backtestMetrics?: StrategyBacktestMetrics;
+  paperMetrics?: StrategyPaperMetrics;
   status: 'PROMOTED_ACTIVE' | 'EXPERIMENTING' | 'MUTATING';
   scientificHypothesis: string;
   whyHumansMissThis: string;
@@ -267,6 +298,7 @@ export interface ExperimentMetrics {
 
 export interface ResearchExperiment {
   id: string;
+  experimentType?: 'BACKTEST' | 'LIVE_TRADE';
   generation: number;
   name: string;
   symbol: ForexSymbol;
