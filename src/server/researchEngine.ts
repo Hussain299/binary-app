@@ -58,6 +58,7 @@ export class ResearchEngine {
       candle: Candle;
       features: number[];
       labels: Record<number, number>;
+      futureMoves: Record<number, number>;
     }> = [];
 
     // Horizons to evaluate: 5, 10, 15, 20, 25, 30
@@ -107,15 +108,18 @@ export class ResearchEngine {
 
       // Future outcome labels for each horizon
       const labels: Record<number, number> = {};
+      const futureMoves: Record<number, number> = {};
       for (const h of horizons) {
         const futureCandle = candles[i + h];
         labels[h] = futureCandle.close > c.close ? 1 : 0;
+        futureMoves[h] = futureCandle.close - c.close;
       }
 
       samples.push({
         candle: c,
         features,
         labels,
+        futureMoves,
       });
     }
 
@@ -140,16 +144,28 @@ export class ResearchEngine {
       throw new Error(`Insufficient candle samples (${total}) for purged walk-forward validation`);
     }
 
-    // Chronological Purged Split
-    const trainEnd = Math.floor(total * 0.60);
-    const purgeEmbargo = horizonMinutes; // Embargo equal to outcome horizon to prevent leakage
-    const valStart = trainEnd + purgeEmbargo;
-    const valEnd = Math.min(total - 1, valStart + Math.floor(total * 0.20));
-    const testStart = valEnd + purgeEmbargo;
+    if (candles.some(c => c.source === 'synthetic')) {
+      throw new Error('Research backtests require genuine market candles. Synthetic fallback candles are not eligible.');
+    }
+    if (!candles.every(c => Number.isFinite(c.timestampMs) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close))) {
+      throw new Error('Historical dataset contains invalid candle values.');
+    }
 
+    // Chronological 60/20/20 split with independent embargoes. Never reuse
+    // validation samples as test samples when the test window is too small.
+    const purgeEmbargo = Math.max(30, horizonMinutes);
+    const trainEnd = Math.floor(total * 0.60);
+    const valStart = trainEnd + purgeEmbargo;
+    const valEnd = Math.min(total, valStart + Math.floor(total * 0.20));
+    const testStart = valEnd + purgeEmbargo;
     const trainSet = dataset.slice(0, trainEnd);
-    const valSet = dataset.slice(valStart, Math.min(valEnd, dataset.length));
-    const testSet = testStart < total ? dataset.slice(testStart) : valSet;
+    const valSet = dataset.slice(valStart, valEnd);
+    const testSet = dataset.slice(testStart);
+    if (trainSet.length < 30 || valSet.length < 20 || testSet.length < 20) {
+      throw new Error(
+        `Insufficient independent samples after embargo (train=${trainSet.length}, validation=${valSet.length}, test=${testSet.length}). Import more genuine historical data.`
+      );
+    }
 
     // Feature Scaling: Fit min/max strictly on TRAIN data only!
     const featureCount = trainSet[0].features.length;
@@ -232,6 +248,11 @@ export class ResearchEngine {
     let brierSum = 0;
     let calibrationErrorSum = 0;
     let totalPips = 0;
+    let grossWinningPips = 0;
+    let grossLosingPips = 0;
+    let tradeWins = 0;
+    let tradeLosses = 0;
+    let tradeScratches = 0;
     let maxDrawdown = 0;
     let peakPips = 0;
 
@@ -251,10 +272,14 @@ export class ResearchEngine {
       brierSum += Math.pow(prob - actual, 2);
       calibrationErrorSum += Math.abs(prob - actual);
 
-      // Simulated return with 1.2 pip spread cost
-      const actualMove = (item.candle.close - item.candle.open) * pipFactor;
-      const tradePips = pred === 1 ? actualMove - 1.2 : -actualMove - 1.2;
+      // Execute the predicted direction over the same forward horizon that
+      // generated the label, then deduct the modeled round-trip spread.
+      const actualMovePips = item.futureMoves[horizonMinutes] * pipFactor;
+      const tradePips = (pred === 1 ? actualMovePips : -actualMovePips) - 1.2;
       totalPips += tradePips;
+      if (tradePips > 0.5) { tradeWins++; grossWinningPips += tradePips; }
+      else if (tradePips < -0.5) { tradeLosses++; grossLosingPips += Math.abs(tradePips); }
+      else tradeScratches++;
       if (totalPips > peakPips) peakPips = totalPips;
       const dd = peakPips - totalPips;
       if (dd > maxDrawdown) maxDrawdown = dd;
@@ -273,10 +298,10 @@ export class ResearchEngine {
     const brierScore = Number((brierSum / testTotal).toFixed(4));
     const calibrationError = Number((calibrationErrorSum / testTotal).toFixed(3));
 
-    const winRate = Number(((tp + tn) / testTotal).toFixed(3));
-    const grossWins = tp * 4.5;
-    const grossLosses = Math.max(1, fp * 4.5);
-    const profitFactor = Number((grossWins / grossLosses).toFixed(2));
+    const winRate = Number((tradeWins / testTotal).toFixed(3));
+    const profitFactor = Number(
+      (grossWinningPips / Math.max(0.01, grossLosingPips)).toFixed(2)
+    );
     const maxDrawdownPct = Number(((maxDrawdown / Math.max(1, peakPips + 50)) * 100).toFixed(1));
 
     // 95% Wilson Score Confidence Interval for Accuracy
@@ -313,12 +338,13 @@ export class ResearchEngine {
     // SKEPTICAL AUDIT EVALUATION:
     // Automatically flags leakage, overfitting (train >> val), poor calibration, sample size
     const auditorConcerns: string[] = [];
-    if (trainAccuracy - valAccuracy > 0.12) {
+    if (trainAccuracy - valAccuracy > 0.10) {
       auditorConcerns.push(
         `High overfitting detected: Train accuracy (${trainAccuracy}) exceeds Validation (${valAccuracy}) by >12%.`
       );
     }
-    if (testAccuracy < 0.51) {
+    if (testTotal < 100) auditorConcerns.push(`Insufficient untouched test sample size (${testTotal}); minimum 100 required.`);
+    if (testAccuracy < 0.52) {
       auditorConcerns.push(
         `Out-of-sample edge below random walk threshold (${testAccuracy} <= 0.51).`
       );
@@ -328,14 +354,14 @@ export class ResearchEngine {
         `Poor probabilistic calibration: Brier score ${brierScore} > 0.25 threshold.`
       );
     }
-    if (profitFactor < 1.1) {
+    if (profitFactor < 1.15 || totalPips / testTotal <= 0) {
       auditorConcerns.push(
         `Unfavorable transaction cost resilience: Profit factor ${profitFactor} < 1.10 after spread deductions.`
       );
     }
 
     let auditorVerdict: 'ACCEPTED' | 'REJECTED' | 'PROVISIONAL' = 'ACCEPTED';
-    if (auditorConcerns.length >= 2 || testAccuracy < 0.50) {
+    if (auditorConcerns.length >= 2 || testAccuracy < 0.50 || testTotal < 100) {
       auditorVerdict = 'REJECTED';
     } else if (auditorConcerns.length === 1) {
       auditorVerdict = 'PROVISIONAL';
@@ -378,6 +404,7 @@ export class ResearchEngine {
 
     const experiment: ResearchExperiment = {
       id: expId,
+      experimentType: 'BACKTEST',
       generation,
       name: expName,
       symbol,
