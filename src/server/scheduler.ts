@@ -35,7 +35,7 @@ export class AutonomousScheduler {
 
   public start() {
     if (this.autopilotTimer) return;
-    console.log('[Autopilot] Starting SignalForge Autonomous Research Intelligence (Autopilot Active)...');
+    console.log('[Autopilot] Starting SignalForge scheduled signal and research coordinator...');
 
     this.logMind(
       'MIND',
