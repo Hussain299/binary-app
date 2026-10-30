@@ -19,6 +19,7 @@ import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
+import { historicalDataStore } from './historicalData.js';
 
 export class AutonomousScheduler {
   private isRunningCycle = false;
@@ -113,8 +114,21 @@ export class AutonomousScheduler {
       for (const symbol of FOREX_PAIRS) {
         try {
           const res = await dataFeedEngine.fetchCandles(symbol, 100);
-          candlesMap[symbol] = res.candles;
-          totalCandlesFetched += res.candles.length;
+          const newest = res.candles[res.candles.length - 1];
+          const ageMs = newest ? Date.now() - newest.timestampMs : Infinity;
+          const isRealFreshFeed =
+            res.source !== 'synthetic' &&
+            !!newest &&
+            newest.source !== 'synthetic' &&
+            ['biquote', 'dukascopy', 'yahoo', 'imported'].includes(newest.source) &&
+            ageMs >= -60_000 &&
+            ageMs <= 120_000;
+          // The feed bridge may append random synthetic candles. Never allow those
+          // candles (or stale prices) into signal generation or execution evaluation.
+          candlesMap[symbol] = isRealFreshFeed
+            ? res.candles.filter(c => c.source !== 'synthetic')
+            : [];
+          totalCandlesFetched += candlesMap[symbol].length;
         } catch (err: any) {
           console.error(`[Autopilot] Sensing failed for ${symbol}:`, err.message);
         }
@@ -133,6 +147,7 @@ export class AutonomousScheduler {
             );
           } else if (sig.lifecycleState === 'CLOSED') {
             const tradeExp = db.recordTradeExperiment(sig);
+            db.recordStrategyOutcome(sig);
 
             // AGI Autonomous Forensic Loss Investigation & Self-Correction Engine
             // Every loss counts: investigate causal root-cause and evolve antidote strategy
@@ -299,7 +314,10 @@ export class AutonomousScheduler {
               confidence: novelGeneCandidate.conviction,
               modelVersion: `v3.0-novel-ai-genesis`,
               strategyName: gene.name,
+              strategyId: gene.id,
               strategyWinRate: gene.verifiedAccuracy,
+              strategyHistoricalSampleSize: gene.sampleCount,
+              strategyEvidenceStatus: gene.accuracyStatus,
               confluenceStrategies: [gene.name, ...gene.parents, `${gene.nonLinearOperator} Activation`],
               confluenceScore: gene.parents.length + 1,
               isStackedStrategy: true,
@@ -402,7 +420,7 @@ export class AutonomousScheduler {
             let dynamicExpiry: 5 | 10 | 15 | 20 | 25 | 30 = 15;
             let ruleFamily = 'mean_reversion_20';
             let strategyName = '';
-            let winRate = 76.5;
+            let winRate = 0; // No measured result exists for this handcrafted rule combination.
 
             const hasMomentum = candidate.confluence.some(item => item.includes('Trend') || item.includes('Expansion'));
             const hasWick = candidate.confluence.some(item => item.includes('Wick'));
@@ -414,42 +432,42 @@ export class AutonomousScheduler {
               dynamicExpiry = 5;
               ruleFamily = 'momentum_5';
               strategyName = `Stacked: 5-Min Momentum + ${hasWick ? 'Wick Rejection' : 'Volume Expansion'}`;
-              winRate = 79.4;
+              winRate = 0;
             } else if (hasWick && (hasMomentum || hasRsi)) {
               // 10 Min: Liquidity Wick Sweep + 2-Candle Retest
               dynamicExpiry = 10;
               ruleFamily = 'wick_reversal';
               strategyName = `Stacked: 10-Min Liquidity Wick + ${hasRsi ? 'RSI Reversal' : 'Trend Retest'}`;
-              winRate = 81.2;
+              winRate = 0;
             } else if (hasMeanRev && hasRsi) {
               // 15 Min: Statistical Mean Reversion + RSI Extreme Pullback
               dynamicExpiry = 15;
               ruleFamily = 'mean_reversion_20';
               strategyName = 'Stacked: 15-Min Mean Reversion + RSI Divergence';
-              winRate = 82.8;
+              winRate = 0;
             } else if (hasMomentum && candidate.confluence.some(item => item.includes('20-Bar'))) {
               // 20 Min: Volatility Range Breakout (4-candle expansion)
               dynamicExpiry = 20;
               ruleFamily = 'range_breakout';
               strategyName = 'Stacked: 20-Min Volatility Range Breakout';
-              winRate = 78.9;
+              winRate = 0;
             } else if (hasMeanRev && hasWick) {
               // 25 Min: Structural Swing Reversal (5-candle channel bounce)
               dynamicExpiry = 25;
               ruleFamily = 'volatility_squeeze';
               strategyName = 'Stacked: 25-Min Structural Swing Reversal';
-              winRate = 80.5;
+              winRate = 0;
             } else {
               // 30 Min: Macro Session Trend Continuation (6-candle session flow)
               dynamicExpiry = 30;
               ruleFamily = 'order_flow_imbalance';
               strategyName = `Stacked: 30-Min ${activeSession.shortName} Macro Trend Flow`;
-              winRate = 83.4;
+              winRate = 0;
             }
 
             // High Confidence Score derived from Confluence (Never compromised)
             const confidence = Number(
-              Math.min(0.92, 0.77 + (candidate.confluenceScore - 2) * 0.05 + Math.random() * 0.03).toFixed(2)
+              Math.min(0.92, 0.77 + (candidate.confluenceScore - 2) * 0.05).toFixed(2)
             );
 
             const signal = entryExitEngine.createResearchSignal({
@@ -461,7 +479,7 @@ export class AutonomousScheduler {
               confidence,
               modelVersion: `v2.5-stacked-agi`,
               strategyName,
-              strategyWinRate: winRate,
+              strategyId: `stacked:${ruleFamily}:${dynamicExpiry}`,
               confluenceStrategies: candidate.confluence,
               confluenceScore: candidate.confluenceScore,
               isStackedStrategy: true,
@@ -473,7 +491,7 @@ export class AutonomousScheduler {
 
             this.logMind(
               'SCIENTIST',
-              `3-Min Advance Stacked Signal: ${symbol} ${candidate.direction} [${strategyName} · Dynamic Expiry: ${dynamicExpiry}m · ${winRate}% Win Rate · Confluence: ${candidate.confluenceScore} Models]. Enters strictly at 5M Candle Open (${signal.candleOpenTimeIst}).`,
+              `3-Min Advance Stacked Signal: ${symbol} ${candidate.direction} [${strategyName} · Dynamic Expiry: ${dynamicExpiry}m · Confluence: ${candidate.confluenceScore} Models]. Enters strictly at 5M Candle Open (${signal.candleOpenTimeIst}).`,
               symbol,
               signal.id
             );
@@ -489,9 +507,9 @@ export class AutonomousScheduler {
       if (this.cycleCount % 3 === 0) {
         const testPair: ForexSymbol =
           FOREX_PAIRS[this.cycleCount % FOREX_PAIRS.length];
-        const testCandles = candlesMap[testPair];
+        const testCandles = historicalDataStore.getCandles(testPair);
 
-        if (testCandles && testCandles.length >= 50) {
+        if (testCandles.length >= 10_000 && testCandles.every(c => c.source !== 'synthetic')) {
           const rule: RuleFamily =
             this.cycleCount % 2 === 0 ? 'momentum_5' : 'mean_reversion_20';
           const horizon = (5 * ((this.cycleCount % 5) + 1));
@@ -528,14 +546,22 @@ export class AutonomousScheduler {
         const synthCandles = candlesMap[synthPair] || [];
         if (synthCandles.length >= 25) {
           try {
-            const newGene = researchEngine.synthesizeInfiniteNovelStrategy(
+            let newGene = researchEngine.synthesizeInfiniteNovelStrategy(
               synthCandles,
               synthPair,
               this.currentGeneration
             );
+            const importedHistory = historicalDataStore.getCandles(synthPair);
+            if (importedHistory.length >= 10_000) {
+              try {
+                newGene = researchEngine.validateSynthesizedStrategy(newGene, importedHistory);
+              } catch (validationError: any) {
+                this.logMind('AUDITOR', `Candidate ${newGene.code} remains UNVALIDATED: ${validationError.message}`, synthPair);
+              }
+            }
             this.logMind(
               'SCIENTIST',
-              `🧬 [GENETIC SYNTHESIS]: Evolved ${newGene.code} (${newGene.name}). Equation: ${newGene.mathematicalFormula}. Verified: ${newGene.verifiedAccuracy}% across ${newGene.sampleCount} bars. Status: ${newGene.status}.`,
+              `[CANDIDATE SYNTHESIS]: ${newGene.code} (${newGene.name}). Status: ${newGene.status}. ${newGene.accuracyStatus === 'BACKTESTED' ? `Untouched test win rate: ${newGene.verifiedAccuracy}% across ${newGene.sampleCount} trades.` : 'No genuine historical validation yet.'}`,
               synthPair
             );
           } catch (e: any) {
