@@ -304,6 +304,7 @@ export interface StrategyPerformanceRecord {
   binaryWins?: number;
   binaryLosses?: number;
   binaryPushes?: number;
+  minimumPayoutPct?: number;
   negativeReturnUnits?: number;
   /** Recent unique completed outcomes used to calculate a rolling 300-trade approval window. */
   scoredOutcomes?: Array<{ result: 'WIN' | 'LOSS'; netReturnUnits: number; payoutPct: number }>;
@@ -409,6 +410,9 @@ export interface ResearchExperiment {
   liveOutcome?: 'WIN' | 'LOSS' | 'SCRATCH';
   /** One forward observation's actual net result; not a model expected value. */
   observedNetPips?: number;
+  /** One forward binary contract's return in stake units; separate from forex pips. */
+  observedNetReturnUnits?: number;
+  observedPayoutPct?: number;
   generation: number;
   name: string;
   symbol: ForexSymbol;
