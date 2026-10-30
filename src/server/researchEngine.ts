@@ -750,7 +750,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
 
     const backtestMetrics: StrategyBacktestMetrics = {
       trainSampleSize: train.trades,
+      trainScoredSampleSize: train.wins + train.losses,
       validationSampleSize: validation.trades,
+      validationScoredSampleSize: validation.wins + validation.losses,
       trainWinRate: Number(train.winRate.toFixed(4)),
       validationWinRate: Number(validation.winRate.toFixed(4)),
       testWinRate: Number(test.winRate.toFixed(4)),
