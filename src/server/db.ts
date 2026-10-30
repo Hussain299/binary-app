@@ -453,6 +453,7 @@ class DatabaseService {
     const exp: ResearchExperiment = {
       id: `exp_live_${sig.id}`,
       experimentType: 'LIVE_TRADE',
+      liveOutcome: sig.outcomeResult === 'CANCELLED' || sig.outcomeResult === 'PENDING' ? 'SCRATCH' : sig.outcomeResult,
       generation: this.state.generations.length + 1,
       name: `Live Trade Experiment: ${sig.symbol} ${sig.direction} (${sessionName})`,
       symbol: sig.symbol,
@@ -481,9 +482,9 @@ class DatabaseService {
         calibrationError: 0,
         winRate: isWin ? 100 : 0,
         expectedValuePips: netPips,
-        profitFactor: isWin ? 2.5 : 0.0,
-        maxDrawdownPct: isWin ? 0.0 : 1.5,
-        confidenceInterval95: isWin ? [0.207, 1] : [0, 0.793],
+        profitFactor: 0,
+        maxDrawdownPct: 0,
+        confidenceInterval95: sig.outcomeResult === 'WIN' ? [0.207, 1] : sig.outcomeResult === 'LOSS' ? [0, 0.793] : [0, 1],
         confusionMatrix: {
           tp: isWin && sig.direction === 'BUY' ? 1 : 0,
           fp: !isWin && sig.direction === 'BUY' ? 1 : 0,
