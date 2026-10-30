@@ -1239,7 +1239,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
 
       if (train.scoredTrades < 150 || validation.scoredTrades < 150) {
         insufficientSample++;
-      } else if (validation.expectedValuePips <= 0 || validation.profitFactor < 1.05) {
+      } else if (validation.expectedValueUnits <= 0 || validation.profitFactor < 1.05) {
         rejected++;
       }
 
@@ -1250,7 +1250,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
         validationScoredTrades: validation.scoredTrades,
         trainWinRate: train.winRate,
         validationWinRate: validation.winRate,
-        validationExpectedValuePips: validation.expectedValuePips,
+        validationExpectedValueUnits: validation.expectedValueUnits,
         validationProfitFactor: validation.profitFactor,
       });
       onProgress({
@@ -1270,11 +1270,11 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       .filter(candidate =>
         candidate.trainScoredTrades >= 150 &&
         candidate.validationScoredTrades >= 150 &&
-        candidate.validationExpectedValuePips > 0 &&
+        candidate.validationExpectedValueUnits > 0 &&
         candidate.validationProfitFactor >= 1.05
       )
       .sort((a, b) =>
-        b.validationExpectedValuePips - a.validationExpectedValuePips ||
+        b.validationExpectedValueUnits - a.validationExpectedValueUnits ||
         b.validationWinRate - a.validationWinRate
       )
       .slice(0, 10);
