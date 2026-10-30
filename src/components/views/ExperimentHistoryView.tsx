@@ -106,7 +106,7 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
                       className="hover:bg-neutral-900/60 cursor-pointer transition-colors"
                     >
                       <td className="py-2.5 px-4">
-                        <span className="text-neutral-500">G{exp.generation}</span> ·{' '}
+                        <span className="text-neutral-500">{exp.experimentType === 'LIVE_TRADE' ? 'LIVE' : `G${exp.generation}`}</span> ·{' '}
                         <strong className="text-white">{exp.name}</strong>
                       </td>
                       <td className="py-2.5 px-4 text-neutral-300 font-semibold">{exp.symbol}</td>
@@ -114,19 +114,19 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
                         {exp.ruleFamily} ({exp.horizonMinutes}m)
                       </td>
                       <td className="py-2.5 px-4 text-right text-neutral-300 tabular-nums">
-                        {(exp.metrics.trainAccuracy * 100).toFixed(1)}%
+                        {exp.experimentType === 'LIVE_TRADE' ? '—' : `${(exp.metrics.trainAccuracy * 100).toFixed(1)}%`}
                       </td>
                       <td className="py-2.5 px-4 text-right text-neutral-300 tabular-nums">
-                        {(exp.metrics.valAccuracy * 100).toFixed(1)}%
+                        {exp.experimentType === 'LIVE_TRADE' ? '—' : `${(exp.metrics.valAccuracy * 100).toFixed(1)}%`}
                       </td>
                       <td className="py-2.5 px-4 text-right font-semibold text-white tabular-nums">
-                        {(exp.metrics.testAccuracy * 100).toFixed(1)}%
+                        {exp.experimentType === 'LIVE_TRADE' ? `${exp.liveOutcome || 'OUTCOME'} (n=1)` : `${(exp.metrics.testAccuracy * 100).toFixed(1)}%`}
                       </td>
                       <td className="py-2.5 px-4 text-right text-emerald-400 tabular-nums">
-                        {exp.metrics.f1Score.toFixed(3)}
+                        {exp.experimentType === 'LIVE_TRADE' ? '—' : exp.metrics.f1Score.toFixed(3)}
                       </td>
                       <td className="py-2.5 px-4 text-right text-neutral-300 tabular-nums">
-                        {exp.metrics.profitFactor}
+                        {exp.experimentType === 'LIVE_TRADE' ? '—' : exp.metrics.profitFactor}
                       </td>
                       <td className="py-2.5 px-4 text-center">
                         <span
@@ -157,7 +157,7 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
             <div className="flex justify-between items-center pb-3 border-b border-neutral-800">
               <div>
                 <span className="text-[10px] text-neutral-500 uppercase">
-                  Experiment Dossier G{selectedExp.generation}
+                  {selectedExp.experimentType === 'LIVE_TRADE' ? 'Single Live Trade Record' : `Experiment Dossier G${selectedExp.generation}`}
                 </span>
                 <h4 className="text-base font-bold text-white">{selectedExp.name}</h4>
               </div>
@@ -169,6 +169,13 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
               </button>
             </div>
 
+            {selectedExp.experimentType === 'LIVE_TRADE' && (
+              <div className="bg-neutral-950 p-3 rounded border border-neutral-800 space-y-1">
+                <div className="text-white font-semibold">Observed live outcome: {selectedExp.liveOutcome || 'RECORDED'}</div>
+                <div>One completed trade only. This record is not a historical backtest or a strategy win-rate estimate.</div>
+                <div>Net result: {selectedExp.metrics.expectedValuePips > 0 ? '+' : ''}{selectedExp.metrics.expectedValuePips.toFixed(1)} pips</div>
+              </div>
+            )}
             <div>
               <h5 className="text-[10px] uppercase text-neutral-500 font-semibold mb-1">
                 Scientist Falsifiable Hypothesis
