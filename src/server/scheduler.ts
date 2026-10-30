@@ -342,8 +342,8 @@ export class AutonomousScheduler {
 
           // -------------------------------------------------------------
           // Multi-Strategy Stacking: Detect Bullish vs Bearish Confluence
-          // If a single indicator gives ~50%, stacking combines multiple
-          // independent mathematical models to secure high edge (>75% win rate)
+          // Stack technical confluences to form a research signal. Historical and live
+          // outcome performance are measured separately; confluence count is not a win rate.
           // -------------------------------------------------------------
           const buyConfluences: string[] = [];
           const sellConfluences: string[] = [];
@@ -420,7 +420,6 @@ export class AutonomousScheduler {
             let dynamicExpiry: 5 | 10 | 15 | 20 | 25 | 30 = 15;
             let ruleFamily = 'mean_reversion_20';
             let strategyName = '';
-            let winRate = 0; // No measured result exists for this handcrafted rule combination.
 
             const hasMomentum = candidate.confluence.some(item => item.includes('Trend') || item.includes('Expansion'));
             const hasWick = candidate.confluence.some(item => item.includes('Wick'));
@@ -432,7 +431,6 @@ export class AutonomousScheduler {
               dynamicExpiry = 5;
               ruleFamily = 'momentum_5';
               strategyName = `Stacked: 5-Min Momentum + ${hasWick ? 'Wick Rejection' : 'Volume Expansion'}`;
-              winRate = 0;
             } else if (hasWick && (hasMomentum || hasRsi)) {
               // 10 Min: Liquidity Wick Sweep + 2-Candle Retest
               dynamicExpiry = 10;
@@ -465,7 +463,7 @@ export class AutonomousScheduler {
               winRate = 0;
             }
 
-            // High Confidence Score derived from Confluence (Never compromised)
+            // Deterministic signal-strength score from rule confluence; not a calibrated probability.
             const confidence = Number(
               Math.min(0.92, 0.77 + (candidate.confluenceScore - 2) * 0.05).toFixed(2)
             );
