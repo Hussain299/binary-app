@@ -244,6 +244,15 @@ export interface StrategyGenome {
   complexity: number;
 }
 
+export interface StrategyDiscoveryMetrics {
+  trainScoredTrades: number;
+  validationScoredTrades: number;
+  trainWinRate: number;
+  validationWinRate: number;
+  validationExpectedValuePips: number;
+  validationProfitFactor: number;
+}
+
 export interface StrategyBacktestMetrics {
   trainSampleSize: number;
   trainScoredSampleSize: number;
@@ -314,6 +323,8 @@ export interface SynthesizedStrategyGene {
   /** Candidate belongs to a 300-strategy search run. */
   searchBatchId?: string;
   validationFailureReason?: string;
+  /** Train/validation-only metrics used to select finalists before the untouched test is opened. */
+  discoveryMetrics?: StrategyDiscoveryMetrics;
   /** Currency pair used to validate this candidate against historical data. */
   symbol?: ForexSymbol;
   optimalHorizonMinutes: 5 | 10 | 15 | 20 | 25 | 30;
