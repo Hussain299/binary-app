@@ -774,9 +774,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       expectedValuePips: Number(test.expectedValuePips.toFixed(2)),
       profitFactor: Number(test.profitFactor.toFixed(2)),
       confidenceInterval95: interval,
-      trainPeriod: { start: trainSet[0].candle.timestamp, end: trainSet[trainSet.length - 1].candle.timestamp },
-      validationPeriod: { start: validationSet[0].candle.timestamp, end: validationSet[validationSet.length - 1].candle.timestamp },
-      testPeriod: { start: testSet[0].candle.timestamp, end: testSet[testSet.length - 1].candle.timestamp },
+      trainPeriod: { start: ordered[Math.max(0, 30)].timestamp, end: ordered[trainEnd - 1].timestamp },
+      validationPeriod: { start: ordered[validationStart].timestamp, end: ordered[validationEnd - 1].timestamp },
+      testPeriod: { start: ordered[testStart].timestamp, end: ordered[n - 1].timestamp },
     };
 
     const testScoredTrades = test.wins + test.losses;
