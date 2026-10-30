@@ -461,60 +461,69 @@ export class ResearchEngine {
   public async generateTrinityReviews(exp: ResearchExperiment): Promise<AgentReview[]> {
     const reviews: AgentReview[] = [];
     const nowIso = new Date().toISOString();
+    const isForwardObservation = exp.experimentType === 'FORWARD_OBSERVATION' || exp.experimentType === 'LIVE_TRADE';
 
-    // 1. Scientist Review
+    const scientistContent = isForwardObservation
+      ? `One forward observation was recorded: outcome ${exp.liveOutcome || 'not recorded'}, net result ${(exp.observedNetPips ?? 0) > 0 ? '+' : ''}${(exp.observedNetPips ?? 0)} pips. A single trade cannot estimate win rate, expected value, calibration, or market-regime effects.`
+      : `The stated hypothesis was: "${exp.scientistHypothesis}". The untouched test contained ${exp.metrics.sampleSize} opportunities and ${exp.metrics.scoredTradeSampleSize} scored WIN/LOSS outcomes. Observed balanced accuracy was ${(exp.metrics.balancedAccuracy * 100).toFixed(1)}% and modeled expected value was ${exp.metrics.expectedValuePips} pips. This run does not establish a market-regime effect. Falsification screen: ${exp.metrics.balancedAccuracy >= 0.52 ? 'the balanced-accuracy screen was crossed; independent evidence is still required.' : 'the balanced-accuracy screen was not crossed.'}`;
+
     const scientistReview: AgentReview = {
       id: `rev_sci_${exp.id}`,
       experimentId: exp.id,
       role: 'SCIENTIST',
-      title: `Hypothesis & Market Behavior Analysis: ${exp.name}`,
-      content: `The hypothesis posited: "${exp.scientistHypothesis}". In this run across ${exp.metrics.sampleSize} out-of-sample test samples, the observed balanced accuracy was ${(exp.metrics.balancedAccuracy * 100).toFixed(1)}% with an expected value of ${exp.metrics.expectedValuePips} pips. 
-
-Market Regime Observation: This pattern demonstrates highest signal density when volatility is expanding. Falsification check: ${exp.metrics.balancedAccuracy >= 0.52 ? 'The hypothesis survived initial falsification threshold.' : 'The hypothesis failed the minimum 52% out-of-sample edge requirement.'}`,
+      title: `Hypothesis & Evidence Review: ${exp.name}`,
+      content: scientistContent,
       timestamp: nowIso,
-      verdict: exp.metrics.balancedAccuracy >= 0.52 ? 'PROCEED' : 'REJECT',
-      score: Math.min(100, Math.round(exp.metrics.balancedAccuracy * 150)),
+      verdict: isForwardObservation ? 'HOLD' : exp.metrics.balancedAccuracy >= 0.52 ? 'PROCEED' : 'REJECT',
     };
 
-    // 2. Engineer Review
-    const engineerReview: AgentReview = {
-      id: `rev_eng_${exp.id}`,
-      experimentId: exp.id,
-      role: 'ENGINEER',
-      title: `Training, Split and Execution Configuration Review`,
-      content: `Research pipeline configuration for generation ${exp.generation}.
+    const engineerContent = isForwardObservation
+      ? `Forward observation record only. Entry: ${exp.parameters.actualEntryPrice ?? 'not recorded'}; exit: ${exp.parameters.actualExitPrice ?? 'not recorded'}; expiry: ${exp.horizonMinutes}m. No model training or historical validation metrics are computed from this row.`
+      : `Research pipeline configuration for generation ${exp.generation}.
 - Model: logistic regression fitted only on the chronological training partition.
 - Threshold: selected from a fixed candidate set using validation EV, then frozen before the untouched test.
 - Execution alignment: 3-minute advance decision, next 5M candle open and ${exp.horizonMinutes}m expiry.
 - Purged embargo: ${exp.purgedWindowCandles} M1 candles between partitions.
-- Test opportunities: n=${exp.metrics.sampleSize}; scored WIN/LOSS outcomes: n=${exp.metrics.scoredTradeSampleSize}.`,
+- Test opportunities: n=${exp.metrics.sampleSize}; scored WIN/LOSS outcomes: n=${exp.metrics.scoredTradeSampleSize}.`;
+
+    const engineerReview: AgentReview = {
+      id: `rev_eng_${exp.id}`,
+      experimentId: exp.id,
+      role: 'ENGINEER',
+      title: 'Data, Model and Execution Configuration Review',
+      content: engineerContent,
       timestamp: nowIso,
-      verdict: 'PROCEED',
-      score: 92,
+      verdict: isForwardObservation ? 'HOLD' : 'PROCEED',
     };
 
-    // 3. Skeptical Auditor Review
+    const spreadPips = Number(exp.parameters.spreadModeledPips ?? 0);
+    const auditorContent = isForwardObservation
+      ? `Skeptical audit: PROVISIONAL. One forward trade is retained for outcome tracking only. It cannot pass or fail the strategy's historical validation gate. No model-accuracy, confidence-interval, or profit-factor claim is made from this record.`
+      : `Skeptical audit verdict: ${exp.auditorVerdict}.
+- Train accuracy: ${(exp.metrics.trainAccuracy * 100).toFixed(1)}%; validation accuracy: ${(exp.metrics.valAccuracy * 100).toFixed(1)}%.
+- Brier score: ${exp.metrics.brierScore}; calibration error: ${(exp.metrics.calibrationError * 100).toFixed(1)}%.
+- Modeled transaction cost: ${spreadPips.toFixed(2)} pips; resulting profit factor: ${exp.metrics.profitFactor}.
+${exp.auditorConcerns.length > 0 ? `Identified concerns:\n${exp.auditorConcerns.map(c => `• ${c}`).join('\n')}` : 'No configured audit threshold was breached in this run; this is not a guarantee of future performance.'}
+Policy: ${exp.auditorVerdict === 'ACCEPTED'
+  ? 'Eligible for candidate-pool consideration only; forward testing is still required.'
+  : exp.auditorVerdict === 'PROVISIONAL'
+    ? 'Hold for more evidence; do not promote.'
+    : 'Rejected; do not promote.'}`;
+
     const auditorReview: AgentReview = {
       id: `rev_aud_${exp.id}`,
       experimentId: exp.id,
       role: 'SKEPTICAL_AUDITOR',
-      title: `Adversarial Audit & Overfitting Challenge`,
-      content: `Skeptical Audit Verdict: ${exp.auditorVerdict}.
-- Overfit Delta: Train Acc ${(exp.metrics.trainAccuracy * 100).toFixed(1)}% vs Val Acc ${(exp.metrics.valAccuracy * 100).toFixed(1)}% (Delta: ${((exp.metrics.trainAccuracy - exp.metrics.valAccuracy) * 100).toFixed(1)}%).
-- Probabilistic Calibration: Brier score is ${exp.metrics.brierScore} (Calibration error: ${(exp.metrics.calibrationError * 100).toFixed(1)}%).
-- Transaction Cost Sensitivity: Evaluated against institutional spread of ${exp.parameters.spreadModeledPips} pips. Resulting profit factor is ${exp.metrics.profitFactor}.
-${exp.auditorConcerns.length > 0 ? `Identified Vulnerabilities:\n${exp.auditorConcerns.map(c => `• ${c}`).join('\n')}` : '• No configured audit threshold was breached in this run; this is not a guarantee of future performance.'}
-Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool consideration.' : 'REJECTED. Not eligible for signal generation promotion.'}`,
+      title: 'Skeptical Evidence and Overfitting Audit',
+      content: auditorContent,
       timestamp: nowIso,
-      verdict: exp.auditorVerdict === 'ACCEPTED' ? 'PROCEED' : 'REJECT',
-      score: exp.auditorVerdict === 'ACCEPTED' ? 88 : 42,
+      verdict: isForwardObservation || exp.auditorVerdict === 'PROVISIONAL'
+        ? 'HOLD'
+        : exp.auditorVerdict === 'ACCEPTED' ? 'PROCEED' : 'REJECT',
     };
 
     reviews.push(scientistReview, engineerReview, auditorReview);
-    for (const r of reviews) {
-      db.addReview(r);
-    }
-
+    for (const review of reviews) db.addReview(review);
     return reviews;
   }
 
