@@ -331,7 +331,7 @@ export interface ExperimentMetrics {
 
 export interface ResearchExperiment {
   id: string;
-  experimentType?: 'BACKTEST' | 'LIVE_TRADE';
+  experimentType?: 'BACKTEST' | 'LIVE_TRADE' | 'FORWARD_OBSERVATION';
   liveOutcome?: 'WIN' | 'LOSS' | 'SCRATCH';
   generation: number;
   name: string;
