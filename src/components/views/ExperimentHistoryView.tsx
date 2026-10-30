@@ -114,13 +114,13 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
                         {exp.ruleFamily} ({exp.horizonMinutes}m)
                       </td>
                       <td className="py-2.5 px-4 text-right text-neutral-300 tabular-nums">
-                        {exp.experimentType === 'LIVE_TRADE' ? '—' : `${(exp.metrics.trainAccuracy * 100).toFixed(1)}%`}
+                        {exp.experimentType === 'LIVE_TRADE' ? '—' : `${(exp.metrics.trainAccuracy * 100).toFixed(1)}% (n=${exp.metrics.trainSampleSize})`}
                       </td>
                       <td className="py-2.5 px-4 text-right text-neutral-300 tabular-nums">
-                        {exp.experimentType === 'LIVE_TRADE' ? '—' : `${(exp.metrics.valAccuracy * 100).toFixed(1)}%`}
+                        {exp.experimentType === 'LIVE_TRADE' ? '—' : `${(exp.metrics.valAccuracy * 100).toFixed(1)}% (n=${exp.metrics.validationSampleSize})`}
                       </td>
                       <td className="py-2.5 px-4 text-right font-semibold text-white tabular-nums">
-                        {exp.experimentType === 'LIVE_TRADE' ? `${exp.liveOutcome || 'OUTCOME'} (n=1)` : `${(exp.metrics.testAccuracy * 100).toFixed(1)}%`}
+                        {exp.experimentType === 'LIVE_TRADE' ? `${exp.liveOutcome || 'OUTCOME'} (n=1)` : `${(exp.metrics.testAccuracy * 100).toFixed(1)}% (n=${exp.metrics.sampleSize})`}
                       </td>
                       <td className="py-2.5 px-4 text-right text-emerald-400 tabular-nums">
                         {exp.experimentType === 'LIVE_TRADE' ? '—' : exp.metrics.f1Score.toFixed(3)}
