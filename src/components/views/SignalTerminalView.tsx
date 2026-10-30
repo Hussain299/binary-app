@@ -293,7 +293,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const calculatedWinRate =
     closedSignals.length > 0
       ? ((totalWins / closedSignals.length) * 100).toFixed(1)
-      : 'No verified outcomes';
+      : 'No scored forward outcomes';
   const totalNetPips = Number(
     completedSignals.reduce((acc, s) => acc + (s.netReturnPips || 0), 0).toFixed(1)
   );
@@ -1571,7 +1571,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                           </span>
                         )}
                         <span className="px-2.5 py-0.5 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-800/80 text-xs font-mono font-black">
-                          {gene.backtestMetrics ? `${gene.backtestMetrics.testWinRate * 100}% Test WR · n=${gene.sampleCount}` : 'UNVALIDATED'}
+                          {gene.backtestMetrics ? `${(gene.backtestMetrics.testWinRate * 100).toFixed(1)}% Test WR · scored n=${gene.backtestMetrics.testScoredSampleSize}` : 'UNVALIDATED'}
                         </span>
                       </div>
                     </div>
@@ -1591,11 +1591,11 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
                     {gene.backtestMetrics && (
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono bg-neutral-900/60 border border-neutral-800 rounded-lg p-3">
-                        <div><span className="text-neutral-500 block">Train · n={gene.backtestMetrics.trainSampleSize}</span><strong className="text-neutral-200">{(gene.backtestMetrics.trainWinRate * 100).toFixed(1)}%</strong></div>
-                        <div><span className="text-neutral-500 block">Validation · n={gene.backtestMetrics.validationSampleSize}</span><strong className="text-neutral-200">{(gene.backtestMetrics.validationWinRate * 100).toFixed(1)}%</strong></div>
-                        <div><span className="text-neutral-500 block">Untouched test · n={gene.backtestMetrics.testSampleSize}</span><strong className="text-emerald-300">{(gene.backtestMetrics.testWinRate * 100).toFixed(1)}%</strong></div>
+                        <div><span className="text-neutral-500 block">Train · scored n={gene.backtestMetrics.trainScoredSampleSize} / total n={gene.backtestMetrics.trainSampleSize}</span><strong className="text-neutral-200">{(gene.backtestMetrics.trainWinRate * 100).toFixed(1)}%</strong></div>
+                        <div><span className="text-neutral-500 block">Validation · scored n={gene.backtestMetrics.validationScoredSampleSize} / total n={gene.backtestMetrics.validationSampleSize}</span><strong className="text-neutral-200">{(gene.backtestMetrics.validationWinRate * 100).toFixed(1)}%</strong></div>
+                        <div><span className="text-neutral-500 block">Untouched test · scored n={gene.backtestMetrics.testScoredSampleSize} / total n={gene.backtestMetrics.testSampleSize}</span><strong className="text-emerald-300">{(gene.backtestMetrics.testWinRate * 100).toFixed(1)}%</strong></div>
                         <div><span className="text-neutral-500 block">EV / Profit factor</span><strong className="text-neutral-200">{gene.backtestMetrics.expectedValuePips.toFixed(2)} pips · {gene.backtestMetrics.profitFactor.toFixed(2)}</strong></div>
-                        <div className="col-span-2 sm:col-span-4 text-neutral-500">95% Wilson interval: {(gene.backtestMetrics.confidenceInterval95[0] * 100).toFixed(1)}%–{(gene.backtestMetrics.confidenceInterval95[1] * 100).toFixed(1)}%</div>
+                        <div className="col-span-2 sm:col-span-4 text-neutral-500">95% Wilson interval for net-positive WR: {(gene.backtestMetrics.confidenceInterval95[0] * 100).toFixed(1)}%–{(gene.backtestMetrics.confidenceInterval95[1] * 100).toFixed(1)}%</div>
                       </div>
                     )}
                     {gene.livePerformance && (
