@@ -297,7 +297,7 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
           validationExpectedValueUnits: gene.discoveryMetrics?.validationExpectedValueUnits ?? 0,
           testExpectedValueUnits: gene.backtestMetrics?.expectedValueUnits ?? 0,
           testedOnHoldout: !!gene.backtestMetrics,
-          expectedValuePips: gene.discoveryMetrics?.validationExpectedValueUnits ?? gene.backtestMetrics?.expectedValueUnits ?? 0,
+          expectedValueUnits: gene.discoveryMetrics?.validationExpectedValueUnits ?? gene.backtestMetrics?.expectedValueUnits ?? 0,
           testBlockWinRates: gene.backtestMetrics?.testBlockWinRates ?? [],
           minimumPayoutPct: gene.discoveryMetrics?.minimumPayoutPct ?? gene.backtestMetrics?.binaryPayoutPct ?? 0,
           reason: gene.validationFailureReason,
