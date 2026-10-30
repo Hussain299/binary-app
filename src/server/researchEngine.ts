@@ -1184,6 +1184,8 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       .filter(gene =>
         !!gene.genome &&
         !!gene.backtestMetrics &&
+        gene.backtestMetrics.binaryPayoutPct >= DEFAULT_BINARY_PAYOUT_PERCENT &&
+        gene.backtestMetrics.expectedValueUnits > 0 &&
         gene.backtestMetrics.trainScoredSampleSize >= 150 &&
         gene.backtestMetrics.validationScoredSampleSize >= 150 &&
         gene.backtestMetrics.validationWinRate >= 0.70
@@ -1239,7 +1241,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
 
       if (train.scoredTrades < 150 || validation.scoredTrades < 150) {
         insufficientSample++;
-      } else if (validation.expectedValueUnits <= 0 || validation.profitFactor < 1.05) {
+      } else if (validation.winRate < 0.70 || validation.expectedValueUnits <= 0 || validation.profitFactor < 1.15) {
         rejected++;
       }
 
@@ -1270,8 +1272,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       .filter(candidate =>
         candidate.trainScoredTrades >= 150 &&
         candidate.validationScoredTrades >= 150 &&
+        candidate.validationWinRate >= 0.70 &&
         candidate.validationExpectedValueUnits > 0 &&
-        candidate.validationProfitFactor >= 1.05
+        candidate.validationProfitFactor >= 1.15
       )
       .sort((a, b) =>
         b.validationExpectedValueUnits - a.validationExpectedValueUnits ||
@@ -1286,7 +1289,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
         candidate.gene.validationFailureReason =
           candidate.trainScoredTrades < 150 || candidate.validationScoredTrades < 150
             ? `Discovery sample too small (train ${candidate.trainScoredTrades}, validation ${candidate.validationScoredTrades}; require 150 each).`
-            : `Not selected for untouched-test replication: validation EV ${m.validationExpectedValueUnits.toFixed(4)} stake units/trade, PF ${m.validationProfitFactor.toFixed(2)}.`;
+            : `Validation gate failed or candidate was not selected for holdout: WR ${(m.validationWinRate * 100).toFixed(1)}%, EV ${m.validationExpectedValueUnits.toFixed(4)} stake units/trade, PF ${m.validationProfitFactor.toFixed(2)}.`;
         db.updateSynthesizedStrategy(candidate.gene);
       }
     }
