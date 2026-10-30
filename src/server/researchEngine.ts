@@ -149,6 +149,12 @@ export class ResearchEngine {
     if (candles.some(c => c.source === 'synthetic')) {
       throw new Error('Research backtests require genuine market candles. Synthetic fallback candles are not eligible.');
     }
+    const minuteSteps = candles.slice(1).filter((c, i) =>
+      Math.abs((c.timestampMs - candles[i].timestampMs) - 60_000) <= 5_000
+    ).length;
+    if (minuteSteps / Math.max(1, candles.length - 1) < 0.75) {
+      throw new Error('Dataset is not a sufficiently continuous one-minute candle series. Import verified M1 data.');
+    }
     if (!candles.every(c => Number.isFinite(c.timestampMs) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close))) {
       throw new Error('Historical dataset contains invalid candle values.');
     }
@@ -613,6 +619,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
     if (candles.length < MIN_HISTORY) {
       throw new Error(`Need at least ${MIN_HISTORY.toLocaleString()} genuine one-minute candles; received ${candles.length.toLocaleString()}.`);
     }
+    if (!gene.operatorParameters) {
+      throw new Error('This legacy candidate has no stored executable coefficients. Generate a new candidate before validating it.');
+    }
     if (candles.some(c => c.source === 'synthetic')) {
       throw new Error('Synthetic candles are prohibited in strategy validation.');
     }
@@ -621,6 +630,12 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
       if (ordered[i].timestampMs <= ordered[i - 1].timestampMs) {
         throw new Error('Historical candles contain duplicate or non-monotonic timestamps.');
       }
+    }
+    const minuteSteps = ordered.slice(1).filter((c, i) =>
+      Math.abs((c.timestampMs - ordered[i].timestampMs) - 60_000) <= 5_000
+    ).length;
+    if (minuteSteps / Math.max(1, ordered.length - 1) < 0.75) {
+      throw new Error('Imported dataset does not contain sufficiently continuous one-minute candles.');
     }
 
     const n = ordered.length;
