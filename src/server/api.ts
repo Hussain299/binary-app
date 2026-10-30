@@ -261,8 +261,9 @@ apiRouter.post('/evolution/run', async (_req: Request, res: Response) => {
 apiRouter.get('/evolution/state', (_req: Request, res: Response) => {
   const generations = db.getGenerations();
   const experiments = db.getExperiments();
-  const accepted = experiments.filter(e => e.auditorVerdict === 'ACCEPTED');
-  const rejected = experiments.filter(e => e.auditorVerdict === 'REJECTED');
+  const historicalExperiments = experiments.filter(e => e.experimentType !== 'LIVE_TRADE');
+  const accepted = historicalExperiments.filter(e => e.auditorVerdict === 'ACCEPTED');
+  const rejected = historicalExperiments.filter(e => e.auditorVerdict === 'REJECTED');
 
   res.json({
     currentGeneration: generations.length > 0 ? generations[0].generation : 1,
