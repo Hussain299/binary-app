@@ -549,7 +549,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   Closed Trades Performance
                 </span>
                 <div className="text-xl sm:text-2xl font-black font-mono text-white">
-                  {closedSignals.length ? `${calculatedWinRate}% Live win rate` : 'No completed forward outcomes'}
+                  {closedSignals.length ? `${calculatedWinRate}% forward paper win rate` : 'No completed forward outcomes'}
                 </div>
               </div>
             </div>
@@ -917,7 +917,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-purple-800/80 space-y-2">
                 <span className="font-bold text-purple-400 block text-sm flex items-center gap-1.5">
                   <Layers className="w-4 h-4" />
-                  1. Multi-Strategy Stacking (Eliminating 50% Coin-Flip Setups)
+                  1. Signal Confluence (Strength Score, Not Win Probability)
                 </span>
                 <p>
                   The current rule-based signal engine combines technical confluences such as trend direction, wick geometry, RSI and range expansion. A larger confluence count is only a signal-strength heuristic; it does not establish a win rate. Performance is calculated separately from genuine historical tests and completed forward trades.
@@ -930,14 +930,14 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   2. Session-Segmented Calibration (Asia / London / Overlap / New York)
                 </span>
                 <p>
-                  Completed real trades are grouped by their recorded market session. A session with no completed outcomes shows no win rate; a strategy-specific leader is withheld until at least 20 scored live trades exist.
+                  Completed forward paper outcomes are grouped by their recorded market session. A session with no completed outcomes shows no win rate; a strategy-specific leader is withheld until at least 20 scored live trades exist.
                 </p>
               </div>
 
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-emerald-800/80 space-y-2">
                 <span className="font-bold text-emerald-400 block text-sm flex items-center gap-1.5">
                   <Brain className="w-4 h-4" />
-                  3. Every Closed Trade is a Real Empirical Experiment
+                  3. Every Closed Trade Is Forward Paper Evidence
                 </span>
                 <p>
                   When a trade finishes, its observed result is stored in a per-strategy forward outcome ledger and tagged as a single live-trade record. One trade does not update historical accuracy or qualify a strategy for promotion; performance is reported with its accumulated sample count.
@@ -968,7 +968,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 <div>
                   <div className="text-xs text-neutral-400">Completed forward paper outcomes:</div>
                   <div className="text-2xl font-extrabold text-emerald-400 font-mono">
-                    {closedSignals.length ? `${calculatedWinRate}% live win rate` : 'No completed live trades'}
+                    {closedSignals.length ? `${calculatedWinRate}% forward paper win rate` : 'No completed live trades'}
                   </div>
                 </div>
                 <div className="text-right text-xs text-neutral-300 font-mono">
@@ -1323,7 +1323,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 <Globe className="w-6 h-6 text-cyan-400" />
                 <div>
                   <h3 className="text-lg font-bold text-white">Forward Market Session Outcomes</h3>
-                  <p className="text-xs text-neutral-400">Institutional session segmentation & verified live performance</p>
+                  <p className="text-xs text-neutral-400">Session grouping of completed forward paper outcomes</p>
                 </div>
               </div>
               <button
@@ -1335,7 +1335,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </div>
 
             <p className="text-xs text-neutral-300 leading-relaxed">
-              Forex accuracy varies by session liquidity and participant behavior. The bot evaluates and optimizes strategy confluence separately across all 4 market regimes:
+              Closed paper outcomes are grouped by the session recorded at entry. This is a descriptive breakdown; it does not prove that a session causes better performance or that the model optimizes separately by session:
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1377,7 +1377,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       <span className="text-base font-extrabold text-emerald-400">{sess.hasMeasuredData ? `${sess.winRate}%` : "No data"}</span>
                     </div>
                     <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
-                      <span className="text-[10px] text-neutral-400 block uppercase">Modeled Net Pips</span>
+                      <span className="text-[10px] text-neutral-400 block uppercase">Observed Paper Net Pips</span>
                       <span className={`text-sm font-bold ${sess.netPips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {sess.netPips > 0 ? '+' : ''}{sess.netPips} Pips
                       </span>
