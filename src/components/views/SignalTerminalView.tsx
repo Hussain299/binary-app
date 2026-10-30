@@ -284,9 +284,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const historySignals = signals.filter(s =>
     ['CLOSED', 'EXPIRED', 'INVALIDATED'].includes(s.lifecycleState)
   );
-  const closedSignals = signals.filter(
-    s => s.lifecycleState === 'CLOSED' && ['WIN', 'LOSS'].includes(s.outcomeResult)
+  const completedSignals = signals.filter(
+    s => s.lifecycleState === 'CLOSED' && ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
   );
+  const closedSignals = completedSignals.filter(s => ['WIN', 'LOSS'].includes(s.outcomeResult));
   const totalWins = closedSignals.filter(s => s.outcomeResult === 'WIN').length;
   const totalLosses = closedSignals.filter(s => s.outcomeResult === 'LOSS').length;
   const calculatedWinRate =
@@ -294,7 +295,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
       ? ((totalWins / closedSignals.length) * 100).toFixed(1)
       : 'No verified outcomes';
   const totalNetPips = Number(
-    closedSignals.reduce((acc, s) => acc + (s.netReturnPips || 0), 0).toFixed(1)
+    completedSignals.reduce((acc, s) => acc + (s.netReturnPips || 0), 0).toFixed(1)
   );
 
   const activeSignals = signals.filter(s =>
@@ -384,10 +385,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           <div className="px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-800/80 flex items-center gap-2">
             <Target className="w-3.5 h-3.5 text-emerald-400" />
             <span className="text-xs font-bold text-emerald-300 font-mono">
-              {closedSignals.length ? `${calculatedWinRate}% Live win rate` : 'No completed live trades'}
+              {closedSignals.length ? `${calculatedWinRate}% Forward signal win rate` : 'No completed forward outcomes'}
             </span>
             <span className="text-[10px] text-neutral-400 font-mono hidden sm:inline">
-              ({totalWins}W / {totalLosses}L)
+              ({totalWins}W / {totalLosses}L · n={closedSignals.length})
             </span>
           </div>
 
@@ -407,11 +408,11 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
       <div className="bg-neutral-900/60 border-b border-neutral-800/80 px-3 sm:px-5 py-1.5 flex items-center justify-between gap-2 overflow-x-auto text-[11px] font-mono scrollbar-none shrink-0">
         <div className="flex items-center gap-2 text-neutral-400 shrink-0">
           <Globe className="w-3.5 h-3.5 text-cyan-400" />
-          <span className="font-bold text-neutral-300 uppercase text-[10px] tracking-wider">Session Accuracy:</span>
+          <span className="font-bold text-neutral-300 uppercase text-[10px] tracking-wider">Forward Session Outcomes:</span>
         </div>
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           {sessionData.length === 0 ? (
-            <span className="text-neutral-500">No completed session outcomes yet</span>
+            <span className="text-neutral-500">No completed forward session outcomes yet</span>
           ) : sessionData.map(s => (
             <button
               key={s.id}
@@ -493,10 +494,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           <button
             onClick={() => setShowGenesisModal(true)}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-600/80 text-xs text-cyan-200 font-bold transition-all shadow-xs"
-            title="Inspect infinite non-human evolutionary strategies"
+            title="Inspect strategy candidates and validation evidence"
           >
             <Dna className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-            <span className="hidden sm:inline">AI Genesis</span>
+            <span className="hidden sm:inline">Candidates</span>
             <span className="sm:hidden">Genesis</span>
             <span className="px-1.5 py-0.2 rounded bg-cyan-500/20 text-[10px] text-cyan-300 font-mono font-bold">
               {synthesizedStrategies.filter(s => s.status === 'PROMOTED_ACTIVE').length || 5}
@@ -637,7 +638,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                           {sig.isNovelAiSynthesized && (
                             <span className="px-2 py-0.5 rounded-full bg-linear-to-r from-cyan-950 to-emerald-950 border border-cyan-500 text-[10px] font-black text-cyan-300 font-mono shadow-xs flex items-center gap-1">
                               <Dna className="w-2.5 h-2.5 text-cyan-400 animate-pulse" />
-                              AI Non-Human Formula
+                              Formula Candidate
                             </span>
                           )}
                           {sig.isStackedStrategy && !sig.isNovelAiSynthesized && (
@@ -755,7 +756,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                             <div className="flex items-center justify-between">
                               <span className="text-[10px] font-black uppercase text-rose-300 flex items-center gap-1 font-mono">
                                 <Microscope className="w-3.5 h-3.5 text-rose-400" />
-                                AGI Loss Autopsy & Antidote
+                                Loss Diagnostics
                               </span>
                               <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-900/40 text-rose-300 font-mono">
                                 {sig.lossAutopsy ? sig.lossAutopsy.rootCause.replace(/_/g, ' ') : 'Self-Evolved Antidote'}
@@ -826,9 +827,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                         const scoredTrades = forward ? forward.wins + forward.losses : 0;
                         return (
                           <div className="text-[10px] font-mono text-neutral-400 pt-1">
-                            Forward results: {forward && forward.trades > 0
-                              ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored trades` : 'No scored outcomes'} · ${forward.scratches} scratches · ${forward.netPips > 0 ? '+' : ''}${forward.netPips.toFixed(1)} net pips`
-                              : 'No completed live trades yet'}
+                            Forward paper results: {forward && forward.trades > 0
+                              ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored outcomes` : 'No scored outcomes'} · ${forward.scratches} scratches · ${forward.netPips > 0 ? '+' : ''}${forward.netPips.toFixed(1)} modeled net pips`
+                              : 'No completed forward outcomes yet'}
                           </div>
                         );
                       })()}
@@ -956,7 +957,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-cyan-800/80 space-y-2">
                 <span className="font-bold text-cyan-300 block text-sm flex items-center gap-1.5">
                   <Dna className="w-4 h-4 text-cyan-400" />
-                  5. Infinite Evolutionary Strategy Discovery (Non-Human Equations)
+                  5. Strategy Candidate Generation and Validation
                 </span>
                 <p>
                   The candidate generator samples operator families and coefficients and stores the exact executable parameters with each formula. Candidate generation alone provides no evidence of an edge; candidates must pass the untouched historical test and subsequent forward observation before promotion.
@@ -1164,9 +1165,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 const scoredTrades = forward ? forward.wins + forward.losses : 0;
                 return (
                   <div className="text-[11px] text-neutral-400 pt-2">
-                    Forward results: {forward && forward.trades > 0
-                      ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored trades` : 'No scored outcomes'} · ${forward.scratches} scratches · ${forward.netPips > 0 ? '+' : ''}${forward.netPips.toFixed(1)} net pips`
-                      : 'No completed live trades yet'}
+                    Forward paper results: {forward && forward.trades > 0
+                      ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored outcomes` : 'No scored outcomes'} · ${forward.scratches} scratches · ${forward.netPips > 0 ? '+' : ''}${forward.netPips.toFixed(1)} modeled net pips`
+                      : 'No completed forward outcomes yet'}
                   </div>
                 );
               })()}
@@ -1211,18 +1212,18 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
               {selectedSignal.lifecycleState === 'CLOSED' && (
                 <div className="pt-2 border-t border-neutral-850 flex justify-between items-center text-[10px] text-neutral-400">
-                  <span>Live Empirical Experiment:</span>
+                  <span>Forward Signal Observation:</span>
                   <span className="text-cyan-300 font-mono">exp_live_{selectedSignal.id}</span>
                 </div>
               )}
 
-              {/* FORENSIC LOSS AUTOPSY & ADAPTIVE AGI LEARNING */}
+              {/* RULE-BASED LOSS DIAGNOSTICS */}
               {selectedSignal.lossAutopsy && (
                 <div className="pt-2 border-t border-rose-900/60 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-rose-400 uppercase font-black tracking-wider flex items-center gap-1.5 font-mono">
                       <Microscope className="w-3.5 h-3.5 text-rose-400" />
-                      FORENSIC LOSS AUTOPSY & SELF-CORRECTION
+                      RULE-BASED LOSS DIAGNOSTICS
                     </span>
                     <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono text-[9px] font-bold">
                       {selectedSignal.lossAutopsy.rootCause.replace(/_/g, ' ')}
@@ -1321,7 +1322,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="flex items-center gap-2">
                 <Globe className="w-6 h-6 text-cyan-400" />
                 <div>
-                  <h3 className="text-lg font-bold text-white">Market Sessions Accuracy Matrix</h3>
+                  <h3 className="text-lg font-bold text-white">Forward Market Session Outcomes</h3>
                   <p className="text-xs text-neutral-400">Institutional session segmentation & verified live performance</p>
                 </div>
               </div>
@@ -1340,7 +1341,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {sessionData.length === 0 ? (
                 <div className="col-span-2 p-5 rounded-xl border border-neutral-800 bg-neutral-950 text-sm text-neutral-400">
-                  No completed live outcomes are available yet. Session win rates will appear only after real trades close.
+                  No completed forward outcomes are available yet. Session win rates appear only after a paper signal reaches its modeled expiry.
                 </div>
               ) : sessionData.map(sess => (
                 <div
@@ -1376,7 +1377,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       <span className="text-base font-extrabold text-emerald-400">{sess.hasMeasuredData ? `${sess.winRate}%` : "No data"}</span>
                     </div>
                     <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
-                      <span className="text-[10px] text-neutral-400 block uppercase">Verified PnL</span>
+                      <span className="text-[10px] text-neutral-400 block uppercase">Modeled Net Pips</span>
                       <span className={`text-sm font-bold ${sess.netPips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {sess.netPips > 0 ? '+' : ''}{sess.netPips} Pips
                       </span>
