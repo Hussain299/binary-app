@@ -82,21 +82,21 @@ export const SystemHealthView: React.FC = () => {
             </div>
 
             <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-              <span className="text-neutral-500 text-[10px] uppercase block">Autonomous Cron</span>
+              <span className="text-neutral-500 text-[10px] uppercase block">Autopilot Pulse</span>
               <span className="text-xl font-bold text-emerald-400">
-                {health.isCronRunning ? 'Cycle In Progress' : 'Idle (Hourly Schedule)'}
+                {health.isCronRunning ? 'Cycle In Progress' : 'Polling every 20s'}
               </span>
               <span className="text-[10px] text-neutral-400 block mt-1">
-                Next: {health.nextCronRun ? health.nextCronRun.substring(11, 19) + ' UTC' : 'Pending'}
+                Signal scanning interval: 20 seconds
               </span>
             </div>
 
             <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
               <span className="text-neutral-500 text-[10px] uppercase block">Active Signals</span>
               <span className="text-xl font-bold text-white tabular-nums">
-                {health.activeSignalsCount} active / {health.totalExperimentsRun} exps
+                {health.activeSignalsCount} active / {health.totalExperimentsRun} backtests
               </span>
-              <span className="text-[10px] text-neutral-400 block mt-1">Causal State Engine</span>
+              <span className="text-[10px] text-neutral-400 block mt-1">{health.totalLiveObservations || 0} individual live observations</span>
             </div>
           </div>
 
