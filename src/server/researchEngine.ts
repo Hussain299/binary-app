@@ -123,13 +123,14 @@ export class ResearchEngine {
     candles: Candle[],
     ruleFamily: RuleFamily,
     horizonMinutes: number,
-    generation: number
+    generation: number,
+    options: { allowTestFixtures?: boolean } = {}
   ): ResearchExperiment {
     if (![5, 10, 15, 20, 25, 30].includes(horizonMinutes)) {
       throw new Error('Supported research horizons are 5, 10, 15, 20, 25 and 30 minutes.');
     }
-    if (candles.some(c => c.source === 'synthetic')) {
-      throw new Error('Research backtests require genuine market candles. Synthetic fallback candles are not eligible.');
+    if (candles.some(c => c.source === 'synthetic' || (c.source === 'test_fixture' && !options.allowTestFixtures))) {
+      throw new Error('Research backtests require uploaded non-synthetic market candles. Synthetic and test-fixture candles are not eligible.');
     }
     if (!candles.every(c => Number.isFinite(c.timestampMs) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close))) {
       throw new Error('Historical dataset contains invalid candle values.');
@@ -139,7 +140,7 @@ export class ResearchEngine {
       Math.abs((c.timestampMs - candles[i].timestampMs) - 60_000) <= 5_000
     ).length;
     if (minuteSteps / Math.max(1, candles.length - 1) < 0.75) {
-      throw new Error('Dataset is not a sufficiently continuous one-minute candle series. Import verified M1 data.');
+      throw new Error('Dataset is not a sufficiently continuous one-minute candle series. Import suitable M1 history.');
     }
 
     // Only rows with a valid, causal 3-minute advance decision and exact scheduled
