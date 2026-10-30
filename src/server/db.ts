@@ -627,6 +627,17 @@ class DatabaseService {
       s => s.status === 'PROMOTED_ACTIVE' &&
         s.accuracyStatus === 'BACKTESTED' &&
         !!s.backtestMetrics &&
+        s.sampleCount >= 200 &&
+        !!s.paperMetrics &&
+        s.paperMetrics.trades >= 200
+    );
+  }
+
+  public getPaperTradingStrategies(): SynthesizedStrategyGene[] {
+    return (this.state.synthesizedStrategies || []).filter(
+      s => (s.status === 'PAPER_TRADING' || s.status === 'PROMOTED_ACTIVE') &&
+        s.accuracyStatus === 'BACKTESTED' &&
+        !!s.backtestMetrics &&
         s.sampleCount >= 200
     );
   }
@@ -647,15 +658,72 @@ class DatabaseService {
     const strategyId = signal.strategyId || `rule:${signal.ruleFamily}`;
     if (!this.state.strategyPerformance) this.state.strategyPerformance = {};
     const existing = this.state.strategyPerformance[strategyId] || {
-      strategyId, trades: 0, wins: 0, losses: 0, scratches: 0, netPips: 0, updatedAt: new Date().toISOString(),
+      strategyId, trades: 0, wins: 0, losses: 0, scratches: 0,
+      netPips: 0, positivePips: 0, negativePips: 0, updatedAt: new Date().toISOString(),
     };
+    // Backfill fields for records created before gross contribution tracking existed.
+    if (!Number.isFinite(existing.positivePips)) existing.positivePips = 0;
+    if (!Number.isFinite(existing.negativePips)) existing.negativePips = 0;
     existing.trades += 1;
-    if (signal.outcomeResult === 'WIN') existing.wins += 1;
-    else if (signal.outcomeResult === 'LOSS') existing.losses += 1;
-    else existing.scratches += 1;
-    existing.netPips = Number((existing.netPips + (signal.netReturnPips || 0)).toFixed(1));
+    const netPips = signal.netReturnPips || 0;
+    if (signal.outcomeResult === 'WIN') {
+      existing.wins += 1;
+      existing.positivePips = Number((existing.positivePips + Math.max(0, netPips)).toFixed(1));
+    } else if (signal.outcomeResult === 'LOSS') {
+      existing.losses += 1;
+      existing.negativePips = Number((existing.negativePips + Math.abs(Math.min(0, netPips))).toFixed(1));
+    } else existing.scratches += 1;
+    existing.netPips = Number((existing.netPips + netPips).toFixed(1));
     existing.updatedAt = new Date().toISOString();
     this.state.strategyPerformance[strategyId] = existing;
+
+    // A strategy that passed historical testing enters paper trading only. It must
+    // earn a large independent forward sample before the promoted/approved state.
+    const gene = this.getSynthesizedStrategyById(strategyId);
+    if (gene && gene.status !== 'REJECTED') {
+      const scoredTrades = existing.wins + existing.losses;
+      const paperWinRate = scoredTrades > 0 ? existing.wins / scoredTrades : 0;
+      const profitFactor = existing.negativePips > 0
+        ? existing.positivePips / existing.negativePips
+        : (existing.positivePips > 0 ? 99 : 0);
+      const z = 1.96;
+      const denominator = 1 + (z * z) / Math.max(1, scoredTrades);
+      const center = (paperWinRate + (z * z) / (2 * Math.max(1, scoredTrades))) / denominator;
+      const margin = z * Math.sqrt(
+        (paperWinRate * (1 - paperWinRate)) / Math.max(1, scoredTrades) +
+        (z * z) / (4 * Math.max(1, scoredTrades * scoredTrades))
+      ) / denominator;
+      const interval: [number, number] = [
+        Math.max(0, Number((center - margin).toFixed(4))),
+        Math.min(1, Number((center + margin).toFixed(4))),
+      ];
+      gene.paperMetrics = {
+        trades: existing.trades,
+        wins: existing.wins,
+        losses: existing.losses,
+        scratches: existing.scratches,
+        winRate: Number(paperWinRate.toFixed(4)),
+        netPips: existing.netPips,
+        profitFactor: Number(profitFactor.toFixed(2)),
+        confidenceInterval95: interval,
+      };
+
+      if (
+        gene.status === 'PAPER_TRADING' &&
+        scoredTrades >= 200 &&
+        paperWinRate >= 0.55 &&
+        existing.netPips > 0 &&
+        profitFactor >= 1.15 &&
+        interval[0] > 0.50
+      ) {
+        gene.status = 'PROMOTED_ACTIVE';
+      } else if (gene.status === 'PAPER_TRADING' && scoredTrades >= 300) {
+        gene.status = 'REJECTED';
+      }
+      const geneIndex = (this.state.synthesizedStrategies || []).findIndex(item => item.id === gene.id);
+      if (geneIndex >= 0) this.state.synthesizedStrategies[geneIndex] = gene;
+    }
+
     this.scheduleSave();
     return { ...existing };
   }
