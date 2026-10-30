@@ -445,8 +445,7 @@ class DatabaseService {
    * independently validate a strategy or train model weights.
    */
   public recordForwardObservation(sig: ResearchSignal): ResearchExperiment {
-    const isWin = sig.outcomeResult === 'WIN';
-    const netPips = sig.netReturnPips || 0;
+    const netPips = sig.netReturnPips ?? 0;
     const sessionName = sig.marketSessionName || 'Market Session';
     const strategyName = sig.strategyName || 'Algorithmic Strategy';
 
@@ -454,6 +453,7 @@ class DatabaseService {
       id: `exp_forward_${sig.id}`,
       experimentType: 'FORWARD_OBSERVATION',
       liveOutcome: sig.outcomeResult === 'CANCELLED' || sig.outcomeResult === 'PENDING' ? 'SCRATCH' : sig.outcomeResult,
+      observedNetPips: netPips,
       generation: this.state.generations.length + 1,
       name: `Forward Signal Outcome: ${sig.symbol} ${sig.direction} (${sessionName})`,
       symbol: sig.symbol,
@@ -465,7 +465,9 @@ class DatabaseService {
         actualExitPrice: sig.actualExitPrice || 0,
         expiryMinutes: sig.expiryMinutes,
         marketSession: sig.marketSession || 'ASIA',
-        confluenceScore: sig.confluenceScore || 1,
+        confluenceScore: sig.confluenceScore ?? 0,
+        observedNetPips: netPips,
+        observedOutcome: sig.outcomeResult,
         isStackedStrategy: sig.isStackedStrategy ? 'true' : 'false',
       },
       featuresUsed: sig.confluenceStrategies || [strategyName],
@@ -484,7 +486,7 @@ class DatabaseService {
         brierScore: 0,
         calibrationError: 0,
         winRate: 0,
-        expectedValuePips: netPips,
+        expectedValuePips: 0,
         profitFactor: 0,
         maxDrawdownPips: 0,
         confidenceInterval95: [0, 1],
@@ -502,9 +504,9 @@ class DatabaseService {
         start: sig.actualEntryTimeUtc || sig.predictionTimeUtc,
         end: sig.actualExitTimeUtc || sig.predictionTimeUtc,
       },
-      purgedWindowCandles: sig.expiryMinutes,
-      scientistHypothesis: `Forward paper observation for ${strategyName} ${sig.isStackedStrategy ? '(Stacked Confluence)' : ''} during ${sessionName}.`,
-      scientistDisproofCondition: `Disproved if net spread-adjusted pips fall below -0.5 pips. Observed: ${netPips > 0 ? '+' : ''}${netPips} pips.`,
+      purgedWindowCandles: 0,
+      scientistHypothesis: `Forward observation for ${strategyName} during ${sessionName}. One trade is recorded as an outcome only; it is not evidence of a repeatable statistical edge.`,
+      scientistDisproofCondition: `No strategy-level conclusion can be drawn from one trade. Recorded outcome: ${sig.outcomeResult}; net result: ${netPips > 0 ? '+' : ''}${netPips} pips.`,
       engineerConfigNotes: `Feed-based paper entry/exit estimate using ${sig.entrySource || 'market data'}. Entry: ${sig.actualEntryPrice}, Exit: ${sig.actualExitPrice}, Duration: ${sig.expiryMinutes}m; no broker fill is asserted.`,
       auditorVerdict: 'PROVISIONAL',
       auditorConcerns: ['Single forward trade recorded for outcome tracking only. This observation does not validate or reject a strategy.'],
