@@ -50,7 +50,7 @@ apiRouter.get('/forex-candles', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/scan — Market scan across all 8 forex pairs
+// GET /api/scan — Market scan across all configured forex pairs
 apiRouter.get('/scan', async (_req: Request, res: Response) => {
   try {
     const scanResults: Array<{
@@ -307,11 +307,12 @@ apiRouter.get('/system/health', (_req: Request, res: Response) => {
   const cron = db.getCronState();
   res.json({
     uptimeSeconds: Math.floor(process.uptime()),
-    dbType: 'SQLite (Server File)',
+    dbType: 'JSON File Store',
     dbPath: 'data/signalforge.db.json',
     totalCandlesStored: db.getTotalCandlesCount(),
     activeSignalsCount: db.getActiveSignals().length,
-    totalExperimentsRun: db.getExperiments().length,
+    totalExperimentsRun: db.getExperiments().filter(e => e.experimentType !== 'LIVE_TRADE').length,
+    totalLiveObservations: db.getExperiments().filter(e => e.experimentType === 'LIVE_TRADE').length,
     lastCronRun: cron.lastRun,
     nextCronRun: cron.nextRun,
     isCronRunning: cron.isRunning,
@@ -358,7 +359,7 @@ apiRouter.get('/autopilot/status', (_req: Request, res: Response) => {
     mode: 'AUTONOMOUS_AGI_RESEARCH',
     activeSignalsCount: db.getActiveSignals().length,
     totalCandles: db.getTotalCandlesCount(),
-    pairsMonitored: 8,
+    pairsMonitored: FOREX_PAIRS.length,
     intervalSeconds: 20,
     timestamp: new Date().toISOString(),
   });
