@@ -263,7 +263,7 @@ export async function runAllVerificationTests(): Promise<{
   // 3. ML & RESEARCH PIPELINE TESTS
   // ==========================================
   await runTest('ML', 'Purged Walk-Forward Splits & Embargo Verification', () => {
-    const candles = makeM1TestCandles('EUR/USD', 4000);
+    const candles = makeM1TestCandles('EUR/USD', 12000);
     const exp = researchEngine.runWalkForwardExperiment('EUR/USD', candles, 'momentum_5', 10, 1, { allowTestFixtures: true });
 
     if (exp.purgedWindowCandles < 10) {
@@ -345,7 +345,7 @@ export async function runAllVerificationTests(): Promise<{
   });
 
   await runTest('RESEARCH', 'Skeptical Auditor Rejection of Overfitted Candidates', async () => {
-    const candles = makeM1TestCandles('EUR/GBP', 4000);
+    const candles = makeM1TestCandles('EUR/GBP', 12000);
     const exp = researchEngine.runWalkForwardExperiment('EUR/GBP', candles, 'wick_reversal', 15, 1, { allowTestFixtures: true });
     const reviews = await researchEngine.generateTrinityReviews(exp);
 
