@@ -1151,10 +1151,16 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     onProgress: (progress: { completed: number; passedHistorical: number; insufficientSample: number; rejected: number }) => void
   ): Promise<SynthesizedStrategyGene[]> {
     const data = this.prepareGeneResearchData(candles);
-    // Freeze parents before this run. The same batch's 300 candidates do not breed
-    // from one another's held-out results, avoiding a feedback loop on this dataset.
+    // Freeze parents before this run. Select parents only with train/validation
+    // evidence; never use the untouched test result to choose or breed descendants.
     const parentPool = db.getSynthesizedStrategies()
-      .filter(gene => !!gene.genome && gene.accuracyStatus === 'BACKTESTED' && gene.status !== 'REJECTED')
+      .filter(gene =>
+        !!gene.genome &&
+        !!gene.backtestMetrics &&
+        gene.backtestMetrics.trainScoredSampleSize >= 150 &&
+        gene.backtestMetrics.validationScoredSampleSize >= 150 &&
+        gene.backtestMetrics.validationWinRate >= 0.70
+      )
       .sort((a, b) =>
         (b.backtestMetrics?.validationWinRate ?? 0) - (a.backtestMetrics?.validationWinRate ?? 0)
       ).slice(0, 30);
