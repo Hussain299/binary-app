@@ -67,7 +67,7 @@ export class ResearchEngine {
       const candle = candles[i];
       const previous = candles[i - 1];
       const decisionTime = candle.timestampMs + ONE_MIN_MS;
-      const entryTime = Math.ceil(decisionTime / FIVE_MIN_MS) * FIVE_MIN_MS;
+      const entryTime = (Math.floor(decisionTime / FIVE_MIN_MS) + 1) * FIVE_MIN_MS;
       const secondsToEntry = entryTime - decisionTime;
       if (secondsToEntry < 15_000 || secondsToEntry > 180_000) continue;
       if (seenEntryTimes.has(entryTime)) continue;
@@ -675,7 +675,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
 
         // Candle timestamps are minute-open timestamps. The decision is made after the bar closes.
         const decisionTime = candle.timestampMs + ONE_MIN_MS;
-        const nextEntryTime = Math.ceil(decisionTime / FIVE_MIN_MS) * FIVE_MIN_MS;
+        const nextEntryTime = (Math.floor(decisionTime / FIVE_MIN_MS) + 1) * FIVE_MIN_MS;
         const advanceMs = nextEntryTime - decisionTime;
         if (advanceMs < 15_000 || advanceMs > 180_000) { cursor++; continue; }
 
@@ -696,12 +696,12 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
           ema21.slice(0, cursor + 1),
           rsi14.slice(0, cursor + 1)
         );
-        if (!result.shouldTrigger) { cursor++; continue; }
+        if (!result.shouldTrigger || result.conviction < 0.80) { cursor++; continue; }
 
         // Require an actual one-minute candle at the scheduled entry boundary.
         let entryIndex = cursor + 1;
         while (entryIndex < until && ordered[entryIndex].timestampMs < nextEntryTime) entryIndex++;
-        if (entryIndex >= until || Math.abs(ordered[entryIndex].timestampMs - nextEntryTime) > ONE_MIN_MS) {
+        if (entryIndex >= until || Math.abs(ordered[entryIndex].timestampMs - nextEntryTime) > 5_000) {
           cursor++;
           continue;
         }
@@ -709,7 +709,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
         const exitTarget = nextEntryTime + gene.optimalHorizonMinutes * ONE_MIN_MS;
         let exitIndex = entryIndex + 1;
         while (exitIndex < until && ordered[exitIndex].timestampMs < exitTarget) exitIndex++;
-        if (exitIndex >= until || Math.abs(ordered[exitIndex].timestampMs - exitTarget) > ONE_MIN_MS) {
+        if (exitIndex >= until || Math.abs(ordered[exitIndex].timestampMs - exitTarget) > 5_000) {
           cursor++;
           continue;
         }
@@ -748,7 +748,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED' ? 'Permitted for candidate pool cons
     }
 
     // Wilson interval for the untouched test-set win proportion.
-    const z = 1.96, p = test.wins / test.trades, nTest = test.trades;
+    const z = 1.96, nTest = Math.max(1, test.wins + test.losses), p = test.wins / nTest;
     const denominator = 1 + z * z / nTest;
     const center = (p + z * z / (2 * nTest)) / denominator;
     const margin = z * Math.sqrt((p * (1 - p) / nTest) + (z * z / (4 * nTest * nTest))) / denominator;
