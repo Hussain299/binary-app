@@ -51,7 +51,7 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({
     }
   };
 
-  const exp = activeExp || experiments.find(item => item.experimentType !== 'LIVE_TRADE') || null;
+  const exp = activeExp || experiments.find(item => item.experimentType !== 'LIVE_TRADE' && item.experimentType !== 'FORWARD_OBSERVATION') || null;
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-y-auto bg-neutral-950 p-6 space-y-6">
