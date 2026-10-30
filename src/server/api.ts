@@ -40,6 +40,7 @@ interface StrategySearchJob {
     testExpectedValueUnits: number;
     testedOnHoldout: boolean;
     expectedValueUnits: number;
+    minimumPayoutPct: number;
     testBlockWinRates: number[];
     reason?: string;
   }>;
@@ -298,6 +299,7 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
           testedOnHoldout: !!gene.backtestMetrics,
           expectedValuePips: gene.discoveryMetrics?.validationExpectedValueUnits ?? gene.backtestMetrics?.expectedValueUnits ?? 0,
           testBlockWinRates: gene.backtestMetrics?.testBlockWinRates ?? [],
+          minimumPayoutPct: gene.discoveryMetrics?.minimumPayoutPct ?? gene.backtestMetrics?.binaryPayoutPct ?? 0,
           reason: gene.validationFailureReason,
         }));
     }).catch(error => {
