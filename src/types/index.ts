@@ -314,7 +314,7 @@ export interface ExperimentMetrics {
   winRate: number;
   expectedValuePips: number;
   profitFactor: number;
-  maxDrawdownPct: number;
+  maxDrawdownPips: number;
   confidenceInterval95: [number, number];
   confusionMatrix: {
     tp: number;
