@@ -568,7 +568,7 @@ export class AutonomousScheduler {
 
       // 5. Generational Evolution Synthesis (every 10 pulses)
       if (this.cycleCount % 10 === 0 && experimentsRun.length > 0) {
-        const allExps = db.getExperiments().filter(e => e.experimentType !== 'LIVE_TRADE').slice(0, 10);
+        const allExps = db.getExperiments().filter(e => e.experimentType !== 'LIVE_TRADE' && e.experimentType !== 'FORWARD_OBSERVATION').slice(0, 10);
         const accepted = allExps.filter(e => e.auditorVerdict === 'ACCEPTED').length;
         const rejected = allExps.filter(e => e.auditorVerdict === 'REJECTED').length;
         const bestF1 = allExps.length > 0
