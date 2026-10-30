@@ -11,6 +11,7 @@ interface StrategySearchCandidate {
   testScoredTrades: number;
   validationWinRate: number;
   expectedValuePips: number;
+  testBlockWinRates: number[];
   reason?: string;
 }
 
@@ -23,6 +24,7 @@ interface StrategySearchBatch {
   passedHistorical: number;
   insufficientSample: number;
   rejected: number;
+  approvedCount: number;
   startedAt: string;
   finishedAt?: string;
   error?: string;
@@ -79,6 +81,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
         passedHistorical: 0,
         insufficientSample: 0,
         rejected: 0,
+        approvedCount: 0,
         total: 300,
       };
       setSearchBatch(snapshot);
@@ -211,7 +214,8 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
               </div>
               <div className="rounded-lg bg-neutral-950 border border-neutral-800 p-3">
                 <div className="text-[10px] text-neutral-500">Actionable strategies approved</div>
-                <div className="text-xl font-bold text-white">0 until forward 300 pass</div>
+                <div className="text-xl font-bold text-white">{searchBatch.approvedCount}</div>
+                <div className="text-[9px] text-neutral-500">approved after historical + forward 300 gates</div>
               </div>
             </div>
             {searchBatch.topCandidates && searchBatch.topCandidates.length > 0 && (
@@ -223,6 +227,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
                       <th className="p-2">Test WR</th>
                       <th className="p-2">Test n</th>
                       <th className="p-2">Validation WR</th>
+                      <th className="p-2">100-trade blocks</th>
                       <th className="p-2">EV (pips)</th>
                       <th className="p-2">Status</th>
                     </tr>
@@ -237,7 +242,8 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
                         </td>
                         <td className="p-2 font-mono text-white">{(candidate.testWinRate * 100).toFixed(1)}%</td>
                         <td className="p-2 font-mono text-neutral-300">{candidate.testScoredTrades}</td>
-                        <td className="p-2 font-mono text-neutral-300">{(candidate.validationWinRate * 100).toFixed(1)}%</td>
+                        <td className="p-2 font-mono text-neutral-300">{candidate.testBlockWinRates.length === 3 ? candidate.testBlockWinRates.map(rate => `${(rate * 100).toFixed(0)}%`).join(' / ') : '—'}</td>
+                        <td className="p-2 font-mono text-neutral-300">{candidate.validationWinRate > 0 ? `${(candidate.validationWinRate * 100).toFixed(1)}%` : '—'}</td>
                         <td className="p-2 font-mono text-neutral-300">{candidate.expectedValuePips.toFixed(2)}</td>
                         <td className="p-2">
                           <span className={candidate.status === 'PAPER_TRADING' ? 'text-emerald-300' : 'text-neutral-400'}>
