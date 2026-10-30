@@ -47,6 +47,7 @@ interface PreparedGeneResearchData {
   validationEndMs: number;
   testStartMs: number;
   payoutPct: number;
+  excludedZeroVolumeFlatCandles: number;
 }
 
 export class ResearchEngine {
