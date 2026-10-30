@@ -1396,7 +1396,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </div>
 
             <button
-              onClick={() => setShowSessionsModal(false)
+              onClick={() => setShowSessionsModal(false)}
               className="w-full py-2.5 bg-neutral-800 hover:bg-neutral-700 font-semibold text-white rounded-xl text-xs transition-colors"
             >
               Close
