@@ -485,7 +485,7 @@ class DatabaseService {
         winRate: 0,
         expectedValuePips: netPips,
         profitFactor: 0,
-        maxDrawdownPct: 0,
+        maxDrawdownPips: 0,
         confidenceInterval95: sig.outcomeResult === 'WIN' ? [0.207, 1] : sig.outcomeResult === 'LOSS' ? [0, 0.793] : [0, 1],
         confusionMatrix: {
           tp: isWin && sig.direction === 'BUY' ? 1 : 0,
