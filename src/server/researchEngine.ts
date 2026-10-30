@@ -150,7 +150,7 @@ export class ResearchEngine {
     );
     const total = dataset.length;
     if (total < 100) {
-      throw new Error(`Insufficient eligible scheduled-entry samples (${total}). Import more genuine one-minute candles.`);
+      throw new Error(`Insufficient eligible scheduled-entry samples (${total}). Import more suitable one-minute historical candles.`);
     }
 
     // One eligible observation represents one M5 entry opportunity. Purge enough
@@ -615,7 +615,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
    * non-linear polynomial operators, and cross-bred parents into strategies never conceived by humans.
    */
   /**
-   * Replays one executable strategy over chronological, genuine one-minute market data.
+   * Replays one executable strategy over chronological, uploaded one-minute candles.
    * Signals are evaluated only on completed candles, entered at the next 5-minute boundary,
    * and exited at the configured dynamic 5–30 minute expiry. No synthetic candles are eligible.
    */
@@ -625,7 +625,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
   ): SynthesizedStrategyGene {
     const MIN_HISTORY = 10_000;
     if (candles.length < MIN_HISTORY) {
-      throw new Error(`Need at least ${MIN_HISTORY.toLocaleString()} genuine one-minute candles; received ${candles.length.toLocaleString()}.`);
+      throw new Error(`Need at least ${MIN_HISTORY.toLocaleString()} one-minute candles; received ${candles.length.toLocaleString()}.`);
     }
     if (!gene.operatorParameters) {
       throw new Error('This legacy candidate has no stored executable coefficients. Generate a new candidate before validating it.');
