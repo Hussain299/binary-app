@@ -12,6 +12,7 @@ import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
 import { autonomousScheduler } from './scheduler.js';
 import { runAllVerificationTests } from './tests.js';
+import { historicalDataStore } from './historicalData.js';
 
 export const apiRouter = Router();
 
@@ -99,14 +100,22 @@ apiRouter.post('/analyze', async (req: Request, res: Response) => {
     const horizon = Number(req.body.horizon) || 10;
     const ruleFamily = (req.body.ruleFamily as RuleFamily) || 'momentum_5';
 
-    const { candles, source, qualityScore } = await dataFeedEngine.fetchCandles(symbol, 120);
+    const candles = historicalDataStore.getCandles(symbol);
+    if (candles.length < 10_000) {
+      return res.status(409).json({
+        error: `Insufficient genuine historical data for research. Import at least 10,000 one-minute candles for ${symbol}; currently stored: ${candles.length}.`,
+        symbol,
+        storedCandles: candles.length,
+        requiredCandles: 10_000,
+      });
+    }
     const exp = researchEngine.runWalkForwardExperiment(symbol, candles, ruleFamily, horizon, 1);
     const reviews = await researchEngine.generateTrinityReviews(exp);
 
     res.json({
       symbol,
-      source,
-      qualityScore,
+      source: 'historical-import',
+      qualityScore: 100,
       experiment: exp,
       reviews,
     });
@@ -137,11 +146,50 @@ apiRouter.get('/strategies/synthesized', (_req: Request, res: Response) => {
   const all = db.getSynthesizedStrategies();
   const promoted = db.getPromotedActiveStrategies();
   res.json({
-    strategies: all,
+    strategies: all.map(gene => ({
+      ...gene,
+      livePerformance: db.getStrategyPerformance().find(p => p.strategyId === gene.id) || null,
+    })),
     promotedCount: promoted.length,
     totalCount: all.length,
     generationsCount: db.getGenerations().length,
   });
+});
+
+// Historical market-data import and audit endpoints. Files are kept outside the rolling live cache.
+apiRouter.post('/research/candles/import', (req: Request, res: Response) => {
+  try {
+    const rawSymbol = String(req.body.symbol || '').toUpperCase();
+    const symbol = FOREX_PAIRS.find(p => p.replace('/', '') === rawSymbol.replace('/', ''));
+    if (!symbol) return res.status(400).json({ error: 'Unknown or unsupported forex pair.' });
+    const result = historicalDataStore.importCandles(symbol, req.body.candles);
+    res.json({ success: true, result, nextStep: 'Validate candidate strategies for this pair.' });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+apiRouter.get('/research/candles/status', (_req: Request, res: Response) => {
+  res.json({ pairs: FOREX_PAIRS.map(pair => historicalDataStore.getStats(pair)) });
+});
+
+apiRouter.get('/strategies/performance', (_req: Request, res: Response) => {
+  res.json({ strategies: db.getStrategyPerformance() });
+});
+
+// Validate one generated candidate against its pair's imported genuine historical candles.
+apiRouter.post('/strategies/validate', (req: Request, res: Response) => {
+  try {
+    const gene = db.getSynthesizedStrategyById(String(req.body.geneId || ''));
+    if (!gene) return res.status(404).json({ error: 'Strategy candidate not found.' });
+    const symbol = gene.symbol || FOREX_PAIRS.find(p => p.replace('/', '') === String(req.body.symbol || '').toUpperCase().replace('/', ''));
+    if (!symbol) return res.status(400).json({ error: 'The candidate has no currency pair. Supply a valid symbol.' });
+    const candles = historicalDataStore.getCandles(symbol);
+    const validated = researchEngine.validateSynthesizedStrategy({ ...gene, symbol }, candles);
+    res.json({ success: true, gene: validated });
+  } catch (err: any) {
+    res.status(409).json({ error: err.message });
+  }
 });
 
 // POST /api/strategies/evolve — Trigger immediate evolutionary synthesis of a novel strategy
