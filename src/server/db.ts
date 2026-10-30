@@ -562,7 +562,7 @@ class DatabaseService {
         if (signal.outcomeResult === 'WIN') stratMap[name].wins++;
         else if (signal.outcomeResult === 'LOSS') stratMap[name].losses++;
       }
-      let bestStrategy = 'Insufficient strategy-specific live trades (20 required)';
+      let bestStrategy = 'Insufficient strategy-specific forward outcomes (20 scored required)';
       let bestRate = -1;
       for (const [name, stats] of Object.entries(stratMap)) {
         const sample = stats.wins + stats.losses;
@@ -570,7 +570,7 @@ class DatabaseService {
         const rate = (stats.wins / sample) * 100;
         if (rate > bestRate) {
           bestRate = rate;
-          bestStrategy = `${name} (${rate.toFixed(1)}% across ${sample} live trades)`;
+          bestStrategy = `${name} (${rate.toFixed(1)}% across ${sample} scored forward outcomes)`;
         }
       }
 
