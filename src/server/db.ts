@@ -91,6 +91,10 @@ class DatabaseService {
                 status: 'EXPERIMENTING',
               };
             }
+            // Older approval records may predate the stricter forward 300-trade gate.
+            if (gene.status === 'PROMOTED_ACTIVE' && !this.hasForwardApprovalEvidence(gene)) {
+              return { ...gene, status: 'PAPER_TRADING' };
+            }
             return gene;
           });
         }
@@ -644,27 +648,34 @@ class DatabaseService {
       metrics.confidenceInterval95[0] >= 0.60;
   }
 
+  private hasForwardApprovalEvidence(gene: SynthesizedStrategyGene): boolean {
+    const metrics = gene.paperMetrics;
+    return !!metrics &&
+      metrics.trades >= 300 &&
+      metrics.scoredTrades >= 300 &&
+      metrics.winRate >= 0.70 &&
+      Array.isArray(metrics.rollingWinRates) &&
+      metrics.rollingWinRates.length === 3 &&
+      metrics.rollingWinRates.every(rate => rate >= 0.70) &&
+      metrics.netPips > 0 &&
+      metrics.profitFactor >= 1.15 &&
+      metrics.confidenceInterval95[0] >= 0.60;
+  }
+
   public getPromotedActiveStrategies(): SynthesizedStrategyGene[] {
     return (this.state.synthesizedStrategies || []).filter(gene =>
       gene.status === 'PROMOTED_ACTIVE' &&
       this.hasHistoricalApprovalEvidence(gene) &&
-      !!gene.paperMetrics &&
-      gene.paperMetrics.trades >= 300 &&
-      gene.paperMetrics.scoredTrades >= 300 &&
-      gene.paperMetrics.winRate >= 0.70 &&
-      Array.isArray(gene.paperMetrics.rollingWinRates) &&
-      gene.paperMetrics.rollingWinRates.length === 3 &&
-      gene.paperMetrics.rollingWinRates.every(rate => rate >= 0.70) &&
-      gene.paperMetrics.netPips > 0 &&
-      gene.paperMetrics.profitFactor >= 1.15 &&
-      gene.paperMetrics.confidenceInterval95[0] >= 0.60
+      this.hasForwardApprovalEvidence(gene)
     );
   }
 
   public getPaperTradingStrategies(): SynthesizedStrategyGene[] {
     return (this.state.synthesizedStrategies || []).filter(gene =>
-      (gene.status === 'PAPER_TRADING' || gene.status === 'PROMOTED_ACTIVE') &&
-      this.hasHistoricalApprovalEvidence(gene)
+      (gene.status === 'PAPER_TRADING' && this.hasHistoricalApprovalEvidence(gene)) ||
+      (gene.status === 'PROMOTED_ACTIVE' &&
+        this.hasHistoricalApprovalEvidence(gene) &&
+        this.hasForwardApprovalEvidence(gene))
     );
   }
 
@@ -766,14 +777,7 @@ class DatabaseService {
 
       const forwardPassed =
         this.hasHistoricalApprovalEvidence(gene) &&
-        existing.trades >= 300 &&
-        recent.length === 300 &&
-        recentRate >= 0.70 &&
-        rollingWinRates.length === 3 &&
-        rollingWinRates.every(rate => rate >= 0.70) &&
-        recentNetPips > 0 &&
-        recentProfitFactor >= 1.15 &&
-        interval[0] >= 0.60;
+        this.hasForwardApprovalEvidence(gene);
 
       if (gene.status === 'PAPER_TRADING' && forwardPassed) {
         gene.status = 'PROMOTED_ACTIVE';
