@@ -1034,7 +1034,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-neutral-300 leading-relaxed">
-                  Identifies institutional liquidity sweeps where price tested a key high/low and got aggressively rejected with a long wick (&gt;50% of range). Enters on 5M candle open with 10-minute expiry.
+                  Candidate hypothesis: a long rejection wick (more than half the candle range) near a recent high or low may precede a short-term reversal. The configured 5M-open entry and 10-minute expiry are test settings, not proof of an edge.
                 </p>
               </div>
 
@@ -1050,7 +1050,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-neutral-300 leading-relaxed">
-                  Triggers when price extends &gt;8 pips away from its 20-period moving average. Enters counter-trend on 5M candle open with a 15-minute dynamic expiry window.
+                  Candidate hypothesis: price more than 8 pips from its 20-period moving average may revert toward the average. This needs historical and forward testing with the configured 5M-open entry and 15-minute expiry.
                 </p>
               </div>
 
@@ -1066,7 +1066,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-neutral-300 leading-relaxed">
-                  Monitors multi-candle consolidation breakouts. Once verified with purged walk-forward confidence, takes position at 5M candle open for a longer 20m or 30m trend run.
+                  Candidate hypothesis: a break beyond a multi-candle consolidation may continue. It must pass a purged historical test and forward paper observation before it can be approved; configured expiry options are 20 or 30 minutes.
                 </p>
               </div>
             </div>
@@ -1186,13 +1186,13 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 </div>
               )}
 
-              {/* NON-HUMAN MATHEMATICAL FORMULA & WHY HUMANS MISS THIS */}
+              {/* GENERATED STRATEGY CANDIDATE FORMULA */}
               {selectedSignal.mathematicalFormula && (
                 <div className="pt-2 border-t border-neutral-850 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-cyan-400 uppercase font-black tracking-wider flex items-center gap-1.5">
                       <Dna className="w-3.5 h-3.5" />
-                      NOVEL NON-HUMAN MATHEMATICAL FORMULA
+                      GENERATED STRATEGY CANDIDATE FORMULA
                     </span>
                     <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono text-[9px] font-bold">
                       Evolved Strategy Candidates
