@@ -171,7 +171,7 @@ export class AutonomousScheduler {
 
               this.logMind(
                 'AUDITOR',
-                `🔬 [FORENSIC LOSS AUTOPSY & SELF-CORRECTION]: Investigated loss on ${sig.symbol} (${sig.direction}). Root Cause: ${autopsy.rootCause}. Lesson: ${autopsy.lessonsLearned[0]}. Autonomously Evolved Antidote: ${antidoteGene.name} (${antidoteGene.mathematicalFormula}) [${antidoteGene.verifiedAccuracy}% Win Rate].`,
+                `🔬 [FORENSIC LOSS AUTOPSY & SELF-CORRECTION]: Investigated loss on ${sig.symbol} (${sig.direction}). Root Cause: ${autopsy.rootCause}. Lesson: ${autopsy.lessonsLearned[0]}. Autonomously Evolved Antidote: ${antidoteGene.name} (${antidoteGene.mathematicalFormula}) [UNVALIDATED — not eligible for live strategy promotion].`,
                 sig.symbol,
                 sig.id
               );
@@ -271,7 +271,7 @@ export class AutonomousScheduler {
           // Checks if an evolved, multi-dimensional quantitative formula
           // with non-linear polynomial operators triggers on this candle
           // -------------------------------------------------------------
-          const promotedGenes = db.getPromotedActiveStrategies();
+          const promotedGenes = db.getPaperTradingStrategies();
           let novelGeneCandidate: {
             gene: typeof promotedGenes[0];
             direction: 'BUY' | 'SELL';
@@ -333,7 +333,7 @@ export class AutonomousScheduler {
 
             this.logMind(
               'SCIENTIST',
-              `🧬 [NOVEL AI STRATEGY TRIGGERED]: ${symbol} ${signal.direction} [${gene.name} · Dynamic Expiry: ${gene.optimalHorizonMinutes}m · Formula: ${gene.mathematicalFormula} · ${gene.verifiedAccuracy}% Win Rate]. Enters strictly at 5M Candle Open (${signal.candleOpenTimeIst}).`,
+              `🧬 [NOVEL AI STRATEGY TRIGGERED]: ${symbol} ${signal.direction} [${gene.name} · Dynamic Expiry: ${gene.optimalHorizonMinutes}m · Formula: ${gene.mathematicalFormula} · ${gene.verifiedAccuracy}% historical test WR (n=${gene.sampleCount}). ${gene.status === 'PAPER_TRADING' ? 'PAPER TRADING' : 'FORWARD APPROVED'}. Enters strictly at 5M Candle Open (${signal.candleOpenTimeIst}).`,
               symbol,
               signal.id
             );
