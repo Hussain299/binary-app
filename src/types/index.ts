@@ -228,6 +228,7 @@ export interface StrategyBacktestMetrics {
   testWinRate: number;
   testAccuracy: number;
   testSampleSize: number;
+  testScoredSampleSize: number;
   testWins: number;
   testLosses: number;
   expectedValuePips: number;
@@ -300,6 +301,7 @@ export type RuleFamily =
 
 export interface ExperimentMetrics {
   sampleSize: number;
+  scoredTradeSampleSize: number;
   trainSampleSize: number;
   validationSampleSize: number;
   trainAccuracy: number;
@@ -387,7 +389,7 @@ export interface AutopilotLog {
 
 export interface SystemHealthState {
   uptimeSeconds: number;
-  dbType: 'SQLite (Server File)' | 'Cloudflare D1';
+  dbType: 'JSON File Store' | 'Cloudflare D1';
   dbPath: string;
   totalCandlesStored: number;
   activeSignalsCount: number;
