@@ -242,8 +242,8 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
                         </td>
                         <td className="p-2 font-mono text-white">{(candidate.testWinRate * 100).toFixed(1)}%</td>
                         <td className="p-2 font-mono text-neutral-300">{candidate.testScoredTrades}</td>
-                        <td className="p-2 font-mono text-neutral-300">{candidate.testBlockWinRates.length === 3 ? candidate.testBlockWinRates.map(rate => `${(rate * 100).toFixed(0)}%`).join(' / ') : '—'}</td>
                         <td className="p-2 font-mono text-neutral-300">{candidate.validationWinRate > 0 ? `${(candidate.validationWinRate * 100).toFixed(1)}%` : '—'}</td>
+                        <td className="p-2 font-mono text-neutral-300">{candidate.testBlockWinRates.length === 3 ? candidate.testBlockWinRates.map(rate => `${(rate * 100).toFixed(0)}%`).join(' / ') : '—'}</td>
                         <td className="p-2 font-mono text-neutral-300">{candidate.expectedValuePips.toFixed(2)}</td>
                         <td className="p-2">
                           <span className={candidate.status === 'PAPER_TRADING' ? 'text-emerald-300' : 'text-neutral-400'}>
