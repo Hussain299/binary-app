@@ -11,7 +11,7 @@ interface StrategyDiscoveryViewProps {
 }
 
 const statusLabel = (gene: StrategyWithForward): string => {
-  if (gene.status === 'PROMOTED_ACTIVE') return 'FORWARD APPROVED';
+  if (gene.status === 'PROMOTED_ACTIVE') return 'FORWARD PAPER GATE PASSED';
   if (gene.status === 'PAPER_TRADING') return 'PAPER TRADING';
   if (gene.status === 'REJECTED') return 'REJECTED';
   if (gene.accuracyStatus === 'BACKTESTED') return 'HISTORICALLY TESTED';
