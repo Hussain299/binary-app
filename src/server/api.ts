@@ -503,6 +503,18 @@ apiRouter.post('/signals/clear-history', (_req: Request, res: Response) => {
 
 // POST /api/signals/evaluate — Step causal entry/exit engine on active signals
 apiRouter.post('/signals/evaluate', async (_req: Request, res: Response) => {
+  // This manual endpoint is a second entry point into the exit engine; it must
+  // enforce the same weekly closure as the autonomous scheduler.
+  const marketTime = dataFeedEngine.getMarketSessions();
+  if (!marketTime.marketOpen) {
+    return res.status(423).json({
+      error: 'Spot FX is closed for the weekend. Signal evaluation and settlement are paused.',
+      marketTime,
+      evaluatedCount: 0,
+      transitionedCount: 0,
+      completedOutcomesRecorded: 0,
+    });
+  }
   try {
     const candlesMap: Record<ForexSymbol, any> = {} as any;
     for (const pair of FOREX_PAIRS) {
