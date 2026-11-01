@@ -22,6 +22,14 @@ import {
   StrategyPerformanceRecord,
 } from '../types/index.js';
 import { getSessionFromTimestamp } from './dataFeeds.js';
+import {
+  assessNearestNeighbors,
+  EpisodicTradeMemory,
+  BetaPosterior,
+  NeighborAssessment,
+  updateBetaPosterior,
+  bayesianUcbScore,
+} from './evolutionEngine.js';
 
 interface DatabaseSchema {
   candles: Record<string, Candle[]>;
@@ -34,6 +42,10 @@ interface DatabaseSchema {
   synthesizedStrategies: SynthesizedStrategyGene[];
   lossAutopsies: LossAutopsy[];
   strategyPerformance: Record<string, StrategyPerformanceRecord>;
+  /** Durable, prediction-time market contexts for settled WIN/LOSS observations. */
+  episodicMemory: EpisodicTradeMemory[];
+  /** Global idempotency ledger; prevents replayed settlement events from retraining state. */
+  processedOutcomeIds: string[];
   cronState: {
     lastRun: string | null;
     nextRun: string | null;
@@ -69,6 +81,8 @@ class DatabaseService {
         if (!Array.isArray(parsed.synthesizedStrategies)) parsed.synthesizedStrategies = [];
         if (!Array.isArray(parsed.lossAutopsies)) parsed.lossAutopsies = [];
         if (!parsed.strategyPerformance || typeof parsed.strategyPerformance !== 'object') parsed.strategyPerformance = {};
+        if (!Array.isArray(parsed.episodicMemory)) parsed.episodicMemory = [];
+        if (!Array.isArray(parsed.processedOutcomeIds)) parsed.processedOutcomeIds = [];
         // Historical versions wrote fabricated strategy accuracy values. Never trust them
         // without stored untouched-test evidence; quarantine all such legacy candidates.
         if (Array.isArray(parsed.synthesizedStrategies)) {
@@ -201,6 +215,8 @@ class DatabaseService {
       synthesizedStrategies: this.generateSeedSynthesizedGenes(),
       lossAutopsies: [],
       strategyPerformance: {},
+      episodicMemory: [],
+      processedOutcomeIds: [],
       cronState: {
         lastRun: null,
         nextRun: null,
@@ -708,7 +724,8 @@ class DatabaseService {
       netReturnUnits: 0, positiveReturnUnits: 0, negativeReturnUnits: 0,
       binaryTrades: 0, binaryWins: 0, binaryLosses: 0, binaryPushes: 0,
       minimumPayoutPct: 100,
-      scoredOutcomes: [], signalIds: [], updatedAt: new Date().toISOString(),
+      scoredOutcomes: [], signalIds: [], bayesAlpha: 1, bayesBeta: 1,
+      updatedAt: new Date().toISOString(),
     };
     existing.scoredOutcomes = Array.isArray(existing.scoredOutcomes)
       ? existing.scoredOutcomes.filter(outcome =>
@@ -726,6 +743,11 @@ class DatabaseService {
     existing.positiveReturnUnits = Number.isFinite(existing.positiveReturnUnits) ? existing.positiveReturnUnits! : 0;
     existing.negativeReturnUnits = Number.isFinite(existing.negativeReturnUnits) ? existing.negativeReturnUnits! : 0;
     existing.minimumPayoutPct = Number.isFinite(existing.minimumPayoutPct) ? existing.minimumPayoutPct! : 100;
+    // Migrate legacy decisive counts into a Beta posterior without discarding evidence.
+    existing.bayesAlpha = Number.isFinite(existing.bayesAlpha) && existing.bayesAlpha! > 0
+      ? existing.bayesAlpha! : 1 + existing.binaryWins;
+    existing.bayesBeta = Number.isFinite(existing.bayesBeta) && existing.bayesBeta! > 0
+      ? existing.bayesBeta! : 1 + existing.binaryLosses;
 
     // Only settled binary outcomes count. Legacy pip-only observations are not
     // eligible for the new payout-aware forward approval gate.
@@ -735,10 +757,41 @@ class DatabaseService {
       return { ...existing };
     }
 
-    // A duplicate lifecycle update must never inflate the trade sample.
-    if (existing.signalIds.includes(signal.id)) return { ...existing };
+    // A duplicate lifecycle update must never inflate any learning state.
+    if (!Array.isArray(this.state.processedOutcomeIds)) this.state.processedOutcomeIds = [];
+    if (this.state.processedOutcomeIds.includes(signal.id) || existing.signalIds.includes(signal.id)) {
+      return { ...existing };
+    }
+    this.state.processedOutcomeIds.push(signal.id);
+    if (this.state.processedOutcomeIds.length > 100_000) {
+      this.state.processedOutcomeIds = this.state.processedOutcomeIds.slice(-100_000);
+    }
     existing.signalIds.push(signal.id);
     if (existing.signalIds.length > 600) existing.signalIds = existing.signalIds.slice(-600);
+
+    // Capture the market state frozen at prediction time, but only after a real decisive
+    // binary settlement. The expiry timestamp is the first time the result is knowable.
+    if ((signal.outcomeResult === 'WIN' || signal.outcomeResult === 'LOSS') &&
+        Array.isArray(signal.marketFeatureVector) && signal.marketFeatureVector.length === 19 &&
+        signal.marketFeatureVector.every(Number.isFinite)) {
+      if (!Array.isArray(this.state.episodicMemory)) this.state.episodicMemory = [];
+      const closedAt = signal.plannedExitTimeUtc || signal.actualExitTimeUtc;
+      if (closedAt && Number.isFinite(Date.parse(closedAt))) {
+        this.state.episodicMemory.push({
+          signalId: signal.id,
+          symbol: signal.symbol,
+          direction: signal.direction,
+          ruleFamily: signal.ruleFamily,
+          featureVector: [...signal.marketFeatureVector],
+          outcome: signal.outcomeResult,
+          netReturnUnits: signal.netReturnUnits!,
+          closedAt,
+        });
+        if (this.state.episodicMemory.length > 20_000) {
+          this.state.episodicMemory = this.state.episodicMemory.slice(-20_000);
+        }
+      }
+    }
 
     const payoutPct = signal.payoutPct!;
     const netUnits = signal.netReturnUnits!;
@@ -747,11 +800,21 @@ class DatabaseService {
     existing.minimumPayoutPct = Math.min(existing.minimumPayoutPct, payoutPct);
     existing.netReturnUnits = Number((existing.netReturnUnits + netUnits).toFixed(4));
     if (signal.outcomeResult === 'WIN') {
+      const posterior = updateBetaPosterior(
+        { alpha: existing.bayesAlpha!, beta: existing.bayesBeta! }, 'WIN'
+      );
+      existing.bayesAlpha = posterior.alpha;
+      existing.bayesBeta = posterior.beta;
       existing.binaryWins += 1;
       existing.wins += 1;
       existing.positiveReturnUnits = Number((existing.positiveReturnUnits + Math.max(0, netUnits)).toFixed(4));
       existing.scoredOutcomes.push({ result: 'WIN', netReturnUnits: netUnits, payoutPct });
     } else if (signal.outcomeResult === 'LOSS') {
+      const posterior = updateBetaPosterior(
+        { alpha: existing.bayesAlpha!, beta: existing.bayesBeta! }, 'LOSS'
+      );
+      existing.bayesAlpha = posterior.alpha;
+      existing.bayesBeta = posterior.beta;
       existing.binaryLosses += 1;
       existing.losses += 1;
       existing.negativeReturnUnits = Number((existing.negativeReturnUnits + Math.abs(Math.min(0, netUnits))).toFixed(4));
@@ -834,6 +897,39 @@ class DatabaseService {
 
   public getStrategyPerformance(): StrategyPerformanceRecord[] {
     return Object.values(this.state.strategyPerformance || {}).sort((a, b) => b.trades - a.trades);
+  }
+
+  public getStrategyBayesianPosterior(strategyId: string): BetaPosterior & { mean: number; observations: number } {
+    const record = this.state.strategyPerformance?.[strategyId];
+    const wins = record?.binaryWins ?? record?.wins ?? 0;
+    const losses = record?.binaryLosses ?? record?.losses ?? 0;
+    const alpha = Number.isFinite(record?.bayesAlpha) && (record?.bayesAlpha ?? 0) > 0
+      ? record!.bayesAlpha! : 1 + wins;
+    const beta = Number.isFinite(record?.bayesBeta) && (record?.bayesBeta ?? 0) > 0
+      ? record!.bayesBeta! : 1 + losses;
+    return { alpha, beta, mean: alpha / (alpha + beta), observations: wins + losses };
+  }
+
+  public getStrategyBayesianUcbScore(strategyId: string): number {
+    const posterior = this.getStrategyBayesianPosterior(strategyId);
+    const totalObserved = Object.values(this.state.strategyPerformance || {}).reduce(
+      (sum, item) => sum + (item.binaryWins ?? item.wins ?? 0) + (item.binaryLosses ?? item.losses ?? 0), 0
+    );
+    return bayesianUcbScore(posterior, totalObserved);
+  }
+
+  public assessEpisodicMemory(query: {
+    symbol: string;
+    direction: 'BUY' | 'SELL';
+    ruleFamily: string;
+    featureVector: number[];
+    predictionTimeUtc: string;
+  }): NeighborAssessment {
+    return assessNearestNeighbors(query, this.state.episodicMemory || []);
+  }
+
+  public getEpisodicMemoryCount(): number {
+    return (this.state.episodicMemory || []).length;
   }
 
   // Autonomous Forensic Loss Autopsies & Self-Learning
