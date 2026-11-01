@@ -5,24 +5,17 @@
  * These helpers deliberately avoid process-global Math.random mutation.
  */
 
+import { createHash } from "node:crypto";
+
 export const FEATURE_SCHEMA_VERSION = "causal-market-features-v1";
 export const RESEARCH_ENGINE_VERSION = "symbolic-evolution-v2";
 
-const FNV_OFFSET_BASIS = 0xcbf29ce484222325n;
-const FNV_PRIME = 0x100000001b3n;
-const UINT64_MASK = 0xffffffffffffffffn;
-
-/** Stable 64-bit FNV-1a hash for experiment IDs and dataset fingerprints. */
+/** Cryptographic digest for experiment IDs and audit fingerprints. */
 export function stableHash(value: string): string {
-  let hash = FNV_OFFSET_BASIS;
-  for (let index = 0; index < value.length; index++) {
-    hash ^= BigInt(value.charCodeAt(index));
-    hash = (hash * FNV_PRIME) & UINT64_MASK;
-  }
-  return hash.toString(16).padStart(16, "0");
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-/** Hash the complete canonical candle stream, including provenance. */
+/** Hash the complete canonical candle stream, including timestamp and provenance. */
 export function fingerprintCandles(
   candles: ReadonlyArray<{
     symbol: string;
@@ -35,18 +28,9 @@ export function fingerprintCandles(
     source: string;
   }>
 ): string {
-  let hash = FNV_OFFSET_BASIS;
-  const update = (value: string) => {
-    for (let index = 0; index < value.length; index++) {
-      hash ^= BigInt(value.charCodeAt(index));
-      hash = (hash * FNV_PRIME) & UINT64_MASK;
-    }
-    hash ^= 10n; // newline delimiter
-    hash = (hash * FNV_PRIME) & UINT64_MASK;
-  };
-
+  const hash = createHash("sha256");
   for (const candle of candles) {
-    update([
+    hash.update([
       candle.symbol,
       String(candle.timestampMs),
       candle.open.toPrecision(15),
@@ -55,10 +39,10 @@ export function fingerprintCandles(
       candle.close.toPrecision(15),
       candle.volume.toPrecision(12),
       candle.source,
-    ].join("|"));
+    ].join("|"), "utf8");
+    hash.update("\n", "utf8");
   }
-
-  return `fnv1a64:${hash.toString(16).padStart(16, "0")}`;
+  return `sha256:${hash.digest("hex")}`;
 }
 
 /**
@@ -79,7 +63,7 @@ export function createSeededRandom(seed: string): () => number {
   };
 }
 
-/** Bind the random stream to the run, symbol, dataset, and code protocol. */
+/** Bind the random stream to the run, pair, exact dataset, and code protocol. */
 export function deriveResearchSeed(
   batchId: string,
   symbol: string,
