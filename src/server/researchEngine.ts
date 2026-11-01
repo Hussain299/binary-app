@@ -20,12 +20,15 @@ import {
 } from '../types/index.js';
 import { db } from './db.js';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
+import { binaryBreakEvenWinRate, calculateAdaptiveMutationRate, outcomeFitsResearchWindow, selectEvolutionParents, wilsonLowerBound } from './evolutionEngine.js';
+import { ADVANCE_NOTICE_MS, M1_CANDLE_MS, getNextCandleOpenMs, TradingTimeframeMinutes } from './tradingClock.js';
 
 type StrategyHorizon = 5 | 10 | 15 | 20 | 25 | 30;
 type GeneFeatureVector = Record<StrategyFeatureName, number>;
 
 interface GeneResearchRow {
   decisionIndex: number;
+  entryTimeframeMinutes: StrategyHorizon;
   candle: Candle;
   previousCandle: Candle;
   entryIndex: number;
@@ -51,55 +54,105 @@ interface PreparedGeneResearchData {
 }
 
 export class ResearchEngine {
+  private evolutionBatchRunning = false;
+
+  public isEvolutionBatchRunning(): boolean {
+    return this.evolutionBatchRunning;
+  }
+
+  /** Shared lock prevents UI-triggered and scheduled searches from racing on holdout data. */
+  public async runNovelStrategySearchBatch(
+    symbol: ForexSymbol,
+    candles: Candle[],
+    searchBatchId: string,
+    baseGeneration: number,
+    onProgress: (progress: {
+      completed: number;
+      passedHistorical: number;
+      insufficientSample: number;
+      rejected: number;
+      replicationFinalists: number;
+    }) => void
+  ): Promise<SynthesizedStrategyGene[]> {
+    if (this.evolutionBatchRunning) {
+      throw new Error('An evolutionary research batch is already running.');
+    }
+    this.evolutionBatchRunning = true;
+    try {
+      return await this.runNovelStrategySearchBatchInternal(
+        symbol, candles, searchBatchId, baseGeneration, onProgress
+      );
+    } finally {
+      this.evolutionBatchRunning = false;
+    }
+  }
+
 
   /**
    * Computes technical features from candles:
    * Returns, Candle body/wick ratios, ATR(14), RSI(14), EMA(9)-EMA(21) slope, Range position.
    */
-  public extractFeatures(candles: Candle[]): Array<{
+  public extractFeatures(
+    candles: Candle[],
+    entryTimeframeMinutes: StrategyHorizon = 5
+  ): Array<{
     candle: Candle;
     features: number[];
-    labels: Record<number, number>; // scheduled entry-to-expiry direction
-    futureMoves: Record<number, number>; // scheduled entry-to-expiry price movement
+    labels: Record<number, number>;
+    futureMoves: Record<number, number>;
+    entryTimeMs: number;
+    expiryTimeMs: number;
+    exitCandleTimeMs: number;
+    entryTimeframeMinutes: StrategyHorizon;
   }> {
     const n = candles.length;
     if (n < 70) return [];
+    if (![5, 10, 15, 20, 25, 30].includes(entryTimeframeMinutes)) {
+      throw new Error('Research entry timeframe must be between 5 and 30 minutes.');
+    }
 
     const isJpy = candles[0].symbol.includes('JPY');
     const pipFactor = isJpy ? 100 : 10000;
-    const FIVE_MIN_MS = 5 * 60 * 1000;
-    const ONE_MIN_MS = 60 * 1000;
-
-    const closes = candles.map(c => c.close);
-    const ema9 = this.calculateEMA(closes, 9);
-    const ema21 = this.calculateEMA(closes, 21);
-    const rsi14 = this.calculateRSI(closes, 14);
-    const atr14 = this.calculateATR(candles, 14);
-    const horizons = [5, 10, 15, 20, 25, 30];
     const samples: Array<{
       candle: Candle;
       features: number[];
       labels: Record<number, number>;
       futureMoves: Record<number, number>;
+      entryTimeMs: number;
+      expiryTimeMs: number;
+      exitCandleTimeMs: number;
+      entryTimeframeMinutes: StrategyHorizon;
     }> = [];
-    const seenEntryTimes = new Set<number>();
 
-    // Each historical decision is made once, on a completed M1 bar, at the
-    // first point in the 3-minute advance window for the next 5M boundary.
-    // The same scheduled entry boundary can never create multiple backtest trades.
+    const closes = candles.map(item => item.close);
+    const ema9 = this.calculateEMA(closes, 9);
+    const ema21 = this.calculateEMA(closes, 21);
+    const rsi14 = this.calculateRSI(closes, 14);
+    const atr14 = this.calculateATR(candles, 14);
+
+    // The M1 decision candle must be fully closed at exactly T-3m. Entry is
+    // at the next aligned N-minute candle open; settlement uses the M1 bar
+    // whose close equals entry + N minutes (not the following minute).
     for (let i = 25; i < n - 40; i++) {
       const candle = candles[i];
       const previous = candles[i - 1];
-      const decisionTime = candle.timestampMs + ONE_MIN_MS;
-      const entryTime = (Math.floor(decisionTime / FIVE_MIN_MS) + 1) * FIVE_MIN_MS;
-      const secondsToEntry = entryTime - decisionTime;
-      if (secondsToEntry < 15_000 || secondsToEntry > 180_000) continue;
-      if (seenEntryTimes.has(entryTime)) continue;
+      const decisionTime = candle.timestampMs + M1_CANDLE_MS;
+      const entryTime = getNextCandleOpenMs(
+        decisionTime,
+        entryTimeframeMinutes as TradingTimeframeMinutes
+      );
+      if (Math.abs(entryTime - decisionTime - ADVANCE_NOTICE_MS) > 5_000) continue;
 
       let entryIndex = i + 1;
-      while (entryIndex < n && candles[entryIndex].timestampMs < entryTime) entryIndex++;
+      while (entryIndex < n && candles[entryIndex].timestampMs < entryTime - 5_000) entryIndex++;
       if (entryIndex >= n || Math.abs(candles[entryIndex].timestampMs - entryTime) > 5_000) continue;
-      seenEntryTimes.add(entryTime);
+
+      const expiryTime = entryTime + entryTimeframeMinutes * M1_CANDLE_MS;
+      const exitCandleTime = expiryTime - M1_CANDLE_MS;
+      let exitIndex = entryIndex;
+      while (exitIndex < n && candles[exitIndex].timestampMs < exitCandleTime - 5_000) exitIndex++;
+      if (exitIndex >= n ||
+          Math.abs(candles[exitIndex].timestampMs - exitCandleTime) > 5_000) continue;
 
       const range = Math.max(0.00001, candle.high - candle.low);
       const body = Math.abs(candle.close - candle.open);
@@ -111,7 +164,6 @@ export class ResearchEngine {
         min20 = Math.min(min20, candles[k].low);
         max20 = Math.max(max20, candles[k].high);
       }
-
       const features = [
         (candle.close - previous.close) * pipFactor,
         body / range,
@@ -122,29 +174,18 @@ export class ResearchEngine {
         (atr14[i] || 0.0005) * pipFactor,
         (candle.close - min20) / Math.max(0.00001, max20 - min20),
       ];
-
-      const labels: Record<number, number> = {};
-      const futureMoves: Record<number, number> = {};
-      for (const horizon of horizons) {
-        const exitTime = entryTime + horizon * ONE_MIN_MS;
-        let exitIndex = entryIndex + 1;
-        while (exitIndex < n && candles[exitIndex].timestampMs < exitTime) exitIndex++;
-        if (exitIndex >= n || Math.abs(candles[exitIndex].timestampMs - exitTime) > 5_000) {
-          labels[horizon] = Number.NaN;
-          futureMoves[horizon] = Number.NaN;
-          continue;
-        }
-
-        // Identical to the production research fill model: entry at scheduled
-        // M5 candle open, expiry at the first M1 candle closing the target time.
-        const move = candles[exitIndex].close - candles[entryIndex].open;
-        futureMoves[horizon] = move;
-        labels[horizon] = move > 0 ? 1 : 0;
-      }
-
-      samples.push({ candle, features, labels, futureMoves });
+      const move = candles[exitIndex].close - candles[entryIndex].open;
+      samples.push({
+        candle,
+        features,
+        labels: { [entryTimeframeMinutes]: move > 0 ? 1 : 0 },
+        futureMoves: { [entryTimeframeMinutes]: move },
+        entryTimeMs: entryTime,
+        expiryTimeMs: expiryTime,
+        exitCandleTimeMs: candles[exitIndex].timestampMs,
+        entryTimeframeMinutes,
+      });
     }
-
     return samples;
   }
 
@@ -170,6 +211,12 @@ export class ResearchEngine {
       throw new Error('Historical dataset contains invalid candle values.');
     }
 
+    // Only after validating input eligibility do we reject production use of
+    // this legacy endpoint. Isolated test fixtures may exercise its calculations.
+    if (!options.allowTestFixtures) {
+      throw new Error('Legacy single-rule walk-forward experiments are disabled. Use the registered 300-candidate evolutionary batch with one-time holdout reservation.');
+    }
+
     const minuteSteps = candles.slice(1).filter((c, i) =>
       Math.abs((c.timestampMs - candles[i].timestampMs) - 60_000) <= 5_000
     ).length;
@@ -179,7 +226,7 @@ export class ResearchEngine {
 
     // Only rows with a valid, causal 3-minute advance decision and exact scheduled
     // M5 entry/expiry candles are eligible for this execution-aligned model study.
-    const dataset = this.extractFeatures(candles).filter(item =>
+    const dataset = this.extractFeatures(candles, horizonMinutes as StrategyHorizon).filter(item =>
       Number.isFinite(item.labels[horizonMinutes]) &&
       Number.isFinite(item.futureMoves[horizonMinutes])
     );
@@ -190,7 +237,7 @@ export class ResearchEngine {
 
     // One eligible observation represents one M5 entry opportunity. Purge enough
     // M5 opportunities to cover the forward label horizon between every split.
-    const purgeSamples = Math.ceil(horizonMinutes / 5) + 1;
+    const purgeSamples = 1; // One full N-minute opportunity is embargoed because samples now use the N-minute entry timeframe.
     const trainEnd = Math.floor(total * 0.60);
     const validationStart = trainEnd + purgeSamples;
     const validationEnd = Math.min(total, validationStart + Math.floor(total * 0.20));
@@ -372,13 +419,21 @@ export class ResearchEngine {
       }
     }
     if (!bestValidation) {
-      throw new Error('Validation period did not produce at least 20 eligible trades for threshold selection.');
+      if (options.allowTestFixtures) {
+        selectedThreshold = 0.50;
+        bestValidation = evaluateSet(validationSet, selectedThreshold);
+      } else {
+        throw new Error('Validation period did not produce at least 20 eligible trades for threshold selection.');
+      }
     }
 
     const trainMetrics = evaluateSet(trainSet, selectedThreshold);
     const validationMetrics = bestValidation;
     const testMetrics = evaluateSet(testSet, selectedThreshold);
-    if (trainMetrics.trades < 30 || validationMetrics.trades < 20 || testMetrics.trades < 30) {
+    // Synthetic fixtures exercise calculation and report wiring only. These
+    // results never enter the real database or approval pipeline.
+    if (!options.allowTestFixtures &&
+        (trainMetrics.trades < 30 || validationMetrics.trades < 20 || testMetrics.trades < 30)) {
       throw new Error(
         `Insufficient executed model trades (train=${trainMetrics.trades}, validation=${validationMetrics.trades}, test=${testMetrics.trades}). Import more historical data.`
       );
@@ -472,10 +527,11 @@ export class ResearchEngine {
       horizonMinutes,
       parameters: {
         threshold: selectedThreshold,
-        purgeEmbargoMinutes: purgeSamples * 5,
+        purgeEmbargoMinutes: purgeSamples * horizonMinutes,
         featureCount,
         spreadModeledPips: modeledSpreadPips,
         algorithm: 'logistic_regression',
+        testFixture: options.allowTestFixtures === true ? 'true' : 'false',
         epochs,
         learningRate,
         l2Penalty,
@@ -494,7 +550,7 @@ export class ResearchEngine {
         start: testSet[0].candle.timestamp,
         end: testSet[testSet.length - 1].candle.timestamp,
       },
-      purgedWindowCandles: purgeSamples * 5,
+      purgedWindowCandles: purgeSamples * horizonMinutes,
       scientistHypothesis: `A train-fitted logistic-regression model using ${ruleFamily} features may predict direction at the scheduled ${horizonMinutes}-minute expiry.`,
       scientistDisproofCondition: `Disproven if untouched test directional accuracy is below 52%, or after modeled spread the test EV is not positive and profit factor is below 1.15.`,
       engineerConfigNotes: `Logistic regression fitted on ${trainSet.length} training opportunities. Feature means/stds fitted on training only. Threshold ${selectedThreshold} tuned on ${validationSet.length} validation opportunities. Each opportunity uses the 3-minute advance alert, scheduled next M5 open and ${horizonMinutes}-minute expiry; pair-specific modeled spread ${modeledSpreadPips} pips.`,
@@ -503,7 +559,7 @@ export class ResearchEngine {
       createdAt: new Date().toISOString(),
     };
 
-    db.addExperiment(experiment);
+    if (!options.allowTestFixtures) db.addExperiment(experiment);
     return experiment;
   }
 
@@ -532,7 +588,7 @@ export class ResearchEngine {
       : `Research pipeline configuration for generation ${exp.generation}.
 - Model: logistic regression fitted only on the chronological training partition.
 - Threshold: selected from a fixed candidate set using validation EV, then frozen before the untouched test.
-- Execution alignment: 3-minute advance decision, next 5M candle open and ${exp.horizonMinutes}m expiry.
+- Execution alignment: closed M1 decision exactly three minutes before the ${exp.horizonMinutes}m entry candle open and matching expiry.
 - Purged embargo: ${exp.purgedWindowCandles} M1 candles between partitions.
 - Test opportunities: n=${exp.metrics.sampleSize}; scored WIN/LOSS outcomes: n=${exp.metrics.scoredTradeSampleSize}.`;
 
@@ -573,7 +629,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     };
 
     reviews.push(scientistReview, engineerReview, auditorReview);
-    for (const review of reviews) db.addReview(review);
+    if (exp.parameters.testFixture !== 'true') {
+      for (const review of reviews) db.addReview(review);
+    }
     return reviews;
   }
 
@@ -784,6 +842,28 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     };
   }
 
+  /** Returns the exact ordered normalized feature vector used by symbolic genomes. */
+  public extractCausalFeatureVector(
+    candle: Candle,
+    previous: Candle,
+    closes: number[],
+    ema9: number[],
+    ema21: number[],
+    rsi14: number[],
+    index: number = closes.length - 1
+  ): number[] {
+    if (index < 34 || index >= closes.length ||
+        ![candle.open, candle.high, candle.low, candle.close].every(Number.isFinite)) {
+      throw new Error("Causal feature extraction requires a valid candle and at least 35 indexed closes.");
+    }
+    const features = this.buildGeneFeatureVector(candle, previous, closes, ema9, ema21, rsi14, index);
+    return this.genomeFeatures.map(name => {
+      const value = features[name];
+      if (!Number.isFinite(value)) throw new Error("Feature extraction produced a non-finite value: " + name);
+      return value;
+    });
+  }
+
   private evaluateGenomeExpression(node: StrategyExpressionNode, features: GeneFeatureVector): number {
     if (node.kind === 'feature') return this.clamp(features[node.feature]);
     if (node.kind === 'constant') return this.clamp(node.value);
@@ -857,45 +937,93 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     };
   }
 
-  private mutateGenomeExpression(node: StrategyExpressionNode, depth = 2): StrategyExpressionNode {
-    if (depth <= 0 || Math.random() < 0.24) return this.randomGenomeExpression(2);
+  private mutateGenomeExpression(
+    node: StrategyExpressionNode,
+    depth = 2,
+    requestedMutationRate = 0.20
+  ): StrategyExpressionNode {
+    const mutationRate = Math.max(0.05, Math.min(0.45, requestedMutationRate));
+    const replaceSubtreeRate = mutationRate * 0.30;
+    if (depth <= 0) {
+      return Math.random() < mutationRate
+        ? this.randomGenomeExpression(2)
+        : node;
+    }
+    if (Math.random() < replaceSubtreeRate) {
+      return this.randomGenomeExpression(2);
+    }
     if (node.kind === 'feature') {
-      return Math.random() < 0.5
-        ? { kind: 'feature', feature: this.genomeFeatures[Math.floor(Math.random() * this.genomeFeatures.length)] }
-        : { kind: 'unary', operator: 'signed_power', exponent: Number((0.7 + Math.random() * 1.4).toFixed(2)), input: node };
+      if (Math.random() < mutationRate) {
+        const alternatives = this.genomeFeatures.filter(feature => feature !== node.feature);
+        return {
+          kind: 'feature',
+          feature: alternatives[Math.floor(Math.random() * alternatives.length)] || node.feature,
+        };
+      }
+      if (Math.random() < mutationRate * 0.35) {
+        return {
+          kind: 'unary',
+          operator: 'signed_power',
+          exponent: Number((0.7 + Math.random() * 1.4).toFixed(2)),
+          input: node,
+        };
+      }
+      return node;
     }
     if (node.kind === 'constant') {
-      return { kind: 'constant', value: Number((node.value + (Math.random() - 0.5) * 0.8).toFixed(3)) };
+      if (Math.random() >= mutationRate) return node;
+      return {
+        kind: 'constant',
+        value: Number(Math.max(-2, Math.min(2, node.value + (Math.random() - 0.5) * 0.8)).toFixed(3)),
+      };
     }
     if (node.kind === 'unary') {
       const operators = ['tanh', 'abs', 'signed_power', 'log_abs', 'sin', 'cos', 'sqrt_abs', 'negate'] as const;
+      const operator = Math.random() < mutationRate
+        ? (operators.filter(item => item !== node.operator)[Math.floor(Math.random() * (operators.length - 1))] || node.operator)
+        : node.operator;
+      const exponent = Math.random() < mutationRate
+        ? Number((0.7 + Math.random() * 1.4).toFixed(2))
+        : node.exponent;
       return {
         ...node,
-        operator: Math.random() < 0.35 ? operators[Math.floor(Math.random() * operators.length)] : node.operator,
-        exponent: Number((0.7 + Math.random() * 1.4).toFixed(2)),
-        input: this.mutateGenomeExpression(node.input, depth - 1),
+        operator,
+        exponent,
+        input: this.mutateGenomeExpression(node.input, depth - 1, mutationRate),
       };
     }
+
     const operators = ['add', 'subtract', 'multiply', 'protected_divide', 'max', 'min', 'hypot', 'atan2'] as const;
-    const mutateLeft = Math.random() < 0.5;
+    const operator = Math.random() < mutationRate
+      ? (operators.filter(item => item !== node.operator)[Math.floor(Math.random() * (operators.length - 1))] || node.operator)
+      : node.operator;
+    const mutateBoth = Math.random() < mutationRate * 0.25;
+    const mutateLeft = mutateBoth || Math.random() < 0.5;
+    const mutateRight = mutateBoth || !mutateLeft;
     return {
       ...node,
-      operator: Math.random() < 0.35 ? operators[Math.floor(Math.random() * operators.length)] : node.operator,
-      left: mutateLeft ? this.mutateGenomeExpression(node.left, depth - 1) : node.left,
-      right: mutateLeft ? node.right : this.mutateGenomeExpression(node.right, depth - 1),
+      operator,
+      left: mutateLeft
+        ? this.mutateGenomeExpression(node.left, depth - 1, mutationRate)
+        : node.left,
+      right: mutateRight
+        ? this.mutateGenomeExpression(node.right, depth - 1, mutationRate)
+        : node.right,
     };
   }
 
   private geneSession(candle: Candle): MarketSessionId {
-    const hour = new Date(candle.timestampMs).getUTCHours();
+    // The signal is decided when this M1 candle closes, not when it opens.
+    const hour = new Date(candle.timestampMs + M1_CANDLE_MS).getUTCHours();
     if (hour >= 12 && hour < 16) return 'OVERLAP';
     if (hour >= 7 && hour < 12) return 'LONDON';
     if (hour >= 16 && hour < 21) return 'NEW_YORK';
     return 'ASIA';
   }
 
-  private prepareGeneResearchData(candles: Candle[]): PreparedGeneResearchData {
-    const MIN_HISTORY = 30_000;
+  private prepareGeneResearchData(candles: Candle[], previousHoldoutEndMs: number | null = null): PreparedGeneResearchData {
+    // 60k M1 bars provide enough chronological test opportunities even for a 30m horizon.
+    const MIN_HISTORY = 60_000;
     if (candles.length < MIN_HISTORY) {
       throw new Error(`Need at least ${MIN_HISTORY.toLocaleString()} real one-minute candles to support the 300-trade test gate; received ${candles.length.toLocaleString()}.`);
     }
@@ -916,9 +1044,6 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       }
     }
 
-    // IQ Option history exports can contain zero-volume, completely flat
-    // filler rows while the market is closed. Exclude them explicitly and
-    // record the exact count; never interpolate across those periods.
     const isClosedMarketFiller = (c: Candle) =>
       c.volume === 0 && c.open === c.high && c.high === c.low && c.low === c.close;
     const excludedZeroVolumeFlatCandles = candles.filter(isClosedMarketFiller).length;
@@ -928,7 +1053,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     }
 
     const minuteSteps = ordered.slice(1).filter((c, i) =>
-      Math.abs((c.timestampMs - ordered[i].timestampMs) - 60_000) <= 5_000
+      Math.abs((c.timestampMs - ordered[i].timestampMs) - M1_CANDLE_MS) <= 5_000
     ).length;
     if (minuteSteps / Math.max(1, ordered.length - 1) < 0.75) {
       throw new Error('Imported dataset does not contain sufficiently continuous one-minute candles.');
@@ -941,42 +1066,71 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     const timestampIndex = new Map<number, number>();
     ordered.forEach((candle, index) => timestampIndex.set(candle.timestampMs, index));
 
-    const FIVE_MIN_MS = 5 * 60 * 1000;
-    const ONE_MIN_MS = 60 * 1000;
     const rows: GeneResearchRow[] = [];
     const horizons: StrategyHorizon[] = [5, 10, 15, 20, 25, 30];
 
-    // Keep the existing schedule unchanged: predict exactly three minutes
-    // before the next five-minute candle opens, then settle at 5–30 minutes.
-    for (let i = 60; i < ordered.length - 40; i++) {
-      const candle = ordered[i];
-      const decisionTime = candle.timestampMs + ONE_MIN_MS;
-      const entryTime = (Math.floor(decisionTime / FIVE_MIN_MS) + 1) * FIVE_MIN_MS;
-      if (Math.abs((entryTime - decisionTime) - 180_000) > 5_000) continue;
-      const entryIndex = timestampIndex.get(entryTime);
-      if (entryIndex === undefined) continue;
-      const exitIndices: Record<number, number> = {};
-      for (const horizon of horizons) {
-        const exitIndex = timestampIndex.get(entryTime + horizon * ONE_MIN_MS - ONE_MIN_MS);
-        if (exitIndex !== undefined) exitIndices[horizon] = exitIndex;
-      }
-      if (Object.keys(exitIndices).length !== horizons.length) continue;
-      rows.push({
-        decisionIndex: i,
-        candle,
-        previousCandle: ordered[i - 1],
-        entryIndex,
-        entryTimeMs: entryTime,
-        exitIndices,
-        features: this.buildGeneFeatureVector(candle, ordered[i - 1], closes, ema9, ema21, rsi14, i),
-        session: this.geneSession(candle),
-      });
-    }
+    // Every candidate horizon is evaluated on its own aligned N-minute entry
+    // candle: decision exactly three minutes before that candle opens; binary
+    // settlement on the M1 close at entry + N minutes.
+    for (const horizon of horizons) {
+      for (let i = 60; i < ordered.length - horizon - 5; i++) {
+        const candle = ordered[i];
+        const decisionTime = candle.timestampMs + M1_CANDLE_MS;
+        const entryTime = getNextCandleOpenMs(decisionTime, horizon as TradingTimeframeMinutes);
+        if (entryTime - decisionTime !== ADVANCE_NOTICE_MS) continue;
 
-    const trainEndMs = ordered[Math.floor(ordered.length * 0.45)]?.timestampMs ?? ordered[0].timestampMs;
-    const validationStartMs = trainEndMs + 35 * ONE_MIN_MS;
-    const validationEndMs = ordered[Math.floor(ordered.length * 0.65)]?.timestampMs ?? ordered[ordered.length - 1].timestampMs;
-    const testStartMs = validationEndMs + 35 * ONE_MIN_MS;
+        const entryIndex = timestampIndex.get(entryTime);
+        const expiryTime = entryTime + horizon * M1_CANDLE_MS;
+        const expiryCandleTime = expiryTime - M1_CANDLE_MS;
+        const exitIndex = timestampIndex.get(expiryCandleTime);
+        if (entryIndex === undefined || exitIndex === undefined || exitIndex <= entryIndex) continue;
+
+        rows.push({
+          decisionIndex: i,
+          entryTimeframeMinutes: horizon,
+          candle,
+          previousCandle: ordered[i - 1],
+          entryIndex,
+          entryTimeMs: entryTime,
+          exitIndices: { [horizon]: exitIndex },
+          features: this.buildGeneFeatureVector(candle, ordered[i - 1], closes, ema9, ema21, rsi14, i),
+          session: this.geneSession(candle),
+        });
+      }
+    }
+    rows.sort((a, b) =>
+      a.entryTimeMs - b.entryTimeMs ||
+      a.entryTimeframeMinutes - b.entryTimeframeMinutes
+    );
+
+    let trainEndMs: number;
+    let validationStartMs: number;
+    let validationEndMs: number;
+    let testStartMs: number;
+
+    if (previousHoldoutEndMs !== null) {
+      // Historical data at or before a previously inspected holdout may now
+      // be treated as known past. The next test must be wholly beyond it.
+      const newSegmentStart = ordered.findIndex(c => c.timestampMs >= previousHoldoutEndMs - 5_000);
+      if (newSegmentStart < 0) {
+        throw new Error('No candles exist after the last consumed holdout window. Import at least 60,000 new M1 candles before another evolutionary batch.');
+      }
+      const newSegmentLength = ordered.length - newSegmentStart;
+      if (newSegmentLength < MIN_HISTORY) {
+        throw new Error(`Only ${newSegmentLength.toLocaleString()} new M1 candles exist after the last consumed holdout. Another independent search requires at least ${MIN_HISTORY.toLocaleString()} new candles; old test data will not be reused.`);
+      }
+      const trainEndIndex = newSegmentStart + Math.floor(newSegmentLength * 0.45);
+      const validationEndIndex = newSegmentStart + Math.floor(newSegmentLength * 0.65);
+      trainEndMs = ordered[Math.min(ordered.length - 1, trainEndIndex)]?.timestampMs ?? ordered[ordered.length - 1].timestampMs;
+      validationStartMs = trainEndMs + 35 * M1_CANDLE_MS;
+      validationEndMs = ordered[Math.min(ordered.length - 1, validationEndIndex)]?.timestampMs ?? ordered[ordered.length - 1].timestampMs;
+      testStartMs = validationEndMs + 35 * M1_CANDLE_MS;
+    } else {
+      trainEndMs = ordered[Math.floor(ordered.length * 0.45)]?.timestampMs ?? ordered[0].timestampMs;
+      validationStartMs = trainEndMs + 35 * M1_CANDLE_MS;
+      validationEndMs = ordered[Math.floor(ordered.length * 0.65)]?.timestampMs ?? ordered[ordered.length - 1].timestampMs;
+      testStartMs = validationEndMs + 35 * M1_CANDLE_MS;
+    }
     return {
       candles: ordered, closes, ema9, ema21, rsi14, rows,
       trainEndMs, validationStartMs, validationEndMs, testStartMs,
@@ -995,8 +1149,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     let busyUntil = -Infinity;
     const scoredOutcomes: Array<'WIN' | 'LOSS'> = [];
     const horizon = gene.optimalHorizonMinutes;
-    const triggerThreshold = Math.max(0.682, gene.genome?.activationThreshold ?? gene.operatorParameters?.threshold ?? 0.682);
+    const triggerThreshold = Math.max(0.50, Math.min(0.95, gene.genome?.activationThreshold ?? gene.operatorParameters?.threshold ?? 0.682));
     for (const row of rows) {
+      if (row.entryTimeframeMinutes !== horizon) continue;
       if (row.entryTimeMs < busyUntil) continue;
       if (gene.sessionAffinity !== 'ALL' && gene.sessionAffinity !== row.session) continue;
       const activation = gene.genome
@@ -1006,8 +1161,8 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
               gene, row.candle, row.previousCandle,
               data.closes, data.ema9, data.ema21, data.rsi14, row.decisionIndex
             );
-            return result.shouldTrigger && result.conviction >= 0.80
-              ? (result.direction === 'BUY' ? 1 : -1) * Math.max(triggerThreshold, 0.683)
+            return result.shouldTrigger
+              ? (result.direction === 'BUY' ? 1 : -1) * triggerThreshold
               : 0;
           })();
       if (Math.abs(activation) < triggerThreshold) continue;
@@ -1082,36 +1237,54 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     if (!gene.genome && !gene.operatorParameters) {
       throw new Error('This legacy candidate has no stored executable genome or coefficients. Generate a new symbolic candidate.');
     }
-    const trainRows = data.rows.filter(row => row.candle.timestampMs < data.trainEndMs);
-    const validationRows = data.rows.filter(row =>
-      row.candle.timestampMs >= data.validationStartMs &&
-      row.candle.timestampMs < data.validationEndMs
+    // Assign an outcome only when its complete entry-to-expiry interval is inside
+    // the partition. A decision bar before a boundary is not enough: its future
+    // settlement must never borrow prices from the next partition.
+    const trainRows = data.rows.filter(row =>
+      outcomeFitsResearchWindow(
+        row.entryTimeMs, row.entryTimeframeMinutes,
+        data.candles[60]?.timestampMs ?? -Infinity, data.trainEndMs
+      )
     );
-    const testRows = data.rows.filter(row => row.candle.timestampMs >= data.testStartMs);
+    const validationRows = data.rows.filter(row =>
+      outcomeFitsResearchWindow(
+        row.entryTimeMs, row.entryTimeframeMinutes,
+        data.validationStartMs, data.validationEndMs
+      )
+    );
+    const testEndMs = data.candles[data.candles.length - 1].timestampMs + M1_CANDLE_MS;
+    const testRows = data.rows.filter(row =>
+      outcomeFitsResearchWindow(
+        row.entryTimeMs, row.entryTimeframeMinutes, data.testStartMs, testEndMs
+      )
+    );
     const train = this.simulateGeneRows(gene, trainRows, data);
     const validation = this.simulateGeneRows(gene, validationRows, data);
     const test = this.simulateGeneRows(gene, testRows, data);
     const interval = this.wilsonInterval(test.wins, test.scoredTrades);
     const blockRates = this.getThreeBlockWinRates(test.scoredOutcomes);
+    const breakEvenRate = binaryBreakEvenWinRate(test.payoutPct);
+    const validationLowerBound = wilsonLowerBound(validation.wins, validation.scoredTrades);
+    // Ten finalists see the one-time holdout. One-sided Bonferroni alpha=.05/10
+    // controls family-wise false positives across those pre-registered candidates.
+    const multipleTestingLowerBound = wilsonLowerBound(test.wins, test.scoredTrades, 2.576);
     const enoughTrades = test.scoredTrades >= 300 && validation.scoredTrades >= 150 && train.scoredTrades >= 150;
     const passed =
       enoughTrades &&
-      test.winRate >= 0.70 &&
-      validation.winRate >= 0.70 &&
+      validationLowerBound > breakEvenRate &&
+      multipleTestingLowerBound > breakEvenRate &&
       blockRates.length === 3 &&
-      blockRates.every(rate => rate >= 0.70) &&
+      blockRates.every(rate => rate > breakEvenRate) &&
       test.netReturnUnits > 0 &&
-      test.profitFactor >= 1.15 &&
-      interval[0] >= 0.60;
+      test.profitFactor >= 1.15;
 
     let failureReason = '';
     if (test.scoredTrades < 300) failureReason = `Insufficient independent test outcomes: ${test.scoredTrades}/300.`;
     else if (validation.scoredTrades < 150 || train.scoredTrades < 150) failureReason = `Insufficient train/validation outcomes (train ${train.scoredTrades}, validation ${validation.scoredTrades}; require 150 each).`;
-    else if (validation.winRate < 0.70) failureReason = `Validation win rate ${(validation.winRate * 100).toFixed(1)}% is below 70%.`;
-    else if (test.winRate < 0.70) failureReason = `Untouched test win rate ${(test.winRate * 100).toFixed(1)}% is below 70%.`;
-    else if (blockRates.length !== 3 || blockRates.some(rate => rate < 0.70)) failureReason = 'One or more consecutive 100-trade test blocks fell below 70%.';
-    else if (test.netReturnUnits <= 0 || test.profitFactor < 1.15) failureReason = 'Binary payout-adjusted return or profit factor failed at the 80% payout assumption.';
-    else if (interval[0] < 0.60) failureReason = 'The 95% Wilson lower bound is below 60%.';
+    else if (validationLowerBound <= breakEvenRate) failureReason = `Validation 95% Wilson lower bound ${(validationLowerBound * 100).toFixed(1)}% does not clear payout break-even ${(breakEvenRate * 100).toFixed(1)}%.`;
+    else if (multipleTestingLowerBound <= breakEvenRate) failureReason = `Untouched-test lower bound after the ten-finalist correction (${(multipleTestingLowerBound * 100).toFixed(1)}%) does not clear payout break-even ${(breakEvenRate * 100).toFixed(1)}%.`;
+    else if (blockRates.length !== 3 || blockRates.some(rate => rate <= breakEvenRate)) failureReason = 'One or more consecutive 100-trade test blocks did not beat payout break-even.';
+    else if (test.netReturnUnits <= 0 || test.profitFactor < 1.15) failureReason = 'Payout-adjusted net expectancy or profit factor failed.';
 
     const backtestMetrics: StrategyBacktestMetrics = {
       trainSampleSize: train.trades,
@@ -1131,8 +1304,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       expectedValueUnits: Number(test.expectedValueUnits.toFixed(4)),
       profitFactor: Number(test.profitFactor.toFixed(2)),
       confidenceInterval95: interval,
+      multipleTestingLowerBound,
       testBlockWinRates: blockRates,
-      trainPeriod: { start: data.candles[60].timestamp, end: data.candles[Math.max(60, Math.floor(data.candles.length * 0.45) - 1)].timestamp },
+      trainPeriod: { start: data.candles[60].timestamp, end: new Date(data.trainEndMs).toISOString() },
       validationPeriod: { start: new Date(data.validationStartMs).toISOString(), end: new Date(data.validationEndMs).toISOString() },
       testPeriod: { start: new Date(data.testStartMs).toISOString(), end: data.candles[data.candles.length - 1].timestamp },
     };
@@ -1150,15 +1324,19 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     return updated;
   }
 
+  /**
+   * Individual candidate testing is intentionally disabled. A strategy must
+   * enter the registered 300-candidate batch so a test window is reserved
+   * exactly once and only preselected finalists see it.
+   */
   public validateSynthesizedStrategy(
-    gene: SynthesizedStrategyGene,
-    candles: Candle[]
-  ): SynthesizedStrategyGene {
-    const data = this.prepareGeneResearchData(candles);
-    return this.validateGeneAgainstPreparedData(gene, data);
+    _gene: SynthesizedStrategyGene,
+    _candles: Candle[]
+  ): never {
+    throw new Error('Individual candidate holdout testing is disabled. Use runNovelStrategySearchBatch so the pair holdout is reserved and exposed only to preselected finalists.');
   }
 
-  public async runNovelStrategySearchBatch(
+  private async runNovelStrategySearchBatchInternal(
     symbol: ForexSymbol,
     candles: Candle[],
     searchBatchId: string,
@@ -1171,52 +1349,77 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       replicationFinalists: number;
     }) => void
   ): Promise<SynthesizedStrategyGene[]> {
-    const data = this.prepareGeneResearchData(candles);
-    const trainRows = data.rows.filter(row => row.candle.timestampMs < data.trainEndMs);
+    const previousHoldoutEndMs = db.getLatestResearchHoldoutEndMs(symbol);
+    const data = this.prepareGeneResearchData(candles, previousHoldoutEndMs);
+    const holdoutEndMs = data.candles[data.candles.length - 1].timestampMs + M1_CANDLE_MS;
+    const breakEvenRate = binaryBreakEvenWinRate(data.payoutPct);
+    if (!db.claimResearchHoldoutWindow(symbol, searchBatchId, data.testStartMs, holdoutEndMs)) {
+      throw new Error('This chronological test period overlaps a holdout window already inspected for this pair. Import at least 30,000 newer M1 candles to create a genuinely new test period.');
+    }
+    // A setup is assigned to a partition only when its entire entry-to-expiry
+    // interval is contained there. No outcome may read a candle from the next split.
+    const trainRows = data.rows.filter(row =>
+      outcomeFitsResearchWindow(
+        row.entryTimeMs, row.entryTimeframeMinutes,
+        data.candles[60]?.timestampMs ?? -Infinity, data.trainEndMs
+      )
+    );
     const validationRows = data.rows.filter(row =>
-      row.candle.timestampMs >= data.validationStartMs &&
-      row.candle.timestampMs < data.validationEndMs
+      outcomeFitsResearchWindow(
+        row.entryTimeMs, row.entryTimeframeMinutes,
+        data.validationStartMs, data.validationEndMs
+      )
     );
 
-    // Freeze parents before this run. Only train/validation evidence may
-    // influence generation and finalist selection; the final test stays sealed.
-    const parentPool = db.getSynthesizedStrategies()
-      .filter(gene =>
-        !!gene.genome &&
-        !!gene.backtestMetrics &&
-        gene.backtestMetrics.binaryPayoutPct >= DEFAULT_BINARY_PAYOUT_PERCENT &&
-        gene.backtestMetrics.expectedValueUnits > 0 &&
-        gene.backtestMetrics.trainScoredSampleSize >= 150 &&
-        gene.backtestMetrics.validationScoredSampleSize >= 150 &&
-        gene.backtestMetrics.validationWinRate >= 0.70
-      )
-      .sort((a, b) =>
-        (b.backtestMetrics?.validationWinRate ?? 0) - (a.backtestMetrics?.validationWinRate ?? 0)
-      ).slice(0, 30);
+    // Initial parents come only from discovery train/validation records and
+    // sufficiently mature forward-paper evidence. The holdout is never read.
+    const initialParentPool = selectEvolutionParents(db.getSynthesizedStrategies(), 30);
+    let currentParentPool = initialParentPool;
 
     const candidates: Array<{
       gene: SynthesizedStrategyGene;
       trainScoredTrades: number;
       validationScoredTrades: number;
+      validationWins: number;
       trainWinRate: number;
       validationWinRate: number;
       validationExpectedValueUnits: number;
       validationProfitFactor: number;
     }> = [];
-    const signatures = new Set<string>();
+    const signatures = new Set<string>(
+      db.getSynthesizedStrategies()
+        .map(gene => gene.genome?.signature)
+        .filter((signature): signature is string => !!signature)
+    );
     let insufficientSample = 0;
     let rejected = 0;
 
-    // Stage 1: search and rank all 300 expressions on discovery data only.
-    // No candidate is evaluated on the untouched final test in this loop.
-    for (let i = 0; i < 300; i++) {
+    // Stage 1: run ten actual genetic generations of 30 individuals each.
+    // Each generation is evaluated only on train/validation. Qualified survivors
+    // from that generation become the next generation's parents. The final test
+    // remains sealed until all 300 candidates and their finalists are frozen.
+    const POPULATION_SIZE = 30;
+    const GENERATION_COUNT = 10;
+    for (let i = 0; i < POPULATION_SIZE * GENERATION_COUNT; i++) {
+      if (i > 0 && i % POPULATION_SIZE === 0) {
+        const priorGeneration = candidates.slice(i - POPULATION_SIZE, i).map(item => item.gene);
+        const evolvedParents = selectEvolutionParents(
+          [...initialParentPool, ...priorGeneration],
+          30
+        );
+        // If the immediately prior generation has not yet discovered at least
+        // two robust parents, preserve the previous validated population.
+        if (evolvedParents.length >= 2) currentParentPool = evolvedParents;
+      }
+
+      const generation = baseGeneration + Math.floor(i / POPULATION_SIZE);
       let gene = this.synthesizeInfiniteNovelStrategy(
-        candles, symbol, baseGeneration + i, parentPool, searchBatchId, false
+        candles, symbol, generation, currentParentPool, searchBatchId, false
       );
       let attempts = 0;
       while (signatures.has(gene.genome?.signature || '') && attempts < 20) {
         gene = this.synthesizeInfiniteNovelStrategy(
-          candles, symbol, baseGeneration + 300 + i + attempts, parentPool, searchBatchId, false
+          candles, symbol, generation, currentParentPool, searchBatchId, false
         );
         attempts++;
       }
@@ -1241,8 +1444,13 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
 
       if (train.scoredTrades < 150 || validation.scoredTrades < 150) {
         insufficientSample++;
-      } else if (validation.winRate < 0.70 || validation.expectedValueUnits <= 0 || validation.profitFactor < 1.15) {
-        rejected++;
+      } else {
+        const validationLowerBound = wilsonLowerBound(validation.wins, validation.scoredTrades);
+        if (train.winRate <= breakEvenRate ||
+            validation.winRate <= breakEvenRate ||
+            validationLowerBound <= breakEvenRate ||
+            validation.expectedValueUnits <= 0 ||
+            validation.profitFactor < 1.05) rejected++;
       }
 
       db.addSynthesizedStrategy(gene);
@@ -1250,6 +1458,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
         gene,
         trainScoredTrades: train.scoredTrades,
         validationScoredTrades: validation.scoredTrades,
+        validationWins: validation.wins,
         trainWinRate: train.winRate,
         validationWinRate: validation.winRate,
         validationExpectedValueUnits: validation.expectedValueUnits,
@@ -1272,9 +1481,11 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       .filter(candidate =>
         candidate.trainScoredTrades >= 150 &&
         candidate.validationScoredTrades >= 150 &&
-        candidate.validationWinRate >= 0.70 &&
+        wilsonLowerBound(candidate.validationWins, candidate.validationScoredTrades) > breakEvenRate &&
         candidate.validationExpectedValueUnits > 0 &&
-        candidate.validationProfitFactor >= 1.15
+        candidate.trainWinRate > breakEvenRate &&
+        candidate.validationWinRate > breakEvenRate &&
+        candidate.validationProfitFactor >= 1.05
       )
       .sort((a, b) =>
         b.validationExpectedValueUnits - a.validationExpectedValueUnits ||
@@ -1331,14 +1542,17 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     searchBatchId?: string,
     persistImmediately = true
   ): SynthesizedStrategyGene {
-    const eligibleParents = (parentPool || db.getSynthesizedStrategies())
-      .filter(gene => !!gene.genome && gene.accuracyStatus === 'BACKTESTED')
-      .slice(0, 30);
+    const eligibleParents = selectEvolutionParents(
+      parentPool || db.getSynthesizedStrategies(),
+      30
+    );
+    const mutationRate = calculateAdaptiveMutationRate(eligibleParents);
     const parentA = eligibleParents.length
       ? eligibleParents[Math.floor(Math.random() * eligibleParents.length)]
       : undefined;
-    const parentB = eligibleParents.length > 1
-      ? eligibleParents[Math.floor(Math.random() * eligibleParents.length)]
+    const remainingParents = eligibleParents.filter(gene => gene.id !== parentA?.id);
+    const parentB = remainingParents.length
+      ? remainingParents[Math.floor(Math.random() * remainingParents.length)]
       : undefined;
 
     let expression: StrategyExpressionNode;
@@ -1350,11 +1564,12 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
         left: JSON.parse(JSON.stringify(parentA.genome.expression)) as StrategyExpressionNode,
         right: JSON.parse(JSON.stringify(parentB.genome.expression)) as StrategyExpressionNode,
       };
-      expression = this.mutateGenomeExpression(expression, 2);
+      expression = this.mutateGenomeExpression(expression, 2, mutationRate);
     } else if (parentA?.genome) {
       expression = this.mutateGenomeExpression(
         JSON.parse(JSON.stringify(parentA.genome.expression)) as StrategyExpressionNode,
-        3
+        3,
+        mutationRate
       );
     } else {
       expression = this.randomGenomeExpression(3);
@@ -1365,7 +1580,17 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       expression = this.randomGenomeExpression(2);
       complexity = this.countExpressionNodes(expression);
     }
-    const activationThreshold = Number((0.64 + Math.random() * 0.20).toFixed(3));
+    // Strategy traits inherit from a randomly selected parent. Mutation pressure
+    // can alter them, so the population evolves horizon/session selection as well
+    // as the symbolic expression tree.
+    const traitParent = parentA && parentB
+      ? (Math.random() < 0.5 ? parentA : parentB)
+      : (parentA || parentB);
+    const inheritedThreshold = traitParent?.genome?.activationThreshold ?? (0.64 + Math.random() * 0.20);
+    const activationThreshold = Number(Math.max(
+      0.64,
+      Math.min(0.84, inheritedThreshold + (Math.random() - 0.5) * mutationRate * 0.30)
+    ).toFixed(3));
     const signature = JSON.stringify({ expression, activationThreshold });
     const genome: StrategyGenome = {
       version: 1,
@@ -1379,13 +1604,15 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       this.genomeFeatures.filter(feature => JSON.stringify(expression).includes(feature))
     )];
     const selectedHorizon: StrategyHorizon[] = [5, 10, 15, 20, 25, 30];
-    const horizon = selectedHorizon[Math.floor(Math.random() * selectedHorizon.length)];
     const sessions: Array<MarketSessionId | 'ALL'> = ['ASIA', 'LONDON', 'OVERLAP', 'NEW_YORK', 'ALL'];
-    const sessionAffinity = sessions[Math.floor(Math.random() * sessions.length)];
-    const operatorOptions: SynthesizedStrategyGene['nonLinearOperator'][] = [
-      'tanh_polynomial', 'fractal_power', 'exponential_decay', 'harmonic_dispersion',
-    ];
-    const operator = operatorOptions[Math.floor(Math.random() * operatorOptions.length)];
+    const horizon = traitParent?.optimalHorizonMinutes &&
+      Math.random() >= mutationRate
+      ? traitParent.optimalHorizonMinutes
+      : selectedHorizon[Math.floor(Math.random() * selectedHorizon.length)];
+    const sessionAffinity = traitParent?.sessionAffinity &&
+      Math.random() >= mutationRate
+      ? traitParent.sessionAffinity
+      : sessions[Math.floor(Math.random() * sessions.length)];
     const parents = [parentA, parentB]
       .filter((gene): gene is SynthesizedStrategyGene => !!gene)
       .map(gene => gene.id);
@@ -1396,16 +1623,8 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       code,
       generation,
       mathematicalFormula: formula,
-      parents: parents.length ? parents : ['Random symbolic seed'],
-      mutationRate: Number((0.08 + Math.random() * 0.22).toFixed(3)),
-      nonLinearOperator: operator,
-      operatorParameters: {
-        alpha: 1,
-        beta: 1,
-        gamma: 1,
-        exponent: 1,
-        threshold: activationThreshold,
-      },
+      parents,
+      mutationRate,
       genome,
       searchBatchId,
       symbol,
@@ -1441,7 +1660,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       const features = this.buildGeneFeatureVector(candle, prevCandle, closes, ema9, ema21, rsi14, index);
       const rawScore = this.evaluateGenomeExpression(gene.genome.expression, features);
       const activationScore = Math.tanh(rawScore / 2);
-      const threshold = Math.max(0.682, gene.genome.activationThreshold);
+      const threshold = Math.max(0.50, Math.min(0.95, gene.genome.activationThreshold));
       const shouldTrigger = Math.abs(activationScore) >= threshold;
       const direction: 'BUY' | 'SELL' = activationScore >= 0 ? 'BUY' : 'SELL';
       const conviction = Number(Math.min(0.94, 0.50 + Math.abs(activationScore) * 0.44).toFixed(2));
@@ -1477,7 +1696,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     const params = gene.operatorParameters || { alpha: 1.45, beta: 0.68, gamma: 0.28, exponent: 1.8, threshold: 0.38 };
     const { alpha, beta, gamma, exponent } = params;
     let activationScore = 0;
-    switch (gene.nonLinearOperator) {
+    switch (gene.nonLinearOperator ?? 'tanh_polynomial') {
       case 'tanh_polynomial': {
         const zEntropy = ((candle.close - prevCandle.close) * pipFactor) / 2.0;
         const wickDelta = Math.pow(lowerWickRatio, exponent) - Math.pow(upperWickRatio, exponent);
@@ -1518,134 +1737,46 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
   }
 
   /**
-   * Rule-based loss-pattern diagnostics for a completed forward paper observation.
-   * The labels below are hypotheses derived from OHLC and modeled spread thresholds;
-   * they do not prove institutional activity, broker slippage or the true market cause.
-   * Any resulting filter candidate remains unvalidated until independently tested.
+   * Record a loss as an observation only. OHLC bars cannot prove the cause of a
+   * loss, and a single loss is never converted into a fabricated strategy.
+   * recordStrategyOutcome() has already updated posterior and episodic memory.
    */
-  public conductForensicLossAutopsy(
+  public recordLossObservation(
     signal: ResearchSignal,
     candle: Candle
-  ): { autopsy: LossAutopsy; antidoteGene: SynthesizedStrategyGene } {
-    const grossReturn = signal.grossReturnPips ?? 0;
-    const netReturn = signal.netReturnPips ?? 0;
-    const spread = signal.estimatedSpreadPips ?? 1.5;
-    const isJpy = signal.symbol.includes('JPY');
-    const pipScale = isJpy ? 0.01 : 0.0001;
-
-    let rootCause: LossAutopsy['rootCause'] = 'NON_LINEAR_OPERATOR_OVERFITTING';
-    let explanation = '';
-    let lessonsLearned: string[] = [];
-    let operator: 'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion' = 'exponential_decay';
-    let formula = '';
-    let antidoteName = '';
-
-    // 1. Root Cause Autopsy & Forensic Diagnostics
-    if (Math.abs(grossReturn) <= spread * 1.2) {
-      rootCause = 'SPREAD_EXPANSION_SLIPPAGE';
-      explanation = `The modeled net result was dominated by the configured spread assumption (${spread} pips). This is a cost-sensitivity flag, not evidence that a broker spread widened or that slippage occurred.`;
-      lessonsLearned = [
-        `Enforce strict Dynamic Spread Gate: Reject signals when current pair spread exceeds 25% of expected ATR move.`,
-        `Switch to high-liquidity session windows (London/NY Overlap) where spreads compress to sub-pip levels.`,
-        `Add spread-cost threshold buffer: Require minimum ${spread * 1.5} pip projected edge before trigger emission.`
-      ];
-      operator = 'harmonic_dispersion';
-      formula = `f(x) = (Δ_TickEntropy / √(1 + ${spread.toFixed(1)}·Spread)) · cos(π·WickRatio) + 1.15·OrderFlow_Z`;
-      antidoteName = `Antidote-${signal.symbol}: Dynamic Spread Damping + Harmonic Wavelet`;
-    } else if (signal.direction === 'BUY' && (candle.low < (signal.actualEntryPrice || signal.triggerPrice) - 3 * pipScale)) {
-      rootCause = 'MICRO_WICK_FALSE_ABSORPTION';
-      explanation = `A rule-based adverse-wick pattern was observed: price moved below the reference level by the configured threshold. OHLC candles cannot establish that stop-runs or institutional absorption occurred.`;
-      lessonsLearned = [
-        `Increase polynomial wick exponent from 1.85 to 2.30 to demand deeper liquidity absorption verification.`,
-        `Incorporate sub-tick volume delta confirmation: verify tick volume expands on the rejection wick.`,
-        `Add multi-bar confirmation: require 2 consecutive micro-wick rejections before triggering CALL/BUY.`
-      ];
-      operator = 'tanh_polynomial';
-      formula = `f(x) = tanh(1.85·Z_Entropy) + 0.92·(LowerWickRatio)^2.30 - 0.45·Δ_20SMA`;
-      antidoteName = `Antidote-${signal.symbol}: Deep Wick Exponent + Polynomial Saturation`;
-    } else if (signal.direction === 'SELL' && (candle.high > (signal.actualEntryPrice || signal.triggerPrice) + 3 * pipScale)) {
-      rootCause = 'MICRO_WICK_FALSE_ABSORPTION';
-      explanation = `A rule-based adverse-wick pattern was observed: price moved above the reference level by the configured threshold. OHLC candles cannot establish market-maker activity or a liquidity sweep.`;
-      lessonsLearned = [
-        `Increase upper wick threshold to >55% of candle range before considering bearish liquidity sweeps.`,
-        `Enforce second-derivative RSI deceleration: confirm momentum has stalled before fading the high.`,
-        `Deploy fractal power drift dampener to avoid counter-trend entries into institutional volume spikes.`
-      ];
-      operator = 'fractal_power';
-      formula = `f(x) = -1·|Δ_20MA|^1.45 + 0.65·RSI_Curvature - 0.50·(UpperWickRatio)^2.1`;
-      antidoteName = `Antidote-${signal.symbol}: Upper Squeeze Neutralizer + RSI Curvature`;
-    } else if ((signal.expiryMinutes || 5) >= 15) {
-      rootCause = 'SESSION_BOUNDARY_LIQUIDITY_VACUUM';
-      explanation = `The modeled outcome reversed over the selected ${signal.expiryMinutes}-minute horizon. The session-liquidity explanation is a hypothesis, not a verified cause.`;
-      lessonsLearned = [
-        `Dynamically compress expiry duration from ${signal.expiryMinutes}m to 5m/10m when trading in transition windows.`,
-        `Evaluate session turnover timer: reject >15m expiries within 30 minutes of London or New York close.`,
-        `Align time-horizon directly to ATR velocity: use 5m for high-volatility surges, 10m for wick rejections.`
-      ];
-      operator = 'exponential_decay';
-      formula = `f(x) = σ(2.80·EMA_Curvature × Vol_Elasticity) - 0.55·ln(1 + ATR_harmonic)`;
-      antidoteName = `Antidote-${signal.symbol}: Dynamic Expiry Compression + Wave Curvature`;
-    } else {
-      rootCause = 'MOMENTUM_EXHAUSTION_DIVERGENCE';
-      explanation = `The forward paper outcome moved against the predicted direction inside the selected horizon. This rule-based label does not establish a volume or order-flow cause.`;
-      lessonsLearned = [
-        `Filter out low-volume continuation setups where setup candle volume was < 80% of 20-period average.`,
-        `Require second-derivative EMA acceleration confirmation (d²E/dt² > 0) rather than simple linear slope.`,
-        `Cross-breed with statistical mean-reversion guard to prevent buying at local structural tops.`
-      ];
-      operator = 'tanh_polynomial';
-      formula = `f(x) = tanh(2.10·EMA_Curvature) + 0.75·Vol_Elasticity - 0.35·RSI_Distance`;
-      antidoteName = `Antidote-${signal.symbol}: Acceleration Thresholding + Exhaustion Filter`;
-    }
-
-    const antidoteGeneId = `synth_antidote_${Date.now().toString(36)}`;
-    const antidoteGene: SynthesizedStrategyGene = {
-      id: antidoteGeneId,
-      name: antidoteName,
-      code: `ANTIDOTE_${rootCause.slice(0, 4)}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
-      generation: 40 + Math.floor(Math.random() * 10),
-      mathematicalFormula: formula,
-      parents: [signal.strategyName || 'Baseline Strategy', `Rule-based Loss Pattern (${signal.symbol})`],
-      mutationRate: 0.065,
-      nonLinearOperator: operator,
-      optimalHorizonMinutes: (signal.expiryMinutes === 5 ? 10 : 5) as any,
-      sessionAffinity: (signal.marketSession || 'ALL') as any,
-      verifiedAccuracy: 0,
-      sampleCount: 0,
-      accuracyStatus: 'UNVALIDATED',
-      status: 'EXPERIMENTING',
-      scientificHypothesis: `Unvalidated filter hypothesis generated from a rule-based loss tag: ${lessonsLearned[0]}`,
-      whyHumansMissThis: `This filter hypothesis was generated from a rule-based outcome label. It has no measured predictive accuracy until separately validated on untouched historical data and forward paper outcomes.`,
-      createdAt: new Date().toISOString(),
-    };
-
-    // Store the unvalidated filter hypothesis for later research; it is not eligible for signal generation.
-    db.addSynthesizedStrategy(antidoteGene);
-
+  ): LossAutopsy {
+    const entryPrice = signal.actualEntryPrice ?? signal.triggerPrice;
+    const exitPrice = signal.actualExitPrice ?? candle.close;
+    const strategyGeneId = signal.synthesizedGeneId;
+    const outcome = signal.outcomeResult;
     const autopsy: LossAutopsy = {
       id: `autopsy_${signal.id}`,
       signalId: signal.id,
       symbol: signal.symbol,
       direction: signal.direction,
-      strategyName: signal.strategyName || 'Stacked Strategy',
+      strategyName: signal.strategyName || 'Unclassified strategy',
       mathematicalFormula: signal.mathematicalFormula,
-      entryPrice: signal.actualEntryPrice || signal.triggerPrice,
-      exitPrice: signal.actualExitPrice || candle.close,
-      grossReturnPips: grossReturn,
-      netReturnPips: netReturn,
-      spreadPips: spread,
-      marketSession: signal.marketSessionName || 'Market Session',
-      rootCause,
-      rootCauseExplanation: explanation,
-      lessonsLearned,
-      antidoteStrategyGeneId: antidoteGeneId,
-      antidoteStrategyName: antidoteName,
-      antidoteFormula: formula,
-      antidoteOperator: operator,
+      entryPrice,
+      exitPrice,
+      grossReturnPips: signal.grossReturnPips ?? undefined,
+      netReturnPips: signal.netReturnPips ?? undefined,
+      spreadPips: signal.estimatedSpreadPips ?? undefined,
+      netReturnUnits: signal.netReturnUnits ?? undefined,
+      marketSession: signal.marketSessionName || 'Unknown session',
+      strategyGeneId,
+      rootCause: 'OBSERVED_ADVERSE_SETTLEMENT',
+      rootCauseExplanation:
+        `The paper contract settled ${outcome} for ${signal.direction} on ${signal.symbol}. The recorded entry/exit prices and market features describe what was observed; they do not establish why price moved or whether spread, liquidity, news or another mechanism caused the loss.`,
+      lessonsLearned: [
+        strategyGeneId
+          ? `The loss was attached to evolved genome ${strategyGeneId} and its forward-paper outcome ledger.`
+          : 'The loss has no evolved-genome identity and cannot update genetic parent fitness.',
+        'This outcome is available to the Bayesian posterior and causal episodic-memory checks; one loss does not create or validate a new strategy.',
+        'Only mature, payout-positive forward samples with the required confidence can alter future genetic parent selection.',
+      ],
       timestamp: new Date().toISOString(),
     };
-
-    return { autopsy, antidoteGene };
+    return autopsy;
   }
 }
 

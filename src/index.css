@@ -2,38 +2,140 @@
 
 @layer base {
   :root {
+    color-scheme: dark;
     --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
+    --app-bg: #080d14;
+    --app-panel: #101722;
+    --app-panel-raised: #141e2b;
+    --app-border: rgba(255, 255, 255, 0.075);
+    --app-muted: #8b98a8;
+    --app-text: #e8edf3;
+    --app-accent: #48d6a0;
+  }
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    min-width: 320px;
+    height: 100%;
+    min-height: 100%;
+    margin: 0;
   }
 
   body {
     font-family: var(--font-sans);
-    background-color: #0b0f17;
-    color: #e2e8f0;
-    overflow-x: hidden;
+    background: var(--app-bg);
+    color: var(--app-text);
+    overflow: hidden;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
   }
 
-  /* Universal Tabular Figures for high-density financial metrics */
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  button {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid rgba(72, 214, 160, 0.75);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    color: #07110d;
+    background: rgba(72, 214, 160, 0.75);
+  }
+
+  /* Financial values remain aligned as they update. */
   .tabular-nums {
     font-variant-numeric: tabular-nums;
   }
 }
 
-/* Sleek quantitative scrollbars */
+/* Shared page rhythm keeps every workspace view aligned. */
+.sf-page {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: clamp(16px, 1.8vw, 24px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: clamp(16px, 2vw, 28px);
+  background: transparent;
+}
+
+.sf-page > :first-child {
+  min-width: 0;
+}
+
+.sf-page h3,
+.sf-page h4 {
+  letter-spacing: -0.02em;
+}
+
+.sf-page p {
+  text-wrap: pretty;
+}
+
+.app-main {
+  background:
+    radial-gradient(ellipse at 68% -22%, rgba(28, 104, 82, 0.08), transparent 42%),
+    var(--app-bg);
+}
+
+.app-bottom-nav {
+  padding-bottom: env(safe-area-inset-bottom);
+  height: calc(56px + env(safe-area-inset-bottom));
+}
+
+.app-bottom-nav button {
+  min-width: 0;
+  border-radius: 10px;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.app-bottom-nav button:active {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Quiet, consistent scrollbars. */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
-  border-radius: 3px;
+  background: #263242;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #3a4a5d;
+  background-clip: padding-box;
+}
+
+@media (max-width: 640px) {
+  .sf-page {
+    gap: 16px;
+    padding: 14px;
+  }
 }

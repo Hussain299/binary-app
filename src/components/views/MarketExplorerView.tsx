@@ -19,8 +19,8 @@ interface MarketExplorerViewProps {
 export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ providers }) => {
   const [selectedPair, setSelectedPair] = useState<ForexSymbol>('EUR/USD');
   const [candles, setCandles] = useState<Candle[]>([]);
-  const [activeSource, setActiveSource] = useState<string>('biquote');
-  const [qualityScore, setQualityScore] = useState<number>(95);
+  const [activeSource, setActiveSource] = useState<string>('');
+  const [qualityScore, setQualityScore] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [hoveredCandle, setHoveredCandle] = useState<Candle | null>(null);
 
@@ -32,7 +32,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
         const data = await res.json();
         setCandles(data.candles || []);
         setActiveSource(data.source || 'biquote');
-        setQualityScore(data.qualityScore || 90);
+        setQualityScore(Number.isFinite(data.qualityScore) ? data.qualityScore : null);
       }
     } catch (e) {
       console.error('Failed to fetch candles:', e);
@@ -180,33 +180,36 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-y-auto bg-neutral-950 p-6 space-y-6">
+    <div className="sf-page">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/[0.07] pb-3">
+        <div>
+          <h3 className="text-lg font-semibold tracking-tight text-white">Markets</h3>
+          <p className="mt-1 text-xs text-neutral-500">M1 price snapshots and measured data-feed health.</p>
+        </div>
+        <span className="text-[10px] text-neutral-500">Market data · not execution prices</span>
+      </div>
       {/* Pair Selector & Feed Health Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-neutral-800">
-        <div className="flex items-center gap-1.5 overflow-x-auto">
-          {FOREX_PAIRS.map(pair => (
-            <button
-              key={pair}
-              onClick={() => setSelectedPair(pair)}
-              className={`px-3 py-1.5 rounded text-xs font-mono font-medium transition-colors ${
-                selectedPair === pair
-                  ? 'bg-neutral-800 text-white font-semibold border border-neutral-700'
-                  : 'text-neutral-400 hover:text-white bg-neutral-900 border border-neutral-800/80'
-              }`}
-            >
-              {pair}
-            </button>
-          ))}
+        <div className="flex items-center gap-3">
+          <label htmlFor="market-pair" className="text-[11px] text-neutral-500">Pair</label>
+          <select
+            id="market-pair"
+            value={selectedPair}
+            onChange={event => setSelectedPair(event.target.value as ForexSymbol)}
+            className="min-w-[150px] rounded-lg border border-white/[0.08] bg-[#111a26] px-3 py-2 text-xs font-medium text-white outline-none"
+          >
+            {FOREX_PAIRS.map(pair => <option key={pair} value={pair}>{pair}</option>)}
+          </select>
         </div>
 
-        <div className="flex items-center gap-4 text-xs font-mono">
-          <div className="flex items-center gap-1.5 text-neutral-400">
-            <span>Active Source:</span>
-            <span className="text-emerald-400 font-semibold uppercase">{activeSource}</span>
+        <div className="flex items-center gap-4 text-xs">
+          <div className="flex items-center gap-1.5 text-neutral-500">
+            <span>Feed</span>
+            <span className="font-medium uppercase text-neutral-200">{activeSource || '—'}</span>
           </div>
-          <div className="flex items-center gap-1.5 text-neutral-400">
-            <span>Data Quality:</span>
-            <span className="text-white font-semibold">{qualityScore}/100</span>
+          <div className="flex items-center gap-1.5 text-neutral-500">
+            <span>Quality</span>
+            <span className="font-medium text-neutral-200">{qualityScore === null ? '—' : `${qualityScore}/100`}</span>
           </div>
         </div>
       </div>
@@ -236,44 +239,37 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
         {renderChart()}
       </div>
 
-      {/* Provider Health Matrix & Architecture */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-        <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4 text-xs font-mono space-y-2">
-          <div className="text-neutral-400 uppercase text-[10px] tracking-wider font-semibold flex items-center gap-1.5">
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Tier 1 Provider: Biquote.io</span>
-          </div>
-          <p className="text-neutral-300">
-            Direct public forex endpoint (<code className="text-neutral-400">/api/symbol/ohlc</code>).
-            Unfinished candles stripped; timestamps converted to ISO UTC.
-          </p>
-          <div className="text-[11px] text-neutral-500">Status: Active / Monitored</div>
+      {/* Feed status: only measured provider states are shown. */}
+      <section className="rounded-xl border border-white/[0.07] bg-white/[0.025] p-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h4 className="text-xs font-semibold text-neutral-200">Feed status</h4>
+          <span className="text-[10px] text-neutral-500">{providers.length} provider observations</span>
         </div>
-
-        <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4 text-xs font-mono space-y-2">
-          <div className="text-neutral-400 uppercase text-[10px] tracking-wider font-semibold flex items-center gap-1.5">
-            <Activity className="w-3.5 h-3.5 text-amber-400" />
-            <span>Tier 2 Fallback: Dukascopy</span>
-          </div>
-          <p className="text-neutral-300">
-            Dukascopy secondary feed with institutional bid/ask midpoints. Engages automatically if
-            Biquote exceeds 4s timeout.
-          </p>
-          <div className="text-[11px] text-neutral-500">Status: Standby Ready</div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {(['biquote', 'dukascopy', 'yahoo'] as const).map(provider => {
+            const rows = providers.filter(item => item.provider === provider);
+            const healthy = rows.filter(item => item.status === 'ONLINE').length;
+            const degraded = rows.filter(item => item.status === 'DEGRADED').length;
+            const failed = rows.filter(item => item.status === 'FAILED').length;
+            const status = rows.length === 0 ? 'NO DATA' : failed > 0 ? 'FAILED' : degraded > 0 ? 'DEGRADED' : 'ONLINE';
+            const label = provider === 'biquote' ? 'Biquote' : provider === 'dukascopy' ? 'Dukascopy' : 'Yahoo Finance';
+            return (
+              <div key={provider} className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.06] bg-[#0c131d] px-3 py-2.5">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-neutral-200">{label}</div>
+                  <div className="mt-0.5 text-[10px] text-neutral-500">
+                    {rows.length ? `${healthy} online · ${degraded} degraded · ${failed} failed` : 'No recent observation'}
+                  </div>
+                </div>
+                <span className={`shrink-0 rounded-md px-2 py-1 text-[9px] font-semibold tracking-wide
+                  ${status === 'ONLINE' ? 'bg-emerald-400/10 text-emerald-300' : status === 'DEGRADED' ? 'bg-amber-400/10 text-amber-300' : status === 'FAILED' ? 'bg-rose-400/10 text-rose-300' : 'bg-white/[0.05] text-neutral-500'}`}>
+                  {status}
+                </span>
+              </div>
+            );
+          })}
         </div>
-
-        <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4 text-xs font-mono space-y-2">
-          <div className="text-neutral-400 uppercase text-[10px] tracking-wider font-semibold flex items-center gap-1.5">
-            <Database className="w-3.5 h-3.5 text-purple-400" />
-            <span>Tier 3 Fallback: Yahoo Finance</span>
-          </div>
-          <p className="text-neutral-300">
-            Chart v8 endpoint fallback. Handles weekend/session boundary fills with realistic
-            continuity engine.
-          </p>
-          <div className="text-[11px] text-neutral-500">Status: Standby Ready</div>
-        </div>
-      </div>
+      </section>
     </div>
   );
 };

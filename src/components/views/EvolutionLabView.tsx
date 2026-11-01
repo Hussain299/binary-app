@@ -38,15 +38,9 @@ interface StrategySearchBatch {
 
 interface EvolutionLabViewProps {
   generations: EvolutionGeneration[];
-  onTriggerGeneration: () => void;
-  isRunning: boolean;
 }
 
-export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
-  generations,
-  onTriggerGeneration,
-  isRunning,
-}) => {
+export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({ generations }) => {
   const [searchPair, setSearchPair] = React.useState<ForexSymbol>('EUR/USD');
   const [historyCounts, setHistoryCounts] = React.useState<Record<string, number>>({});
   const [searchBatch, setSearchBatch] = React.useState<StrategySearchBatch | null>(null);
@@ -54,6 +48,21 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
   const [searchError, setSearchError] = React.useState('');
   const [historyImportBusy, setHistoryImportBusy] = React.useState(false);
   const [historyImportStatus, setHistoryImportStatus] = React.useState('');
+  const [storedGenerations, setStoredGenerations] = React.useState<EvolutionGeneration[]>(generations);
+
+  React.useEffect(() => setStoredGenerations(generations), [generations]);
+
+  const refreshGenerationHistory = async () => {
+    try {
+      const response = await fetch('/api/evolution/state');
+      const payload = await response.json();
+      if (response.ok && Array.isArray(payload.generations)) {
+        setStoredGenerations(payload.generations);
+      }
+    } catch {
+      // Retain the last persisted generation list if telemetry refresh fails.
+    }
+  };
 
   React.useEffect(() => {
     fetch('/api/research/candles/status')
@@ -64,7 +73,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
           counts[pair.symbol] = pair.count;
         });
         setHistoryCounts(counts);
-        const readyPair = FOREX_PAIRS.find(pair => (counts[pair] || 0) >= 30_000);
+        const readyPair = FOREX_PAIRS.find(pair => (counts[pair] || 0) >= 60_000);
         if (readyPair) setSearchPair(readyPair);
       })
       .catch(() => setSearchError('Could not read historical-data status.'));
@@ -83,8 +92,8 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
       }
 
       const lines = (await file.text()).replace(/^\uFEFF/, '').trim().split(/\r?\n/);
-      if (lines.length < 30_001) {
-        throw new Error(`The file has only ${Math.max(0, lines.length - 1).toLocaleString()} data rows; at least 30,000 M1 rows are required.`);
+      if (lines.length < 60_001) {
+        throw new Error(`The file has only ${Math.max(0, lines.length - 1).toLocaleString()} data rows; at least 60,000 genuine M1 rows are required.`);
       }
       const headers = lines[0].split(',').map(value => value.trim().toLowerCase().replaceAll('"', ''));
       const index = (name: string) => headers.indexOf(name);
@@ -190,6 +199,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
         setSearchBatch(snapshot);
       }
       if (snapshot.status === 'FAILED') throw new Error(snapshot.error || 'The strategy search failed.');
+      await refreshGenerationHistory();
     } catch (error: any) {
       setSearchError(error.message || 'The strategy search failed.');
     } finally {
@@ -201,41 +211,34 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
   const searchProgress = searchBatch ? Math.round((searchBatch.completed / 300) * 100) : 0;
 
   const steps = [
-    '1. Collect Multi-Feed Forex Data',
-    '2. Discover Market Anomalies',
-    '3. Formulate Falsifiable Hypotheses',
-    '4. Configure Isolated Splits',
-    '5. Execute Purged Walk-Forward',
-    '6. Evaluate Validation Performance',
-    '7. Untouched Test Replication',
-    '8. Skeptical Auditor Interrogation',
-    '9. Candidate Fitness Ranking',
-    '10. Archive Failure Lineage',
-    '11. Sample New Candidate Parameters',
+    '1. Ingest Genuine M1 Data',
+    '2. Build Causal Market Features',
+    '3. Generate Symbolic Genomes',
+    '4. Apply Mutation & Crossover',
+    '5. Rank on Train/Validation',
+    '6. Preserve Diverse Species',
+    '7. Preselect Finalists',
+    '8. Inspect One-Time Holdout',
+    '9. Record Failed Lineages',
+    '10. Learn from Forward Paper Outcomes',
+    '11. Feed Mature Evidence into Parents',
   ];
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-y-auto bg-neutral-950 p-6 space-y-6">
-      {/* Header & Controls */}
-      <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-neutral-800">
+    <div className="sf-page">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/[0.07] pb-4">
         <div>
-          <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
-            <Dna className="w-4 h-4 text-emerald-400" />
-            <span>Research Candidate Laboratory</span>
+          <h3 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-white">
+            <Dna className="h-5 w-5 text-emerald-300" />
+            Evolution lab
           </h3>
-          <p className="text-xs text-neutral-400 font-mono mt-1">
-            Three hundred expressions are ranked on train/validation data; only the preselected finalists see the untouched holdout. Passing history only allows paper testing.
+          <p className="mt-1 max-w-2xl text-xs text-neutral-500">
+            Generate, compare and reject 300 executable strategies against chronological market data.
           </p>
         </div>
-
-        <button
-          onClick={onTriggerGeneration}
-          disabled={isRunning}
-          className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-emerald-950 bg-emerald-400 hover:bg-emerald-300 rounded transition-colors disabled:opacity-50"
-        >
-          <Sparkles className={`w-3.5 h-3.5 ${isRunning ? 'animate-spin' : ''}`} />
-          <span>{isRunning ? 'Running Research Cycle...' : 'Run Autonomous Research Cycle'}</span>
-        </button>
+        <span className="rounded-md border border-white/[0.07] bg-white/[0.03] px-2.5 py-1.5 text-[10px] text-neutral-400">
+          3m lead · 5–30m entry
+        </span>
       </div>
 
       {/* Large-scale symbolic discovery and evidence gate */}
@@ -244,10 +247,10 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
           <div className="max-w-2xl">
             <h4 className="text-sm font-bold text-white flex items-center gap-2">
               <Dna className="w-4 h-4 text-cyan-300" />
-              Symbolic Strategy Discovery · 300 Candidate Search
+              Symbolic strategy discovery
             </h4>
             <p className="mt-1 text-xs leading-relaxed text-neutral-400">
-              Generates 300 executable mathematical expressions using genetic crossover and mutation, then replays each one on imported real-market M1 history. Candidates are not approved because they look promising.
+              300 candidates evolve through crossover and mutation. Only evidence—not novelty—can move a candidate forward.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -265,11 +268,11 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
             </select>
             <button
               onClick={runThreeHundredSearch}
-              disabled={isSearchingBatch || selectedHistoryCount < 30_000}
+              disabled={isSearchingBatch || selectedHistoryCount < 60_000}
               className="flex items-center gap-2 rounded-lg bg-cyan-400 px-4 py-2 text-xs font-bold text-neutral-950 hover:bg-cyan-300 disabled:opacity-40"
             >
               <Sparkles className={`w-3.5 h-3.5 ${isSearchingBatch ? 'animate-spin' : ''}`} />
-              {isSearchingBatch ? 'Testing 300 strategies…' : 'Generate & Test 300 Strategies'}
+              {isSearchingBatch ? 'Testing 300 strategies…' : 'Evolve 300 Candidates'}
             </button>
           </div>
         </div>
@@ -290,10 +293,21 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
           {historyImportBusy && <span className="text-xs text-cyan-300">Importing…</span>}
         </div>
         {historyImportStatus && <p className="text-[11px] text-emerald-300">{historyImportStatus}</p>}
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-neutral-400">
-          <span>Imported history: <strong className="text-white">{selectedHistoryCount.toLocaleString()} / 30,000 M1 candles</strong></span>
-          <span>Historic gate: <strong className="text-white">300 scored test trades · 70% validation and test WR</strong></span>
-          <span>Final gate: <strong className="text-white">300 forward paper outcomes · 70% rolling WR</strong></span>
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="rounded-md bg-white/[0.04] px-2.5 py-1.5 text-neutral-400">
+            History <strong className="ml-1 text-neutral-200">{selectedHistoryCount.toLocaleString()} / 60k M1</strong>
+          </span>
+          <span className="rounded-md bg-white/[0.04] px-2.5 py-1.5 text-neutral-400">
+            Historical evidence <strong className="ml-1 text-neutral-200">150 / 150 / 300</strong>
+          </span>
+          <details className="relative">
+            <summary className="cursor-pointer list-none rounded-md bg-white/[0.04] px-2.5 py-1.5 text-neutral-400 hover:text-white">
+              Approval rules
+            </summary>
+            <div className="absolute right-0 z-20 mt-2 w-72 rounded-xl border border-white/10 bg-[#111a26] p-3 text-[11px] leading-relaxed text-neutral-400 shadow-2xl">
+              Train and validation need at least 150 decisive trades each. The untouched test needs 300. All stages must clear payout break-even with positive expectancy and profit-factor checks; holdout finalists receive a multiple-comparison correction. Forward paper approval separately requires 300 decisive outcomes.
+            </div>
+          </details>
         </div>
 
         {searchError && (
@@ -321,7 +335,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
                 <div className="text-xl font-bold text-amber-300">{searchBatch.insufficientSample}</div>
               </div>
               <div className="rounded-lg bg-neutral-950 border border-neutral-800 p-3">
-                <div className="text-[10px] text-neutral-500">Failed 70% / EV gates</div>
+                <div className="text-[10px] text-neutral-500">Failed payout / confidence gates</div>
                 <div className="text-xl font-bold text-rose-300">{searchBatch.rejected}</div>
               </div>
               <div className="rounded-lg bg-neutral-950 border border-neutral-800 p-3">
@@ -330,7 +344,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
                 <div className="text-[9px] text-neutral-500">Selected using validation only</div>
               </div>
               <div className="rounded-lg bg-neutral-950 border border-neutral-800 p-3">
-                <div className="text-[10px] text-neutral-500">Actionable strategies approved</div>
+                <div className="text-[10px] text-neutral-500">Forward-paper gate passed (paper only)</div>
                 <div className="text-xl font-bold text-white">{searchBatch.approvedCount}</div>
                 <div className="text-[9px] text-neutral-500">approved after historical + forward 300 gates</div>
               </div>
@@ -382,66 +396,91 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
         )}
       </section>
 
-      {/* 11-Stage Evolution Lifecycle Pipeline */}
-      <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4 font-mono text-xs space-y-3">
-        <h4 className="text-sm font-semibold text-white">Closed-Loop Scientific Method Flow</h4>
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 text-[11px]">
-          {steps.map((st, i) => (
-            <div
-              key={i}
-              className="bg-neutral-950 border border-neutral-800/80 p-2.5 rounded text-neutral-300 flex flex-col justify-between"
-            >
-              <span className="text-neutral-500 text-[10px] block">Step {i + 1}</span>
-              <span className="font-medium mt-1">{st.substring(3)}</span>
+      {/* Detailed methodology stays collapsed until it is needed. */}
+      <details className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4">
+        <summary className="cursor-pointer text-xs font-semibold text-neutral-300 hover:text-white">
+          How the evolutionary loop works · 12 stages
+        </summary>
+        <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-3 xl:grid-cols-4">
+          {steps.map((step, index) => (
+            <div key={index} className="rounded-lg border border-white/[0.06] bg-[#0c131d] p-3">
+              <div className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-neutral-600">Step {index + 1}</div>
+              <div className="text-neutral-300">{step.replace(/^\\d+\\.\\s*/, '')}</div>
             </div>
           ))}
-          <div className="bg-emerald-950/40 border border-emerald-800/80 p-2.5 rounded text-emerald-300 flex flex-col justify-between">
-            <span className="text-emerald-500 text-[10px] block">Step 12</span>
-            <span className="font-medium mt-1">Repeat Automatically</span>
+          <div className="rounded-lg border border-emerald-400/10 bg-emerald-400/[0.04] p-3 text-emerald-200">
+            <div className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-emerald-500">Step 12</div>
+            Mature paper evidence influences parent selection
           </div>
         </div>
-      </div>
+      </details>
 
       {/* Generations Tree / History */}
       <div className="space-y-4">
-        <h4 className="text-sm font-semibold text-white font-mono">Research Cycle Records</h4>
+        <h4 className="text-sm font-semibold text-white font-mono">Completed Evolution & Research Batches</h4>
 
-        {generations.length === 0 ? (
+        {storedGenerations.length === 0 ? (
           <div className="h-48 flex flex-col items-center justify-center text-center text-neutral-500 font-mono text-xs bg-neutral-900/40 border border-neutral-800 rounded">
             <Dna className="w-8 h-8 text-neutral-600 mb-2" />
-            <p className="text-neutral-400 font-medium text-sm">No Research Cycles Recorded Yet</p>
-            <p className="mt-1">Run a research cycle when imported historical data is available.</p>
+            <p className="text-neutral-400 font-medium text-sm">No evolutionary batches recorded yet</p>
+            <p className="mt-1">Import genuine M1 history and complete a registered 300-candidate batch.</p>
           </div>
         ) : (
-          generations.map(gen => (
+          storedGenerations.map(gen => (
             <div
               key={gen.generation}
               className="bg-neutral-900/60 border border-neutral-800 rounded p-5 font-mono text-xs space-y-3"
             >
               <div className="flex flex-wrap items-center justify-between pb-3 border-b border-neutral-800">
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-bold text-white">Generation #{gen.generation}</span>
+                  <span className="text-sm font-bold text-white">{gen.status === 'FAILED' ? 'Failed Evolution Batch' : gen.researchBatchId ? 'Evolution Batch' : 'Legacy Research'} #{gen.generation}</span>
+                  {gen.symbol && <span className="text-neutral-400">· {gen.symbol}</span>}
                   <span className="text-neutral-500">·</span>
                   <span className="text-neutral-400">{gen.timestamp.substring(0, 19).replace('T', ' ')} UTC</span>
                 </div>
 
                 <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-1.5 text-emerald-400">
+                  <div className={`flex items-center gap-1.5 ${gen.status === 'FAILED' ? 'text-neutral-500' : 'text-emerald-400'}`}>
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>{gen.acceptedCount} Accepted</span>
+                    <span>{gen.acceptedCount} {gen.researchBatchId ? 'Historical Passes' : 'Legacy Accepted'}</span>
                   </div>
                   <div className="flex items-center gap-1.5 text-rose-400">
                     <XCircle className="w-3.5 h-3.5" />
-                    <span>{gen.rejectedCount} Rejected</span>
+                    <span>{gen.rejectedCount} {gen.researchBatchId ? 'Rejected' : 'Legacy Rejected'}</span>
                   </div>
                   <div className="flex items-center gap-1 text-white font-semibold">
-                    <span>Best F1:</span>
-                    <span className="tabular-nums text-emerald-300">{gen.bestF1Score.toFixed(3)}</span>
+                    <span>{gen.researchBatchId ? 'Best Validation EV:' : 'Legacy F1:'}</span>
+                    <span className="tabular-nums text-emerald-300">
+                      {gen.researchBatchId ? (gen.bestValidationExpectedValueUnits ?? 0).toFixed(4) + ' units' : gen.bestF1Score.toFixed(3)}
+                    </span>
                   </div>
                 </div>
               </div>
 
               <p className="text-neutral-300 leading-relaxed">{gen.summary}</p>
+
+              {gen.subGenerations && gen.subGenerations.length > 0 && (
+                <div className="rounded border border-neutral-800 bg-neutral-950 p-3 space-y-2">
+                  <div className="text-[10px] uppercase text-neutral-500 font-semibold">
+                    Internal Genetic Generations · 30 candidates each
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-2">
+                    {gen.subGenerations.map(stage => (
+                      <div key={stage.generation} className="rounded border border-neutral-800 p-2 space-y-1">
+                        <div className="text-[10px] font-bold text-white">Gen {stage.generation}</div>
+                        <div className="text-[10px] text-neutral-400">{stage.candidateCount} candidates · {stage.qualifiedParentCount} parent-qualified</div>
+                        <div className="text-[10px] text-neutral-400">{stage.distinctSpecies} qualified species</div>
+                        <div className="text-[10px] text-neutral-300">Best validation EV: {stage.bestValidationExpectedValueUnits.toFixed(3)}</div>
+                        <div className="text-[10px] text-neutral-500">Best validation WR: {(stage.bestValidationWinRate * 100).toFixed(1)}%</div>
+                        <div className="text-[10px] text-neutral-500">Mean mutation: {(stage.meanMutationRate * 100).toFixed(1)}%</div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-neutral-500">
+                    These are discovery/validation measurements used for evolution, not untouched-test or forward-paper results.
+                  </p>
+                </div>
+              )}
 
               {/* Lessons Learned */}
               <div className="bg-neutral-950 p-3 rounded border border-neutral-800 space-y-1 text-neutral-400 text-[11px]">

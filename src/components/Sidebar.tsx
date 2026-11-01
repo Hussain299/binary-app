@@ -1,16 +1,17 @@
 import React from 'react';
 import {
-  Compass,
-  LineChart,
-  Brain,
-  Lightbulb,
-  History,
-  Dna,
-  Users,
-  Target,
   BarChart3,
-  ShieldAlert,
+  Brain,
+  ChevronLeft,
+  ChevronRight,
+  Clock3,
+  Compass,
+  Dna,
+  History,
+  Lightbulb,
+  LineChart,
   Settings,
+  ShieldCheck,
   X,
   Zap,
 } from 'lucide-react';
@@ -34,8 +35,47 @@ interface SidebarProps {
   activeSignalsCount: number;
   totalExperiments: number;
   isOpen?: boolean;
+  isCollapsed?: boolean;
   onClose?: () => void;
+  onToggleCollapse?: () => void;
 }
+
+const groups: Array<{
+  label: string;
+  items: Array<{
+    id: ViewTab;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    count?: 'signals' | 'history';
+  }>;
+}> = [
+  {
+    label: 'Workspace',
+    items: [
+      { id: 'terminal', label: 'Signals', icon: Zap, count: 'signals' },
+      { id: 'explorer', label: 'Markets', icon: LineChart },
+      { id: 'strategy', label: 'Strategies', icon: Lightbulb },
+      { id: 'analytics', label: 'Performance', icon: BarChart3 },
+      { id: 'monitor', label: 'Entry & exit', icon: Clock3 },
+    ],
+  },
+  {
+    label: 'Research',
+    items: [
+      { id: 'evolution', label: 'Evolution', icon: Dna },
+      { id: 'history', label: 'Research history', icon: History, count: 'history' },
+      { id: 'agents', label: 'Research agents', icon: Brain },
+      { id: 'modellab', label: 'Model lab', icon: Compass },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { id: 'health', label: 'Data health', icon: ShieldCheck },
+      { id: 'config', label: 'Settings', icon: Settings },
+    ],
+  },
+];
 
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
@@ -43,127 +83,127 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeSignalsCount,
   totalExperiments,
   isOpen = false,
+  isCollapsed = false,
   onClose,
+  onToggleCollapse,
 }) => {
-  const navItems: Array<{
-    id: ViewTab;
-    label: string;
-    icon: React.ComponentType<{ className?: string }>;
-    count?: number;
-    badge?: string;
-  }> = [
-    { id: 'terminal', label: '5M Trading Signals', icon: Zap, count: activeSignalsCount, badge: 'LIVE' },
-    { id: 'strategy', label: 'Discovered Strategies', icon: Lightbulb, count: 3 },
-    { id: 'agents', label: 'What AI Is Learning', icon: Brain },
-    { id: 'analytics', label: 'Performance & PnL', icon: BarChart3 },
-    { id: 'explorer', label: 'Live Forex Charts', icon: LineChart },
-    { id: 'monitor', label: '5M Entry/Exit Clocks', icon: Target },
-    { id: 'modellab', label: 'Model Laboratory', icon: Compass },
-    { id: 'history', label: 'Past Generations', icon: History, count: totalExperiments },
-    { id: 'evolution', label: 'Autonomous Evolution', icon: Dna },
-    { id: 'health', label: 'System Health', icon: ShieldAlert },
-    { id: 'config', label: 'Settings & Testing', icon: Settings },
-  ];
-
   const handleSelect = (id: ViewTab) => {
     onTabChange(id);
-    if (onClose) {
-      onClose();
-    }
+    onClose?.();
   };
 
-  const navContent = (
-    <div className="flex flex-col justify-between h-full bg-neutral-950">
-      <div className="py-3 px-2 flex flex-col gap-1">
-        <div className="px-3 pb-2 flex items-center justify-between text-[11px] font-mono uppercase tracking-wider text-neutral-400">
-          <span className="font-bold text-white">Navigation</span>
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="lg:hidden p-1.5 text-neutral-400 hover:text-white rounded-lg bg-neutral-900 border border-neutral-800"
-              aria-label="Close navigation"
-            >
-              <X className="w-4 h-4" />
-            </button>
+  const renderNavigation = (compact: boolean) => (
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3">
+      {groups.map(group => (
+        <section key={group.label} className="mb-4 last:mb-0">
+          {!compact && (
+            <div className="px-3 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+              {group.label}
+            </div>
           )}
-        </div>
-        {navItems.map(item => {
-          const Icon = item.icon;
-          const isActive = activeTab === item.id;
-          return (
-            <button
-              key={item.id}
-              onClick={() => handleSelect(item.id)}
-              className={`flex items-center justify-between w-full px-3 py-2.5 rounded-xl text-xs font-semibold transition-colors text-left ${
-                isActive
-                  ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/40 shadow-xs'
-                  : 'text-neutral-400 hover:text-white hover:bg-neutral-900'
-              }`}
-            >
-              <div className="flex items-center gap-2.5 truncate">
-                <Icon
-                  className={`w-4 h-4 shrink-0 ${
-                    isActive ? 'text-emerald-400' : 'text-neutral-500'
-                  }`}
-                />
-                <span className="truncate">{item.label}</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                {item.badge && (
-                  <span className="px-1.5 py-0.2 rounded bg-emerald-500 text-neutral-950 font-bold text-[9px] font-mono">
-                    {item.badge}
-                  </span>
-                )}
-                {item.count !== undefined && item.count > 0 && !item.badge && (
-                  <span className="font-mono text-[10px] text-neutral-400 tabular-nums bg-neutral-900 px-1.5 py-0.5 rounded border border-neutral-800">
-                    {item.count}
-                  </span>
-                )}
-              </div>
-            </button>
-          );
-        })}
-      </div>
+          <div className="space-y-1">
+            {group.items.map(item => {
+              const Icon = item.icon;
+              const isActive = activeTab === item.id;
+              const count = item.count === 'signals'
+                ? activeSignalsCount
+                : item.count === 'history'
+                  ? totalExperiments
+                  : 0;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  title={compact ? item.label : undefined}
+                  aria-label={item.label}
+                  aria-current={isActive ? 'page' : undefined}
+                  onClick={() => handleSelect(item.id)}
+                  className={`group relative flex h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-[13px] font-medium transition-colors duration-150
+                    ${compact ? 'justify-center px-0' : ''}
+                    ${isActive
+                      ? 'bg-emerald-400/10 text-emerald-300'
+                      : 'text-neutral-400 hover:bg-white/[0.045] hover:text-neutral-100'}`}
+                >
+                  {isActive && <span className="absolute bottom-2 left-0 top-2 w-[2px] rounded-full bg-emerald-400" />}
+                  <Icon className={`h-[17px] w-[17px] shrink-0 ${isActive ? 'text-emerald-300' : 'text-neutral-500 group-hover:text-neutral-300'}`} />
+                  {!compact && <span className="min-w-0 flex-1 truncate">{item.label}</span>}
+                  {!compact && count > 0 && (
+                    <span className={`min-w-5 rounded-md px-1.5 py-0.5 text-center text-[10px] tabular-nums
+                      ${isActive ? 'bg-emerald-400/15 text-emerald-200' : 'bg-white/[0.05] text-neutral-500'}`}>
+                      {count > 999 ? '999+' : count}
+                    </span>
+                  )}
+                  {compact && count > 0 && (
+                    <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
 
-      {/* Footer Info */}
-      <div className="p-3 border-t border-neutral-800 text-[11px] font-mono text-neutral-400 space-y-1 bg-neutral-950">
-        <div className="flex justify-between">
-          <span>Engine</span>
-          <span className="text-neutral-200 font-bold">Autonomous v2.5</span>
+  const footer = (compact: boolean) => (
+    <div className="border-t border-white/[0.07] p-3">
+      {compact ? (
+        <div className="flex flex-col items-center gap-2 text-[9px] font-semibold text-neutral-500">
+          <span title="Three-minute advance decision">T−3</span>
+          <span className="h-px w-5 bg-white/10" />
+          <span title="Five to thirty minute horizons">5–30</span>
         </div>
-        <div className="flex justify-between">
-          <span>Candle Timing</span>
-          <span className="text-emerald-400 font-bold">Strict 5M Open</span>
-        </div>
-        <div className="flex justify-between">
-          <span>Performance evidence</span>
-          <span className="text-emerald-400 font-bold">Measured outcomes</span>
-        </div>
-      </div>
+      ) : (
+        <>
+          <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.14em] text-neutral-500">Research rules</div>
+          <div className="flex flex-wrap gap-1.5">
+            <span className="rounded-md border border-white/[0.07] bg-white/[0.035] px-2 py-1 text-[10px] text-neutral-400">3m advance</span>
+            <span className="rounded-md border border-white/[0.07] bg-white/[0.035] px-2 py-1 text-[10px] text-neutral-400">5–30m candles</span>
+            <span className="rounded-md border border-white/[0.07] bg-white/[0.035] px-2 py-1 text-[10px] text-neutral-400">Paper only</span>
+          </div>
+        </>
+      )}
     </div>
   );
 
   return (
     <>
-      {/* Desktop Static Sidebar (only visible on large screens) */}
-      <aside className="hidden lg:flex w-64 border-r border-neutral-800 bg-neutral-950 flex-col shrink-0 select-none">
-        {navContent}
+      <aside className={`hidden shrink-0 flex-col border-r border-white/[0.07] bg-[#0b1018] transition-[width] duration-200 lg:flex
+        ${isCollapsed ? 'w-[72px]' : 'w-[232px]'}`}>
+        <div className={`flex h-12 shrink-0 items-center border-b border-white/[0.07] ${isCollapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
+          {!isCollapsed && <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">Workspace</span>}
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            title={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            aria-label={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            className="rounded-md p-1.5 text-neutral-500 transition-colors hover:bg-white/[0.06] hover:text-neutral-200"
+          >
+            {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+          </button>
+        </div>
+        {renderNavigation(isCollapsed)}
+        {footer(isCollapsed)}
       </aside>
 
-      {/* Mobile Drawer (closed by default, opens cleanly when menu clicked) */}
       {isOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden flex">
-          {/* Backdrop overlay */}
-          <div
+        <div className="fixed inset-0 z-50 flex lg:hidden">
+          <button
+            type="button"
             onClick={onClose}
-            className="fixed inset-0 bg-black/80 backdrop-blur-xs transition-opacity"
-            aria-hidden="true"
+            aria-label="Close navigation"
+            className="absolute inset-0 bg-black/65 backdrop-blur-[2px]"
           />
-
-          {/* Drawer container */}
-          <div className="relative z-10 w-72 max-w-[85vw] h-full bg-neutral-950 border-r border-neutral-800 shadow-2xl flex flex-col">
-            {navContent}
-          </div>
+          <aside className="relative z-10 flex h-full w-[280px] max-w-[86vw] flex-col border-r border-white/10 bg-[#0b1018] shadow-2xl">
+            <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/[0.07] px-4">
+              <span className="text-sm font-semibold text-white">Navigation</span>
+              <button type="button" onClick={onClose} aria-label="Close navigation" className="rounded-lg p-2 text-neutral-400 hover:bg-white/[0.06] hover:text-white">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            {renderNavigation(false)}
+            {footer(false)}
+          </aside>
         </div>
       )}
     </>

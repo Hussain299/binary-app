@@ -22,6 +22,17 @@ import {
   StrategyPerformanceRecord,
 } from '../types/index.js';
 import { getSessionFromTimestamp } from './dataFeeds.js';
+import {
+  assessNearestNeighbors,
+  EpisodicTradeMemory,
+  BetaPosterior,
+  NeighborAssessment,
+  MarketRegimeSnapshot,
+  updateBetaPosterior,
+  bayesianUcbScore,
+  doesResearchHoldoutOverlap,
+  hasSufficientHistoricalApprovalEvidence,
+} from './evolutionEngine.js';
 
 interface DatabaseSchema {
   candles: Record<string, Candle[]>;
@@ -34,6 +45,14 @@ interface DatabaseSchema {
   synthesizedStrategies: SynthesizedStrategyGene[];
   lossAutopsies: LossAutopsy[];
   strategyPerformance: Record<string, StrategyPerformanceRecord>;
+  /** Durable, prediction-time market contexts for settled WIN/LOSS observations. */
+  episodicMemory: EpisodicTradeMemory[];
+  /** Latest measured regime state per pair; telemetry is sourced from the decision engine. */
+  marketRegimes: Record<string, MarketRegimeSnapshot>;
+  /** Global idempotency ledger; prevents replayed settlement events from retraining state. */
+  processedOutcomeIds: string[];
+  /** Holdout time ranges already inspected by candidate searches; prevents reuse. */
+  researchHoldoutWindows: Array<{ symbol: ForexSymbol; batchId: string; startUtc: string; endUtc: string; reservedAt: string }>;
   cronState: {
     lastRun: string | null;
     nextRun: string | null;
@@ -69,18 +88,41 @@ class DatabaseService {
         if (!Array.isArray(parsed.synthesizedStrategies)) parsed.synthesizedStrategies = [];
         if (!Array.isArray(parsed.lossAutopsies)) parsed.lossAutopsies = [];
         if (!parsed.strategyPerformance || typeof parsed.strategyPerformance !== 'object') parsed.strategyPerformance = {};
+        if (!Array.isArray(parsed.episodicMemory)) parsed.episodicMemory = [];
+        if (!parsed.marketRegimes || typeof parsed.marketRegimes !== 'object') parsed.marketRegimes = {};
+        if (!Array.isArray(parsed.processedOutcomeIds)) parsed.processedOutcomeIds = [];
+        if (!Array.isArray(parsed.researchHoldoutWindows)) parsed.researchHoldoutWindows = [];
         // Historical versions wrote fabricated strategy accuracy values. Never trust them
         // without stored untouched-test evidence; quarantine all such legacy candidates.
         if (Array.isArray(parsed.synthesizedStrategies)) {
+          const hardcodedSeedIds = new Set([
+            'synth_gen7_fractal_wick',
+            'synth_gen12_harmonic_flow',
+            'synth_gen19_stochastic_drift',
+            'synth_gen26_macro_resonance',
+            'synth_gen33_compression_decoupling',
+          ]);
+          parsed.synthesizedStrategies = parsed.synthesizedStrategies.filter(
+            (gene: any) => !hardcodedSeedIds.has(gene.id)
+          );
+          const completedBatchIds = new Set(
+            (Array.isArray(parsed.generations) ? parsed.generations : [])
+              .filter((generation: any) =>
+                generation?.researchBatchId && generation.status === 'COMPLETED'
+              )
+              .map((generation: any) => generation.researchBatchId)
+          );
           parsed.synthesizedStrategies = parsed.synthesizedStrategies.map((gene: any) => {
-            if (!gene.backtestMetrics || !gene.accuracyStatus ||
-                gene.backtestMetrics.testScoredSampleSize < 300 ||
-                gene.backtestMetrics.validationScoredSampleSize < 150 ||
-                gene.backtestMetrics.testWinRate < 0.70 ||
-                gene.backtestMetrics.validationWinRate < 0.70 ||
-                !Array.isArray(gene.backtestMetrics.testBlockWinRates) ||
-                gene.backtestMetrics.testBlockWinRates.length !== 3 ||
-                gene.backtestMetrics.testBlockWinRates.some((rate: number) => rate < 0.70)) {
+            const registeredCompletedBatch =
+              typeof gene.searchBatchId === 'string' &&
+              completedBatchIds.has(gene.searchBatchId) &&
+              parsed.researchHoldoutWindows.some((window: any) => window.batchId === gene.searchBatchId);
+            if (!registeredCompletedBatch ||
+                !hasSufficientHistoricalApprovalEvidence(
+                  gene.backtestMetrics,
+                  gene.accuracyStatus,
+                  gene.sampleCount
+                )) {
               return {
                 ...gene,
                 verifiedAccuracy: 0,
@@ -91,16 +133,13 @@ class DatabaseService {
                 status: 'EXPERIMENTING',
               };
             }
-            // Older approval records may predate the stricter forward 300-trade gate.
+            // Re-check forward approval on every restart.
             if (gene.status === 'PROMOTED_ACTIVE' && !this.hasForwardApprovalEvidence(gene)) {
               return { ...gene, status: 'PAPER_TRADING' };
             }
             return gene;
-          });
-        }
-        if (parsed.synthesizedStrategies.length === 0) {
-          parsed.synthesizedStrategies = this.generateSeedSynthesizedGenes();
-        }
+          });        }
+        // An empty population stays empty until the research engine actually generates candidates.
         if (Array.isArray(parsed.signals)) {
           // Keep persistent trade history while filtering out removed pairs or test artifacts
           parsed.signals = parsed.signals.filter((s: any) => {
@@ -198,9 +237,13 @@ class DatabaseService {
       reviews: [],
       generations: [],
       autopilotLogs: [],
-      synthesizedStrategies: this.generateSeedSynthesizedGenes(),
+      synthesizedStrategies: [],
       lossAutopsies: [],
       strategyPerformance: {},
+      episodicMemory: [],
+      marketRegimes: {},
+      processedOutcomeIds: [],
+      researchHoldoutWindows: [],
       cronState: {
         lastRun: null,
         nextRun: null,
@@ -210,105 +253,6 @@ class DatabaseService {
     };
   }
 
-  private generateSeedSynthesizedGenes(): SynthesizedStrategyGene[] {
-    return [
-      {
-        id: 'synth_gen7_fractal_wick',
-        name: 'Synth-Gen7: Polynomial Fractal Entropy + Asymmetric Wick Delta',
-        code: 'GEN7_FRACTAL_WICK',
-        generation: 7,
-        mathematicalFormula: 'f(x) = tanh(1.45·Z_Entropy) + 0.68·(LowerWickRatio)^1.85 - 0.28·Δ_20SMA',
-        parents: ['Fractal Volatility Matrix', 'Asymmetric Wick Rejection', 'Microstructure Flow'],
-        mutationRate: 0.042,
-        nonLinearOperator: 'tanh_polynomial',
-        optimalHorizonMinutes: 10,
-        sessionAffinity: 'ALL',
-        verifiedAccuracy: 0,
-        sampleCount: 0,
-        accuracyStatus: 'UNVALIDATED',
-        status: 'EXPERIMENTING',
-        scientificHypothesis: 'Candidate hypothesis: non-linear rejection-wick features combined with local price variation may help identify short-term directional changes.',
-        whyHumansMissThis: 'Candidate design rationale: combine wick shape with recent price variation; performance must be established by historical and forward testing.',
-        createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-      },
-      {
-        id: 'synth_gen12_harmonic_flow',
-        name: 'Synth-Gen12: Non-Linear Harmonic Volatility Expansion + Micro-Flow Imbalance',
-        code: 'GEN12_HARMONIC_FLOW',
-        generation: 12,
-        mathematicalFormula: 'f(x) = σ(2.10·EMA_Curvature × Vol_Elasticity) - 0.42·ln(1 + ATR_harmonic)',
-        parents: ['Wave Curvature Derivative', 'Volume Squeeze Compression', 'Tick Velocity Dispersion'],
-        mutationRate: 0.038,
-        nonLinearOperator: 'exponential_decay',
-        optimalHorizonMinutes: 5,
-        sessionAffinity: 'LONDON',
-        verifiedAccuracy: 0,
-        sampleCount: 0,
-        accuracyStatus: 'UNVALIDATED',
-        status: 'EXPERIMENTING',
-        scientificHypothesis: 'Candidate hypothesis: EMA curvature and volatility changes may help identify directional movement during the London session.',
-        whyHumansMissThis: 'Candidate design rationale: combine moving-average curvature with volatility changes; no advantage is assumed before testing.',
-        createdAt: new Date(Date.now() - 3600000 * 4).toISOString(),
-      },
-      {
-        id: 'synth_gen19_stochastic_drift',
-        name: 'Synth-Gen19: Multi-Horizon Stochastic Drift + Adaptive Band Inversion',
-        code: 'GEN19_STOCHASTIC_DRIFT',
-        generation: 19,
-        mathematicalFormula: 'f(x) = sign(MicroFlow)·|Δ_20MA|^1.25 + 0.54·RSI_Curvature - 0.35·Wick_Asymmetry',
-        parents: ['Stochastic Drift Matrix', 'Adaptive Band Inversion', 'Mean Reversion Engine'],
-        mutationRate: 0.051,
-        nonLinearOperator: 'fractal_power',
-        optimalHorizonMinutes: 15,
-        sessionAffinity: 'ASIA',
-        verifiedAccuracy: 0,
-        sampleCount: 0,
-        accuracyStatus: 'UNVALIDATED',
-        status: 'EXPERIMENTING',
-        scientificHypothesis: 'Candidate hypothesis: changes in price dispersion around a 20-period moving average may help identify short-term drift changes.',
-        whyHumansMissThis: 'Candidate design rationale: measure gradual changes in drift rather than relying only on fixed RSI levels; no early-detection advantage is assumed.',
-        createdAt: new Date(Date.now() - 3600000 * 3).toISOString(),
-      },
-      {
-        id: 'synth_gen26_macro_resonance',
-        name: 'Synth-Gen26: Macro Session Order-Flow Resonance Matrix',
-        code: 'GEN26_MACRO_RESONANCE',
-        generation: 26,
-        mathematicalFormula: 'f(x) = 0.52·tanh(SessionLiquidityFlow) + 0.48·(BreakoutDelta)^1.6 × VolumeRatio',
-        parents: ['Macro Order Flow Resonance', '20-Bar High Expansion', 'Session Open Liquidity Grab'],
-        mutationRate: 0.035,
-        nonLinearOperator: 'tanh_polynomial',
-        optimalHorizonMinutes: 30,
-        sessionAffinity: 'OVERLAP',
-        verifiedAccuracy: 0,
-        sampleCount: 0,
-        accuracyStatus: 'UNVALIDATED',
-        status: 'EXPERIMENTING',
-        scientificHypothesis: 'Candidate hypothesis: volatility and price movement during the London/New York overlap may contain useful information for a longer-horizon continuation setup.',
-        whyHumansMissThis: 'Candidate design rationale: combine session timing and volatility features; this candidate does not measure inter-bank order flow.',
-        createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-      },
-      {
-        id: 'synth_gen33_compression_decoupling',
-        name: 'Synth-Gen33: Asymmetric Volatility Squeeze + Curvature Decoupling',
-        code: 'GEN33_COMPRESSION_DECOUPLING',
-        generation: 33,
-        mathematicalFormula: 'f(x) = (Δ_BandCompression^1.4 / ATR_decay) + 0.62·Wick_Sweep - 0.30·StochasticSlit',
-        parents: ['Volatility Squeeze Compression', 'Fractal Dimension Slope', 'Institutional Wick Rejection'],
-        mutationRate: 0.046,
-        nonLinearOperator: 'harmonic_dispersion',
-        optimalHorizonMinutes: 20,
-        sessionAffinity: 'ALL',
-        verifiedAccuracy: 0,
-        sampleCount: 0,
-        accuracyStatus: 'UNVALIDATED',
-        status: 'EXPERIMENTING',
-        scientificHypothesis: 'Candidate hypothesis: a contraction in recent volatility may precede a larger directional move.',
-        whyHumansMissThis: 'Candidate design rationale: measure changes in recent candle ranges; the existence and size of any edge must be validated.',
-        createdAt: new Date(Date.now() - 3600000 * 1).toISOString(),
-      },
-    ];
-  }
 
   public saveStateSync() {
     this.ensureDataDir();
@@ -322,6 +266,55 @@ class DatabaseService {
     this.saveTimeout = setTimeout(() => {
       this.saveStateSync();
     }, 500);
+  }
+
+  /** Latest holdout end already inspected for one symbol. */
+  public getLatestResearchHoldoutEndMs(symbol: ForexSymbol): number | null {
+    const windows = this.state.researchHoldoutWindows || [];
+    const ends = windows
+      .filter(item => item.symbol === symbol && Number.isFinite(Date.parse(item.endUtc)))
+      .map(item => Date.parse(item.endUtc));
+    return ends.length ? Math.max(...ends) : null;
+  }
+
+  public getResearchHoldoutWindow(batchId: string) {
+    return (this.state.researchHoldoutWindows || []).find(item => item.batchId === batchId) || null;
+  }
+
+  /**
+   * Atomically reserve an untouched chronological test interval before the
+   * search starts. Even a failed/crashed batch consumes its test window.
+   */
+  public claimResearchHoldoutWindow(
+    symbol: ForexSymbol,
+    batchId: string,
+    startMs: number,
+    endMs: number
+  ): boolean {
+    if (!batchId || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+      throw new Error('A unique batch ID and valid chronological holdout window are required.');
+    }
+    if (!Array.isArray(this.state.researchHoldoutWindows)) {
+      this.state.researchHoldoutWindows = [];
+    }
+    const overlaps = doesResearchHoldoutOverlap(
+      this.state.researchHoldoutWindows,
+      symbol,
+      startMs,
+      endMs
+    );
+    if (overlaps) return false;
+    this.state.researchHoldoutWindows.push({
+      symbol,
+      batchId,
+      startUtc: new Date(startMs).toISOString(),
+      endUtc: new Date(endMs).toISOString(),
+      reservedAt: new Date().toISOString(),
+    });
+    // Do not prune this ledger: every previously inspected interval must remain unusable.
+    // A reservation must hit disk immediately, not after the normal debounce.
+    this.saveStateSync();
+    return true;
   }
 
   // Candle Storage
@@ -541,7 +534,10 @@ class DatabaseService {
   public getSessionAccuracyBreakdown(): MarketSessionInfo[] {
     const currentSession = getSessionFromTimestamp(new Date());
     const closedSignals = this.getSignals().filter(
-      s => s.lifecycleState === 'CLOSED' && ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
+      s => s.isNovelAiSynthesized === true &&
+        !!s.synthesizedGeneId &&
+        s.lifecycleState === 'CLOSED' &&
+        ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
     );
 
     const sessions: Array<{
@@ -569,7 +565,7 @@ class DatabaseService {
       const scoredTrades = wins + losses;
       const hasMeasuredData = scoredTrades > 0;
       const winRate = hasMeasuredData ? Number(((wins / scoredTrades) * 100).toFixed(1)) : 0;
-      const netPips = Number(sessSignals.reduce((acc, s) => acc + (s.netReturnPips || 0), 0).toFixed(1));
+      const netReturnUnits = Number(sessSignals.reduce((acc, signal) => acc + (signal.netReturnUnits ?? 0), 0).toFixed(3));
 
       const stratMap: Record<string, { wins: number; losses: number }> = {};
       for (const signal of sessSignals) {
@@ -604,7 +600,7 @@ class DatabaseService {
         wins,
         losses,
         scratches,
-        netPips,
+        netReturnUnits,
         bestStrategy,
       };
     });
@@ -638,36 +634,27 @@ class DatabaseService {
   }
 
   private hasHistoricalApprovalEvidence(gene: SynthesizedStrategyGene): boolean {
-    const metrics = gene.backtestMetrics;
-    return !!metrics &&
-      gene.accuracyStatus === 'BACKTESTED' &&
-      gene.sampleCount >= 300 &&
-      metrics.testScoredSampleSize >= 300 &&
-      metrics.trainScoredSampleSize >= 150 &&
-      metrics.validationScoredSampleSize >= 150 &&
-      metrics.testWinRate >= 0.70 &&
-      metrics.validationWinRate >= 0.70 &&
-      metrics.testBlockWinRates?.length === 3 &&
-      metrics.testBlockWinRates.every(rate => rate >= 0.70) &&
-      metrics.binaryPayoutPct >= 80 &&
-      metrics.expectedValueUnits > 0 &&
-      metrics.profitFactor >= 1.15 &&
-      metrics.confidenceInterval95[0] >= 0.60;
+    return hasSufficientHistoricalApprovalEvidence(
+      gene.backtestMetrics,
+      gene.accuracyStatus,
+      gene.sampleCount
+    );
   }
 
   private hasForwardApprovalEvidence(gene: SynthesizedStrategyGene): boolean {
     const metrics = gene.paperMetrics;
-    return !!metrics &&
-      metrics.trades >= 300 &&
-      metrics.scoredTrades >= 300 &&
-      metrics.winRate >= 0.70 &&
-      Array.isArray(metrics.rollingWinRates) &&
-      metrics.rollingWinRates.length === 3 &&
-      metrics.rollingWinRates.every(rate => rate >= 0.70) &&
-      metrics.minimumPayoutPct >= 80 &&
-      metrics.netReturnUnits > 0 &&
-      metrics.profitFactor >= 1.15 &&
-      metrics.confidenceInterval95[0] >= 0.60;
+    if (!metrics || metrics.trades < 300 || metrics.scoredTrades < 300 ||
+        metrics.minimumPayoutPct < 80 || metrics.netReturnUnits <= 0 ||
+        metrics.profitFactor < 1.15 ||
+        !Array.isArray(metrics.rollingWinRates) ||
+        metrics.rollingWinRates.length !== 3 ||
+        !Array.isArray(metrics.confidenceInterval95) ||
+        metrics.confidenceInterval95.length !== 2) return false;
+    const breakEven = 1 / (1 + metrics.minimumPayoutPct / 100);
+    return metrics.winRate > breakEven &&
+      metrics.rollingWinRates.every(rate => Number.isFinite(rate) && rate > breakEven) &&
+      Number.isFinite(metrics.confidenceInterval95[0]) &&
+      metrics.confidenceInterval95[0] > breakEven;
   }
 
   public getPromotedActiveStrategies(): SynthesizedStrategyGene[] {
@@ -708,7 +695,8 @@ class DatabaseService {
       netReturnUnits: 0, positiveReturnUnits: 0, negativeReturnUnits: 0,
       binaryTrades: 0, binaryWins: 0, binaryLosses: 0, binaryPushes: 0,
       minimumPayoutPct: 100,
-      scoredOutcomes: [], signalIds: [], updatedAt: new Date().toISOString(),
+      scoredOutcomes: [], signalIds: [], bayesAlpha: 1, bayesBeta: 1,
+      updatedAt: new Date().toISOString(),
     };
     existing.scoredOutcomes = Array.isArray(existing.scoredOutcomes)
       ? existing.scoredOutcomes.filter(outcome =>
@@ -726,6 +714,11 @@ class DatabaseService {
     existing.positiveReturnUnits = Number.isFinite(existing.positiveReturnUnits) ? existing.positiveReturnUnits! : 0;
     existing.negativeReturnUnits = Number.isFinite(existing.negativeReturnUnits) ? existing.negativeReturnUnits! : 0;
     existing.minimumPayoutPct = Number.isFinite(existing.minimumPayoutPct) ? existing.minimumPayoutPct! : 100;
+    // Migrate legacy decisive counts into a Beta posterior without discarding evidence.
+    existing.bayesAlpha = Number.isFinite(existing.bayesAlpha) && existing.bayesAlpha! > 0
+      ? existing.bayesAlpha! : 1 + existing.binaryWins;
+    existing.bayesBeta = Number.isFinite(existing.bayesBeta) && existing.bayesBeta! > 0
+      ? existing.bayesBeta! : 1 + existing.binaryLosses;
 
     // Only settled binary outcomes count. Legacy pip-only observations are not
     // eligible for the new payout-aware forward approval gate.
@@ -735,10 +728,41 @@ class DatabaseService {
       return { ...existing };
     }
 
-    // A duplicate lifecycle update must never inflate the trade sample.
-    if (existing.signalIds.includes(signal.id)) return { ...existing };
+    // A duplicate lifecycle update must never inflate any learning state.
+    if (!Array.isArray(this.state.processedOutcomeIds)) this.state.processedOutcomeIds = [];
+    if (this.state.processedOutcomeIds.includes(signal.id) || existing.signalIds.includes(signal.id)) {
+      return { ...existing };
+    }
+    this.state.processedOutcomeIds.push(signal.id);
+    if (this.state.processedOutcomeIds.length > 100_000) {
+      this.state.processedOutcomeIds = this.state.processedOutcomeIds.slice(-100_000);
+    }
     existing.signalIds.push(signal.id);
     if (existing.signalIds.length > 600) existing.signalIds = existing.signalIds.slice(-600);
+
+    // Capture the market state frozen at prediction time, but only after a real decisive
+    // binary settlement. The expiry timestamp is the first time the result is knowable.
+    if ((signal.outcomeResult === 'WIN' || signal.outcomeResult === 'LOSS') &&
+        Array.isArray(signal.marketFeatureVector) && signal.marketFeatureVector.length === 19 &&
+        signal.marketFeatureVector.every(Number.isFinite)) {
+      if (!Array.isArray(this.state.episodicMemory)) this.state.episodicMemory = [];
+      const closedAt = signal.plannedExitTimeUtc || signal.actualExitTimeUtc;
+      if (closedAt && Number.isFinite(Date.parse(closedAt))) {
+        this.state.episodicMemory.push({
+          signalId: signal.id,
+          symbol: signal.symbol,
+          direction: signal.direction,
+          ruleFamily: signal.ruleFamily,
+          featureVector: [...signal.marketFeatureVector],
+          outcome: signal.outcomeResult,
+          netReturnUnits: signal.netReturnUnits!,
+          closedAt,
+        });
+        if (this.state.episodicMemory.length > 20_000) {
+          this.state.episodicMemory = this.state.episodicMemory.slice(-20_000);
+        }
+      }
+    }
 
     const payoutPct = signal.payoutPct!;
     const netUnits = signal.netReturnUnits!;
@@ -747,11 +771,21 @@ class DatabaseService {
     existing.minimumPayoutPct = Math.min(existing.minimumPayoutPct, payoutPct);
     existing.netReturnUnits = Number((existing.netReturnUnits + netUnits).toFixed(4));
     if (signal.outcomeResult === 'WIN') {
+      const posterior = updateBetaPosterior(
+        { alpha: existing.bayesAlpha!, beta: existing.bayesBeta! }, 'WIN'
+      );
+      existing.bayesAlpha = posterior.alpha;
+      existing.bayesBeta = posterior.beta;
       existing.binaryWins += 1;
       existing.wins += 1;
       existing.positiveReturnUnits = Number((existing.positiveReturnUnits + Math.max(0, netUnits)).toFixed(4));
       existing.scoredOutcomes.push({ result: 'WIN', netReturnUnits: netUnits, payoutPct });
     } else if (signal.outcomeResult === 'LOSS') {
+      const posterior = updateBetaPosterior(
+        { alpha: existing.bayesAlpha!, beta: existing.bayesBeta! }, 'LOSS'
+      );
+      existing.bayesAlpha = posterior.alpha;
+      existing.bayesBeta = posterior.beta;
       existing.binaryLosses += 1;
       existing.losses += 1;
       existing.negativeReturnUnits = Number((existing.negativeReturnUnits + Math.abs(Math.min(0, netUnits))).toFixed(4));
@@ -834,6 +868,56 @@ class DatabaseService {
 
   public getStrategyPerformance(): StrategyPerformanceRecord[] {
     return Object.values(this.state.strategyPerformance || {}).sort((a, b) => b.trades - a.trades);
+  }
+
+  public getStrategyBayesianPosterior(strategyId: string): BetaPosterior & { mean: number; observations: number } {
+    const record = this.state.strategyPerformance?.[strategyId];
+    // Only explicit binary WIN/LOSS counters may seed this posterior.
+    // Legacy pip-era wins/losses are intentionally excluded.
+    const wins = record?.binaryWins ?? 0;
+    const losses = record?.binaryLosses ?? 0;
+    const alpha = Number.isFinite(record?.bayesAlpha) && (record?.bayesAlpha ?? 0) > 0
+      ? record!.bayesAlpha! : 1 + wins;
+    const beta = Number.isFinite(record?.bayesBeta) && (record?.bayesBeta ?? 0) > 0
+      ? record!.bayesBeta! : 1 + losses;
+    return { alpha, beta, mean: alpha / (alpha + beta), observations: wins + losses };
+  }
+
+  public getStrategyBayesianUcbScore(strategyId: string): number {
+    const posterior = this.getStrategyBayesianPosterior(strategyId);
+    const totalObserved = Object.values(this.state.strategyPerformance || {}).reduce(
+      (sum, item) => sum + (item.binaryWins ?? 0) + (item.binaryLosses ?? 0), 0
+    );
+    return bayesianUcbScore(posterior, totalObserved);
+  }
+
+  public assessEpisodicMemory(query: {
+    symbol: string;
+    direction: 'BUY' | 'SELL';
+    ruleFamily: string;
+    featureVector: number[];
+    predictionTimeUtc: string;
+  }): NeighborAssessment {
+    return assessNearestNeighbors(query, this.state.episodicMemory || []);
+  }
+
+  public getEpisodicMemoryCount(): number {
+    return (this.state.episodicMemory || []).length;
+  }
+
+  public updateMarketRegime(symbol: string, session: MarketRegimeSnapshot['session'], assessment: Omit<MarketRegimeSnapshot, 'symbol' | 'session' | 'assessedAt'>): void {
+    if (!this.state.marketRegimes) this.state.marketRegimes = {};
+    this.state.marketRegimes[symbol] = {
+      ...assessment,
+      symbol,
+      session,
+      assessedAt: new Date().toISOString(),
+    };
+    this.scheduleSave();
+  }
+
+  public getMarketRegimes(): MarketRegimeSnapshot[] {
+    return Object.values(this.state.marketRegimes || {}).sort((a, b) => a.symbol.localeCompare(b.symbol));
   }
 
   // Autonomous Forensic Loss Autopsies & Self-Learning

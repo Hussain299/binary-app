@@ -30,6 +30,92 @@ import {
 import { AutopilotLog, MarketSessionInfo, ResearchSignal, SynthesizedStrategyGene, LossAutopsy, FOREX_PAIRS, StrategyPerformanceRecord } from '../../types/index.js';
 import { AutopilotStream } from '../AutopilotStream.tsx';
 
+interface EvolutionTelemetry {
+  timestamp: string;
+  researchCoordinator: {
+    status: 'IDLE' | 'SCANNING' | 'WAITING_FOR_HISTORY' | 'WAITING_FOR_NEW_HISTORY' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+    symbol?: string;
+    batchId?: string;
+    startedAt?: string;
+    finishedAt?: string;
+    checkedAt?: string;
+    nextScanAt?: string;
+    completedCandidates: number;
+    totalCandidates: number;
+    historicalPasses: number;
+    rejected: number;
+    finalists: number;
+    message: string;
+    error?: string;
+    batchRunning: boolean;
+    scanIntervalMinutes: number;
+    marketPulseSeconds: number;
+    requiredNewM1Candles: number;
+    historyWindowLimit: number;
+  };
+  generations: Array<{
+    researchBatchId?: string;
+    status?: 'COMPLETED' | 'FAILED';
+    symbol?: string;
+    timestamp: string;
+    totalExperiments: number;
+    acceptedCount: number;
+    rejectedCount: number;
+    summary: string;
+    bestValidationExpectedValueUnits?: number;
+    holdoutPeriod?: { start: string; end: string };
+  }>;
+  learning: {
+    posterior: string;
+    selection: string;
+    decisiveUpdates: number;
+    strategyCount: number;
+  };
+  episodicMemory: {
+    storedTrades: number;
+    featureDimensions: number;
+    nearestNeighbors: number;
+    futureOutcomesExcluded: boolean;
+  };
+  regimes: Array<{
+    symbol: string;
+    session: string;
+    regime: string;
+    directionalEfficiency: number | null;
+    atrRatio: number | null;
+    observationCount: number;
+    reason: string;
+    assessedAt: string;
+  }>;
+  strategies: Array<{
+    strategyId: string;
+    alpha: number;
+    beta: number;
+    posteriorWinRate: number;
+    decisiveOutcomes: number;
+    bayesianUcbScore: number;
+    wins: number;
+    losses: number;
+    scratches: number;
+    netReturnUnits: number;
+    updatedAt: string;
+  }>;
+}
+
+interface StrategySearchProgress {
+  jobId: string;
+  symbol: string;
+  status: 'RUNNING' | 'COMPLETED' | 'FAILED';
+  total: number;
+  completed: number;
+  passedHistorical: number;
+  insufficientSample: number;
+  rejected: number;
+  replicationFinalists: number;
+  approvedCount: number;
+  error?: string;
+}
+
 interface SignalTerminalViewProps {
   signals: ResearchSignal[];
   autopilotLogs?: AutopilotLog[];
@@ -56,11 +142,13 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const [sessionData, setSessionData] = useState<MarketSessionInfo[]>([]);
   const [synthesizedStrategies, setSynthesizedStrategies] = useState<SynthesizedStrategyGene[]>([]);
   const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformanceRecord[]>([]);
+  const [evolutionTelemetry, setEvolutionTelemetry] = useState<EvolutionTelemetry | null>(null);
+  const [evolutionTelemetryError, setEvolutionTelemetryError] = useState<string>('');
   const [isEvolvingStrategy, setIsEvolvingStrategy] = useState<boolean>(false);
+  const [searchJob, setSearchJob] = useState<StrategySearchProgress | null>(null);
   const [historyImportPair, setHistoryImportPair] = useState<string>('EUR/USD');
   const [isImportingHistory, setIsImportingHistory] = useState<boolean>(false);
   const [historyImportMessage, setHistoryImportMessage] = useState<string>('');
-  const [validatingGeneId, setValidatingGeneId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState<number>(Date.now());
 
   // Real-time 1-second ticking timer for candle countdowns
@@ -107,6 +195,18 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     }
   };
 
+  const fetchEvolutionTelemetry = async () => {
+    try {
+      const res = await fetch('/api/evolution/state');
+      if (!res.ok) throw new Error('Evolution telemetry endpoint returned ' + res.status);
+      const data = await res.json();
+      setEvolutionTelemetry(data);
+      setEvolutionTelemetryError('');
+    } catch (e: any) {
+      setEvolutionTelemetryError(e?.message || 'Could not load persisted learning state.');
+    }
+  };
+
   const getForwardPerformance = (strategyId?: string) =>
     strategyPerformance.find(item => item.strategyId === (strategyId || '')) || null;
 
@@ -114,24 +214,73 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     fetchSessions();
     fetchSynthesizedStrategies();
     fetchStrategyPerformance();
+    fetchEvolutionTelemetry();
   }, [signals]);
 
   const handleEvolveStrategy = async () => {
     setIsEvolvingStrategy(true);
+    setHistoryImportMessage('');
     try {
-      const res = await fetch('/api/strategies/evolve', { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        await fetchSynthesizedStrategies();
-        await fetchStrategyPerformance();
-        onEvaluateSignals();
-      }
-    } catch (err) {
-      console.error('Failed to evolve novel strategy:', err);
-    } finally {
+      const res = await fetch('/api/strategies/search-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: historyImportPair }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Evolution search could not start.');
+      setSearchJob(data);
+      setHistoryImportMessage(
+        `Evolution started for ${data.symbol}: 300 symbolic candidates will be measured on chronological train/validation data; only preselected finalists reach the untouched test.`
+      );
+    } catch (error: any) {
+      setHistoryImportMessage(error?.message || 'Evolution search could not start.');
       setIsEvolvingStrategy(false);
     }
   };
+
+  useEffect(() => {
+    if (!searchJob?.jobId || searchJob.status !== 'RUNNING') return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/strategies/search-batch/${encodeURIComponent(searchJob.jobId)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Could not read evolution progress.');
+        if (cancelled) return;
+        setSearchJob(data);
+        if (data.status === 'RUNNING') {
+          setHistoryImportMessage(
+            `Evolution ${data.symbol}: ${data.completed}/${data.total} candidates evaluated · ${data.passedHistorical} passed the historical gates · ${data.replicationFinalists} finalists opened for untouched testing.`
+          );
+          timer = setTimeout(poll, 1500);
+          return;
+        }
+        setIsEvolvingStrategy(false);
+        if (data.status === 'COMPLETED') {
+          setHistoryImportMessage(
+            `Completed ${data.total} candidates for ${data.symbol}. Historical survivors: ${data.passedHistorical}; finalists tested on the untouched holdout: ${data.replicationFinalists}. Forward approval still requires independent paper outcomes.`
+          );
+          await fetchSynthesizedStrategies();
+          await fetchStrategyPerformance();
+          await fetchEvolutionTelemetry();
+        } else {
+          setHistoryImportMessage(data.error || 'Evolution search failed. No accuracy was assigned to unvalidated candidates.');
+        }
+      } catch (error: any) {
+        if (cancelled) return;
+        setIsEvolvingStrategy(false);
+        setHistoryImportMessage(error?.message || 'Evolution progress could not be read.');
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [searchJob?.jobId, searchJob?.status]);
 
   const parseCsvLine = (line: string): string[] => {
     const cells: string[] = [];
@@ -217,42 +366,61 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     }
   };
 
-  const handleValidateGene = async (geneId: string, symbol?: string) => {
-    setValidatingGeneId(geneId);
-    setHistoryImportMessage('');
-    try {
-      const res = await fetch('/api/strategies/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ geneId, symbol: symbol || historyImportPair }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Strategy validation failed.');
-      await fetchSynthesizedStrategies();
-      setHistoryImportMessage(
-        `${data.gene.name}: untouched-test win rate ${data.gene.verifiedAccuracy}% from ${data.gene.sampleCount} trades. Status: ${data.gene.status}.`
-      );
-    } catch (error: any) {
-      setHistoryImportMessage(error.message || 'Strategy validation failed.');
-    } finally {
-      setValidatingGeneId(null);
-    }
-  };
-
   const validatedGenes = synthesizedStrategies.filter(
     gene => gene.accuracyStatus === 'BACKTESTED' && !!gene.backtestMetrics
   );
   const validatedGeneCount = validatedGenes.length;
   const paperTradingGeneCount = synthesizedStrategies.filter(gene => gene.status === 'PAPER_TRADING').length;
 
-  // 5-Minute Candle Synchronization
-  const FIVE_MIN_MS = 5 * 60 * 1000;
-  const current5mOpenMs = Math.floor(nowMs / FIVE_MIN_MS) * FIVE_MIN_MS;
-  const next5mOpenMs = current5mOpenMs + FIVE_MIN_MS;
-  const secondsToNext5m = Math.max(0, Math.floor((next5mOpenMs - nowMs) / 1000));
-  const next5mMin = Math.floor(secondsToNext5m / 60);
-  const next5mSec = secondsToNext5m % 60;
-  const next5mCountdownStr = `${next5mMin.toString().padStart(2, '0')}:${next5mSec.toString().padStart(2, '0')}`;
+  // The terminal surfaces the next exact T-3m decision window for every supported start candle.
+  const START_TIMEFRAMES = [5, 10, 15, 20, 25, 30] as const;
+  const nextDecisionSchedules = START_TIMEFRAMES.map(timeframeMinutes => {
+    const intervalMs = timeframeMinutes * 60_000;
+    let entryTimeMs = (Math.floor(nowMs / intervalMs) + 1) * intervalMs;
+    let decisionTimeMs = entryTimeMs - 3 * 60_000;
+    while (decisionTimeMs + 25_000 <= nowMs) {
+      entryTimeMs += intervalMs;
+      decisionTimeMs += intervalMs;
+    }
+    return {
+      timeframeMinutes,
+      entryTimeMs,
+      decisionTimeMs,
+      windowActive: nowMs >= decisionTimeMs && nowMs < decisionTimeMs + 25_000,
+    };
+  });
+  const activeDecisionTime = nextDecisionSchedules
+    .filter(item => item.windowActive)
+    .map(item => item.decisionTimeMs)
+    .sort((a, b) => a - b)[0];
+  const nextDecisionTimeMs = activeDecisionTime ?? Math.min(...nextDecisionSchedules.map(item => item.decisionTimeMs));
+  const nextDecisionGroup = nextDecisionSchedules.filter(item => item.decisionTimeMs === nextDecisionTimeMs);
+  const nextDecisionActive = nextDecisionGroup.some(item => item.windowActive);
+  const nextEntryMs = nextDecisionGroup[0]?.entryTimeMs ?? nowMs;
+  const nextEntryIST = new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  }).format(new Date(nextEntryMs)).toUpperCase() + ' IST';
+  const formatCountdown = (milliseconds: number) => {
+    const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+    return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
+  };
+  const nextDecisionCountdown = nextDecisionActive
+    ? formatCountdown(nextDecisionTimeMs + 25_000 - nowMs)
+    : formatCountdown(nextDecisionTimeMs - nowMs);
+  const nextEntryCountdown = formatCountdown(nextEntryMs - nowMs);
+  const nextDecisionTimeframes = nextDecisionGroup.map(item => `${item.timeframeMinutes}M`).join(' / ');
+
+  const getEntryCountdown = (entryTimeUtc?: string | null) => {
+    if (!entryTimeUtc) return 'Entry time unavailable';
+    const diffMs = Date.parse(entryTimeUtc) - nowMs;
+    if (!Number.isFinite(diffMs)) return 'Entry time unavailable';
+    if (diffMs <= 0) return 'Entry boundary passed';
+    return `Opens in ${formatCountdown(diffMs)}`;
+  };
 
   const formatIST = (isoString?: string | null) => {
     if (!isoString) return 'At Candle Open';
@@ -272,21 +440,21 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     }
   };
 
-  const next5mOpenIST = new Intl.DateTimeFormat('en-IN', {
-    timeZone: 'Asia/Kolkata',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: true,
-  }).format(new Date(next5mOpenMs)).toUpperCase() + ' IST';
-
   // Overall Accuracy & Metrics
   const historySignals = signals.filter(s =>
     ['CLOSED', 'EXPIRED', 'INVALIDATED'].includes(s.lifecycleState)
   );
   const completedSignals = signals.filter(
-    s => s.lifecycleState === 'CLOSED' && ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
+    s => s.isNovelAiSynthesized === true &&
+      !!s.synthesizedGeneId &&
+      s.lifecycleState === 'CLOSED' &&
+      ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
   );
+  const archivedRuleBasedOutcomes = signals.filter(
+    s => !s.isNovelAiSynthesized &&
+      s.lifecycleState === 'CLOSED' &&
+      ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
+  ).length;
   const closedSignals = completedSignals.filter(s => ['WIN', 'LOSS'].includes(s.outcomeResult));
   const totalWins = closedSignals.filter(s => s.outcomeResult === 'WIN').length;
   const totalLosses = closedSignals.filter(s => s.outcomeResult === 'LOSS').length;
@@ -294,8 +462,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     closedSignals.length > 0
       ? ((totalWins / closedSignals.length) * 100).toFixed(1)
       : 'No scored forward outcomes';
-  const totalNetPips = Number(
-    completedSignals.reduce((acc, s) => acc + (s.netReturnPips || 0), 0).toFixed(1)
+  const totalNetReturnUnits = Number(
+    completedSignals.reduce((acc, signal) => acc + (signal.netReturnUnits ?? 0), 0).toFixed(3)
   );
 
   const activeSignals = signals.filter(s =>
@@ -345,37 +513,35 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-neutral-950 font-sans text-neutral-100">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-transparent font-sans text-neutral-100">
       {/* 1. TOP STATUS BAR: Zero clutter, essential numbers at a glance */}
-      <div className="bg-neutral-900/90 border-b border-neutral-800 px-3 sm:px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
-        {/* Live 5M Candle Clock */}
+      <div className="bg-[#0f1722] border-b border-white/[0.07] px-3 sm:px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
+        {/* Shared T-3m entry schedule for all supported start candles */}
         <div className="flex items-center gap-2.5">
-          <span className="relative flex h-3 w-3">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500" />
+          <span className={`relative flex h-3 w-3 ${nextDecisionActive ? '' : 'opacity-50'}`}>
+            <span className={`absolute inline-flex h-full w-full rounded-full ${nextDecisionActive ? 'animate-ping bg-amber-400 opacity-75' : 'bg-emerald-400 opacity-30'}`} />
+            <span className={`relative inline-flex rounded-full h-3 w-3 ${nextDecisionActive ? 'bg-amber-400' : 'bg-emerald-500'}`} />
           </span>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs sm:text-sm font-bold text-white uppercase tracking-wide">
-              Next 5M Trade Open In:
+              {nextDecisionActive ? 'T−3m Decision Window:' : 'Next T−3m Decision:'}
             </span>
             <span className="text-sm sm:text-base font-extrabold font-mono text-emerald-400 tabular-nums">
-              {next5mCountdownStr}
+              {nextDecisionActive ? `closes in ${nextDecisionCountdown}` : `opens in ${nextDecisionCountdown}`}
             </span>
             <span className="text-[11px] text-neutral-400 font-mono hidden xs:inline">
-              ({next5mOpenIST})
+              {nextDecisionTimeframes} → {nextEntryIST}
             </span>
             <span
               className={`px-2 py-0.5 rounded-full text-[10px] font-bold font-mono border flex items-center gap-1 ${
-                secondsToNext5m <= 180
+                nextDecisionActive
                   ? 'bg-amber-950/80 border-amber-500/80 text-amber-300 animate-pulse'
                   : 'bg-neutral-900 border-neutral-800 text-neutral-400'
               }`}
-              title="Only generate signals strictly 3 minutes in advance of 5M candle open"
+              title="Signals are accepted only from a closed M1 candle exactly three minutes before an aligned 5–30 minute entry candle."
             >
               <Clock className="w-3 h-3 text-amber-400" />
-              {secondsToNext5m <= 180
-                ? '⚡ Strict 3M Window Active'
-                : `3M Window in ${Math.floor((secondsToNext5m - 180) / 60)}m ${((secondsToNext5m - 180) % 60).toString().padStart(2, '0')}s`}
+              {nextDecisionActive ? 'T−3m WINDOW ACTIVE' : '5–30M START CANDLES'}
             </span>
           </div>
         </div>
@@ -404,42 +570,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
         </div>
       </div>
 
-      {/* SESSION ACCURACY STRIP (ASIA · LONDON · OVERLAP · NEW YORK) */}
-      <div className="bg-neutral-900/60 border-b border-neutral-800/80 px-3 sm:px-5 py-1.5 flex items-center justify-between gap-2 overflow-x-auto text-[11px] font-mono scrollbar-none shrink-0">
-        <div className="flex items-center gap-2 text-neutral-400 shrink-0">
-          <Globe className="w-3.5 h-3.5 text-cyan-400" />
-          <span className="font-bold text-neutral-300 uppercase text-[10px] tracking-wider">Forward Session Outcomes:</span>
-        </div>
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          {sessionData.length === 0 ? (
-            <span className="text-neutral-500">No completed forward session outcomes yet</span>
-          ) : sessionData.map(s => (
-            <button
-              key={s.id}
-              onClick={() => setShowSessionsModal(true)}
-              className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md border transition-all ${
-                s.isActive
-                  ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300 font-bold shadow-xs'
-                  : 'bg-neutral-950/70 border-neutral-800/80 text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              {s.isActive && (
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                </span>
-              )}
-              <span>{s.shortName}:</span>
-              <strong className={s.isActive ? 'text-emerald-400' : 'text-neutral-200'}>{s.hasMeasuredData ? `${s.winRate}%` : '—'}</strong>
-              <span className="text-[9px] text-neutral-500">n={s.totalTrades}</span>
-              {s.isActive && <span className="text-[9px] uppercase px-1 rounded bg-emerald-500/20 text-emerald-400">Live</span>}
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* 2. SECONDARY CONTROLS & INFO BUTTONS */}
-      <div className="bg-neutral-950 px-3 sm:px-5 py-2 border-b border-neutral-800/70 flex flex-wrap items-center justify-between gap-2 shrink-0">
+      <div className="bg-[#0b1018] px-3 sm:px-5 py-2 border-b border-white/[0.07] flex flex-wrap items-center justify-between gap-2 shrink-0">
         {/* Filters: Active | All | History */}
         <div className="flex items-center gap-1 bg-neutral-900 p-1 rounded-lg border border-neutral-800 text-xs font-medium">
           <button
@@ -451,7 +583,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             }`}
           >
             <Zap className="w-3 h-3" />
-            <span>Active Signals ({activeSignals.length})</span>
+            <span>Active ({activeSignals.length})</span>
           </button>
 
           <button
@@ -516,27 +648,20 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           </button>
 
           <button
-            onClick={() => setShowLearningModal(true)}
+            onClick={() => { setShowLearningModal(true); fetchEvolutionTelemetry(); }}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs text-neutral-300 font-medium transition-colors"
           >
             <Brain className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="hidden sm:inline">What AI Learns</span>
-            <span className="sm:hidden">AI Brain</span>
+            <span className="hidden sm:inline">Evolution State</span>
+            <span className="sm:hidden">Learning</span>
           </button>
 
-          <button
-            onClick={() => setShowStrategiesModal(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs text-neutral-300 font-medium transition-colors"
-          >
-            <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden sm:inline">Strategies</span>
-            <span className="sm:hidden">Strategies</span>
-          </button>
+
         </div>
       </div>
 
       {/* 3. MAIN SIGNALS FEED: BOLD, UNCLUTTERED, DIRECT TRADING TICKETS */}
-      <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-5 space-y-3">
         {/* HISTORY SUMMARY BANNER (Shown when viewing History tab) */}
         {filterState === 'CLOSED' && historySignals.length > 0 && (
           <div className="bg-neutral-900/90 border border-neutral-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
@@ -556,8 +681,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
             <div className="flex items-center gap-4 text-xs font-mono">
               <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
-                <span className="text-[10px] text-neutral-400 block uppercase">Total Trades</span>
-                <span className="font-bold text-white text-sm">{historySignals.length}</span>
+                <span className="text-[10px] text-neutral-400 block uppercase">Settled Contracts</span>
+                <span className="font-bold text-white text-sm">{completedSignals.length}</span>
               </div>
               <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-emerald-900/50">
                 <span className="text-[10px] text-emerald-400 block uppercase">Wins</span>
@@ -569,8 +694,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               </div>
               <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
                 <span className="text-[10px] text-neutral-400 block uppercase">Net Return</span>
-                <span className={`font-bold text-sm ${totalNetPips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {totalNetPips > 0 ? '+' : ''}{totalNetPips} Pips
+                <span className={`font-bold text-sm ${totalNetReturnUnits >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {totalNetReturnUnits > 0 ? '+' : ''}{totalNetReturnUnits.toFixed(3)} Stake Units
                 </span>
               </div>
             </div>
@@ -583,12 +708,12 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <h3 className="text-lg font-bold text-white">
               {filterState === 'CLOSED'
                 ? 'No Closed Trades in History Yet'
-                : 'Bot Is Scanning for the Next 5-Minute Setup'}
+                : 'Waiting for the next valid 5–30 minute entry window'}
             </h3>
             <p className="mt-2 text-xs sm:text-sm text-neutral-400 max-w-md leading-relaxed">
               {filterState === 'CLOSED'
-                ? 'When active 5-minute trades reach their expiry, their full trade execution, entry fill, exit fill, and win/loss pips will appear here.'
-                : 'Every trade strictly opens at the 5-minute candle opening (:00, :05, :10, :15, :20, :25, :30, :35, :40, :45, :50, :55) with dynamic expiry duration.'}
+                ? 'When paper contracts reach their scheduled expiry, the observed result and payout-adjusted stake return will appear here.'
+                : 'Every signal is decided from a fully closed M1 candle exactly three minutes before its selected 5–30 minute entry candle opens. The starting candle and expiry horizon must match.'}
             </p>
             <button
               onClick={() => setFilterState(filterState === 'CLOSED' ? 'ACTIVE' : 'ALL')}
@@ -598,7 +723,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-3">
             {filteredSignals.map(sig => {
               const isBuy = sig.direction === 'BUY';
               const isWaiting = sig.lifecycleState === 'WAITING_FOR_ENTRY';
@@ -611,7 +736,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 <div
                   key={sig.id}
                   onClick={() => setSelectedSignal(sig)}
-                  className={`border-2 rounded-2xl p-4 sm:p-5 flex flex-col justify-between transition-all cursor-pointer shadow-lg relative ${
+                  className={`border rounded-xl p-3.5 sm:p-4 flex flex-col justify-between transition-colors cursor-pointer relative ${
                     isActive
                       ? 'bg-neutral-900/95 border-emerald-500 shadow-emerald-950/40 ring-1 ring-emerald-500/40'
                       : isWaiting
@@ -624,7 +749,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-white">
+                          <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white">
                             {sig.symbol}
                           </span>
                           <span className="px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/40 text-[10px] font-bold text-amber-300">
@@ -678,12 +803,12 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                               🔔 3-MIN ADVANCE NOTICE
                             </span>
                             <span className="text-[10px] text-amber-400/90 font-mono">
-                              Entry at 5M Candle Open ({sig.candleOpenTimeIst || next5mOpenIST})
+                              Entry at {sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M Candle Open ({sig.candleOpenTimeIst || formatIST(sig.candleOpenTimeUtc)})
                             </span>
                           </div>
                         </div>
                         <span className="font-mono text-xs font-black text-white bg-amber-900/80 px-2 py-1 rounded border border-amber-600 shrink-0 ml-2">
-                          Opens in {next5mCountdownStr}
+                          {getEntryCountdown(sig.candleOpenTimeUtc)}
                         </span>
                       </div>
                     )}
@@ -740,7 +865,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                             )}
                           </div>
                           <span className="font-mono text-sm font-black px-2 py-0.5 rounded bg-neutral-950 border border-neutral-800">
-                            {sig.netReturnPips !== null ? `${sig.netReturnPips > 0 ? '+' : ''}${sig.netReturnPips} Pips` : (sig.outcomeResult || 'CLOSED')}
+                            {typeof sig.netReturnUnits === 'number' ? `${sig.netReturnUnits > 0 ? '+' : ''}${sig.netReturnUnits.toFixed(3)} Stake Units` : typeof sig.netReturnPips === 'number' ? `${sig.netReturnPips > 0 ? '+' : ''}${sig.netReturnPips} Legacy Pips` : (sig.outcomeResult || 'CLOSED')}
                           </span>
                         </div>
 
@@ -759,7 +884,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                                 Loss Diagnostics
                               </span>
                               <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-900/40 text-rose-300 font-mono">
-                                {sig.lossAutopsy ? sig.lossAutopsy.rootCause.replace(/_/g, ' ') : 'Self-Evolved Antidote'}
+                                {sig.lossAutopsy ? sig.lossAutopsy.rootCause.replace(/_/g, ' ') : 'LOSS OBSERVATION'}
                               </span>
                             </div>
                             {sig.lossAutopsy && (
@@ -767,8 +892,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                                 <div className="text-neutral-300">
                                   <strong className="text-amber-400">Lesson:</strong> {sig.lossAutopsy.lessonsLearned[0]}
                                 </div>
-                                <div className="text-cyan-300 truncate">
-                                  <strong className="text-neutral-400">Unvalidated Filter Candidate:</strong> {sig.lossAutopsy.antidoteStrategyName}
+                                <div className="text-neutral-400">
+                                  No cause or replacement strategy was inferred from this single loss.
                                 </div>
                               </div>
                             )}
@@ -783,12 +908,12 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       <div className="bg-neutral-950 p-2.5 rounded-xl border border-neutral-800 flex flex-col justify-between">
                         <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          ENTRY (5M OPEN)
+                          ENTRY ({sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M OPEN)
                         </span>
                         <div className="text-sm sm:text-base font-extrabold text-white mt-1 tabular-nums">
                           {sig.candleOpenTimeIst || formatIST(sig.actualEntryTimeUtc || sig.entryWindowStartUtc)}
                         </div>
-                        <span className="text-[10px] text-neutral-400 mt-0.5">Strict 5M Open</span>
+                        <span className="text-[10px] text-neutral-400 mt-0.5">Strict {sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M Open</span>
                       </div>
 
                       {/* EXIT / EXPIRY BOX */}
@@ -804,7 +929,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       </div>
                     </div>
 
-                    {/* ROW 4: STRATEGY & WIN RATE BANNER */}
+                    {/* ROW 4: EVOLVED GENOME & EVIDENCE */}
                     <div className="bg-neutral-950/80 p-2.5 rounded-xl border border-neutral-800/80 space-y-1.5 text-xs">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5 truncate">
@@ -814,43 +939,44 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                             <Lightbulb className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                           )}
                           <span className="text-neutral-200 font-semibold truncate text-[11px]">
-                            {sig.strategyName || '5-Min Momentum Breakout'}
+                            {sig.strategyName || 'Unclassified historical signal'}
                           </span>
                         </div>
                         <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800/80 font-mono text-[11px] font-bold shrink-0">
-                          {sig.paperOnly ? 'PAPER ONLY · NOT APPROVED' : (sig.strategyEvidenceStatus === 'BACKTESTED' && typeof sig.strategyWinRate === 'number' ? `${sig.strategyWinRate.toFixed(1)}% Historical test WR · n=${sig.strategyHistoricalSampleSize || 0}` : 'Historical result not validated')}
+                          {sig.paperOnly ? (sig.strategyForwardApproved ? 'FORWARD GATE PASSED · PAPER ONLY' : 'PAPER ONLY · NOT APPROVED') : (sig.strategyEvidenceStatus === 'BACKTESTED' && typeof sig.strategyWinRate === 'number' ? `${sig.strategyWinRate.toFixed(1)}% Historical test WR · n=${sig.strategyHistoricalSampleSize || 0}` : 'Historical result not validated')}
                         </span>
                       </div>
 
-                      {(() => {
-                        const forward = getForwardPerformance(sig.strategyId);
-                        const scoredTrades = forward ? forward.wins + forward.losses : 0;
-                        return (
-                          <div className="text-[10px] font-mono text-neutral-400 pt-1">
-                            Forward paper results: {forward && forward.trades > 0
-                              ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored outcomes` : 'No scored outcomes'} · ${forward.scratches} scratches · ${forward.netPips > 0 ? '+' : ''}${forward.netPips.toFixed(1)} modeled net pips`
-                              : 'No completed forward outcomes yet'}
-                          </div>
-                        );
-                      })()}
-
-                      {sig.mathematicalFormula && (
-                        <div className="mt-1 p-2 rounded-lg bg-cyan-950/40 border border-cyan-800/70 font-mono text-[10px] text-cyan-200 flex items-center justify-between gap-1 overflow-x-auto scrollbar-none">
-                          <span className="text-cyan-400 font-bold shrink-0">Equation:</span>
-                          <span className="truncate">{sig.mathematicalFormula}</span>
-                          <span className="text-[9px] px-1 py-0.2 bg-cyan-500/20 text-cyan-300 rounded shrink-0 font-bold">Formula</span>
+                      <details className="mt-1 border-t border-neutral-800/70 pt-2">
+                        <summary className="cursor-pointer list-none text-[10px] font-medium text-neutral-500 hover:text-neutral-300">
+                          Technical evidence · formula · lineage
+                        </summary>
+                        <div className="mt-2 space-y-2">
+                          {(() => {
+                            const forward = getForwardPerformance(sig.strategyId);
+                            const scoredTrades = forward ? forward.wins + forward.losses : 0;
+                            return (
+                              <div className="text-[10px] font-mono text-neutral-400">
+                                Forward paper: {forward && forward.trades > 0
+                                  ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% · n=${scoredTrades}` : 'No scored outcomes'} · ${forward.scratches} scratches · ${(forward.netReturnUnits ?? 0) > 0 ? '+' : ''}${(forward.netReturnUnits ?? 0).toFixed(3)} stake units`
+                                  : 'No completed outcomes yet'}
+                              </div>
+                            );
+                          })()}
+                          {sig.mathematicalFormula && (
+                            <div className="rounded-lg border border-cyan-900/60 bg-cyan-950/20 p-2 font-mono text-[10px] text-cyan-200 break-all">
+                              {sig.mathematicalFormula}
+                            </div>
+                          )}
+                          {sig.confluenceStrategies && sig.confluenceStrategies.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {sig.confluenceStrategies.map((item, i) => (
+                                <span key={i} className="rounded bg-neutral-900 px-2 py-1 text-[9px] text-neutral-400">{item}</span>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      )}
-
-                      {sig.confluenceStrategies && sig.confluenceStrategies.length > 0 && (
-                        <div className="flex flex-wrap gap-1 pt-1 border-t border-neutral-800/60">
-                          {sig.confluenceStrategies.map((c, i) => (
-                            <span key={i} className="px-1.5 py-0.5 rounded bg-neutral-900 border border-neutral-800 text-[9px] text-neutral-300 font-mono flex items-center gap-1">
-                              <span className="text-emerald-400">✓</span> {c}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                      </details>
                     </div>
                   </div>
 
@@ -880,7 +1006,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           >
             <div className="flex items-center gap-2">
               <Activity className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Live AI Brain Background Activity ({autopilotLogs.length} events)</span>
+              <span>Research Engine Activity ({autopilotLogs.length} events)</span>
             </div>
             {showLogsAccordion ? (
               <ChevronUp className="w-4 h-4 text-neutral-500" />
@@ -903,7 +1029,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <div className="flex justify-between items-center pb-3 border-b border-neutral-800">
               <div className="flex items-center gap-2">
                 <Brain className="w-6 h-6 text-emerald-400" />
-                <h3 className="text-lg font-bold text-white">What The AI Is Learning</h3>
+                <h3 className="text-lg font-bold text-white">Evolution & Learning State</h3>
               </div>
               <button
                 onClick={() => setShowLearningModal(false)}
@@ -917,10 +1043,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-purple-800/80 space-y-2">
                 <span className="font-bold text-purple-400 block text-sm flex items-center gap-1.5">
                   <Layers className="w-4 h-4" />
-                  1. Signal Confluence (Strength Score, Not Win Probability)
+                  1. Symbolic Genome Activation (Strength Score, Not Win Probability)
                 </span>
                 <p>
-                  The current rule-based signal engine combines technical confluences such as trend direction, wick geometry, RSI and range expansion. A larger confluence count is only a signal-strength heuristic; it does not establish a win rate. Performance is calculated separately from uploaded historical tests and completed forward paper outcomes.
+                  The current candidate engine evaluates each stored symbolic genome against causal, normalized market features. Its activation score controls whether a candidate fires; it is not a calibrated probability of winning. Performance is calculated separately from untouched historical tests and evolved-genome forward paper outcomes.
                 </p>
               </div>
 
@@ -937,20 +1063,148 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-emerald-800/80 space-y-2">
                 <span className="font-bold text-emerald-400 block text-sm flex items-center gap-1.5">
                   <Brain className="w-4 h-4" />
-                  3. Every Closed Trade Is Forward Paper Evidence
+                  3. Every Closed Evolved-Genome Trade Is Forward Paper Evidence
                 </span>
                 <p>
-                  When a trade finishes, its observed result is stored in a per-strategy forward outcome ledger and tagged as a single live-trade record. One trade does not update historical accuracy or qualify a strategy for promotion; performance is reported with its accumulated sample count.
+                  Each decisive WIN or LOSS updates that strategy's persisted Beta posterior exactly once. SCRATCH results do not change the win/loss posterior. The prediction-time 19-feature vector is stored with its settled outcome in a separate episodic memory bank; later signals compare the ten closest earlier trades and are vetoed only when a sufficiently similar neighborhood has non-positive payout-adjusted return.
                 </p>
               </div>
+
+              <div className="bg-neutral-950 p-3.5 rounded-xl border border-emerald-800/80 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-bold text-emerald-300 block text-sm flex items-center gap-1.5">
+                    <Brain className="w-4 h-4" />
+                    Persisted learning state
+                  </span>
+                  <span className="text-[10px] text-neutral-500">
+                    {evolutionTelemetry ? new Date(evolutionTelemetry.timestamp).toLocaleTimeString() : 'Not loaded'}
+                  </span>
+                </div>
+                {evolutionTelemetry ? (
+                  <>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      <div className="bg-neutral-900 rounded-lg p-2">
+                        <div className="text-[10px] text-neutral-500">Decisive outcomes</div>
+                        <div className="text-lg font-bold text-white font-mono">{evolutionTelemetry.learning.decisiveUpdates.toLocaleString()}</div>
+                      </div>
+                      <div className="bg-neutral-900 rounded-lg p-2">
+                        <div className="text-[10px] text-neutral-500">Episodic memories</div>
+                        <div className="text-lg font-bold text-white font-mono">{evolutionTelemetry.episodicMemory.storedTrades.toLocaleString()}</div>
+                      </div>
+                      <div className="bg-neutral-900 rounded-lg p-2">
+                        <div className="text-[10px] text-neutral-500">Tracked strategies</div>
+                        <div className="text-lg font-bold text-white font-mono">{evolutionTelemetry.learning.strategyCount.toLocaleString()}</div>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-neutral-400">
+                      {evolutionTelemetry.learning.posterior} posterior · {evolutionTelemetry.learning.selection} selection.
+                      Memory uses {evolutionTelemetry.episodicMemory.featureDimensions} normalized features and checks the {evolutionTelemetry.episodicMemory.nearestNeighbors} closest earlier trades.
+                    </p>
+                    {evolutionTelemetry.strategies.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="text-[10px] uppercase tracking-wider text-neutral-500">Highest current selection scores</div>
+                        {[...evolutionTelemetry.strategies]
+                          .sort((a, b) => b.bayesianUcbScore - a.bayesianUcbScore)
+                          .slice(0, 5)
+                          .map(item => (
+                            <div key={item.strategyId} className="flex items-center justify-between gap-3 text-[11px] border-t border-neutral-800 pt-1.5">
+                              <span className="text-neutral-300 truncate">{item.strategyId}</span>
+                              <span className="text-right font-mono text-neutral-400 shrink-0">
+                                Beta({item.alpha.toFixed(1)}, {item.beta.toFixed(1)}) · n={item.decisiveOutcomes}
+                              </span>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                    {evolutionTelemetry.regimes.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="text-[10px] uppercase tracking-wider text-neutral-500">Last measured market regimes</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {evolutionTelemetry.regimes.slice(0, 8).map(item => (
+                            <div key={item.symbol} className="bg-neutral-900 rounded-lg px-2 py-1.5 text-[11px]">
+                              <div className="flex justify-between gap-2">
+                                <span className="text-neutral-300">{item.symbol}</span>
+                                <span className="text-cyan-300 font-mono">{item.regime}</span>
+                              </div>
+                              <div className="text-[10px] text-neutral-500">
+                                {item.session} · ER {item.directionalEfficiency?.toFixed(2) ?? 'n/a'} · ATR× {item.atrRatio?.toFixed(2) ?? 'n/a'}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-neutral-400">
+                    {evolutionTelemetryError || 'No persisted learning telemetry has been returned yet.'}
+                  </p>
+                )}
+              </div>
+
+              {evolutionTelemetry && (
+                <div className="bg-neutral-950 p-3.5 rounded-xl border border-cyan-800/80 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-bold text-cyan-300 text-sm flex items-center gap-1.5">
+                      <Dna className="w-4 h-4" />
+                      Autonomous evolutionary research
+                    </span>
+                    <span className="text-[10px] text-neutral-400 font-mono">
+                      {evolutionTelemetry.researchCoordinator.status}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-neutral-300">
+                    {evolutionTelemetry.researchCoordinator.message}
+                  </p>
+                  {evolutionTelemetry.researchCoordinator.batchRunning && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] text-neutral-400 font-mono">
+                        <span>{evolutionTelemetry.researchCoordinator.symbol || 'Research batch'}</span>
+                        <span>
+                          {evolutionTelemetry.researchCoordinator.completedCandidates}/
+                          {evolutionTelemetry.researchCoordinator.totalCandidates}
+                        </span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-neutral-800 overflow-hidden">
+                        <div
+                          className="h-full bg-cyan-400 transition-all"
+                          style={{
+                            width: `${Math.min(100, 100 * evolutionTelemetry.researchCoordinator.completedCandidates / Math.max(1, evolutionTelemetry.researchCoordinator.totalCandidates))}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-[10px] font-mono text-neutral-400">
+                        <span>Historical pass: {evolutionTelemetry.researchCoordinator.historicalPasses}</span>
+                        <span>Rejected: {evolutionTelemetry.researchCoordinator.rejected}</span>
+                        <span>Holdout finalists: {evolutionTelemetry.researchCoordinator.finalists}</span>
+                      </div>
+                    </div>
+                  )}
+                  <p className="text-[10px] text-neutral-500">
+                    Market signals are polled every {evolutionTelemetry.researchCoordinator.marketPulseSeconds}s. Heavy candidate research is isolated to a {evolutionTelemetry.researchCoordinator.scanIntervalMinutes}-minute schedule and requires {evolutionTelemetry.researchCoordinator.requiredNewM1Candles.toLocaleString()} new M1 candles per consumed pair holdout. Research window capped at {evolutionTelemetry.researchCoordinator.historyWindowLimit.toLocaleString()} candles.
+                  </p>
+                  {evolutionTelemetry.generations.filter(item => !!item.researchBatchId).slice(0, 3).map(item => (
+                    <div key={item.researchBatchId} className="border-t border-neutral-800 pt-2 space-y-1">
+                      <div className="flex justify-between gap-2 text-[10px] font-mono">
+                        <span className="text-neutral-300">{item.symbol || 'Research'} · {item.status || 'RECORDED'}</span>
+                        <span className="text-neutral-500">{new Date(item.timestamp).toLocaleString()}</span>
+                      </div>
+                      <p className="text-[10px] text-neutral-400">{item.summary}</p>
+                    </div>
+                  ))}
+                  {evolutionTelemetry.researchCoordinator.error && (
+                    <p className="text-[11px] text-rose-300">{evolutionTelemetry.researchCoordinator.error}</p>
+                  )}
+                </div>
+              )}
 
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-amber-800/80 space-y-2">
                 <span className="font-bold text-amber-400 block text-sm flex items-center gap-1.5">
                   <Clock className="w-4 h-4" />
-                  4. Dynamic Expiry (5m to 30m) & Strict 5M Open Entry
+                  4. Entry Candle: 5m–30m · Decision: Exactly T−3m
                 </span>
                 <p>
-                  Every trade takes entry strictly on the 5-minute candle opening (:00, :05, :10, :15, :20, :25, :30, :35, :40, :45, :50, :55) with 3 minutes advance notice. The bot selects dynamic expiries from <strong>5m to 30m</strong> based on the setup's velocity and time-horizon conviction.
+                  Each candidate is evaluated for a matching <strong>5m, 10m, 15m, 20m, 25m or 30m entry candle</strong>. The signal must use a fully closed M1 decision bar exactly three minutes before that candle opens; expiry is measured on the matching horizon and exact expiry minute.
                 </p>
               </div>
 
@@ -960,10 +1214,13 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   5. Strategy Candidate Generation and Validation
                 </span>
                 <p>
-                  The candidate generator samples operator families and coefficients and stores the exact executable parameters with each formula. Candidate generation alone provides no evidence of an edge; candidates must pass the untouched historical test and subsequent forward observation before promotion.
+                  The search evolves executable symbolic expression trees over causal market features. Validated parents, strategy diversity and sufficiently large forward-paper samples steer mutation and reproduction. Candidate generation creates no accuracy claim; only pre-registered historical finalists and independent forward-paper outcomes can qualify a strategy.
                 </p>
               </div>
 
+              <p className="text-[10px] text-neutral-500">
+                Evolved-genome score only. {archivedRuleBasedOutcomes} legacy rule-based paper outcomes are excluded from this win rate and return total.
+              </p>
               <div className="bg-emerald-950/40 p-3.5 rounded-xl border border-emerald-800/80 flex items-center justify-between">
                 <div>
                   <div className="text-xs text-neutral-400">Completed forward paper outcomes:</div>
@@ -1006,71 +1263,71 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </div>
 
             <div className="space-y-3">
-              {/* Strategy 1 */}
-              <div className="bg-neutral-950 p-4 rounded-xl border border-emerald-800/80 space-y-2">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h4 className="font-bold text-white text-sm">1. 5-Minute Momentum Breakout</h4>
-                    <span className="text-[11px] text-neutral-400">Expiry: 5 Minutes · Best Pairs: EUR/USD, GBP/USD, EUR/JPY</span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-bold">
-                    Not validated
-                  </span>
+              {synthesizedStrategies.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-neutral-700 p-5 text-center text-xs text-neutral-400">
+                  No strategy candidates have been generated. Import at least 60,000 genuine one-minute candles for a pair, then run the 300-candidate evolutionary research batch.
                 </div>
-                <p className="text-xs text-neutral-300 leading-relaxed">
-                  Enters at the exact opening of the next 5-minute candle when the setup candle closed with high directional volume and a body filling &gt;60% of total candle range. Exits at 5m candle close.
-                </p>
-              </div>
-
-              {/* Strategy 2 */}
-              <div className="bg-neutral-950 p-4 rounded-xl border border-neutral-800 space-y-2">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h4 className="font-bold text-white text-sm">2. 10-Minute Liquidity Wick Reversal</h4>
-                    <span className="text-[11px] text-neutral-400">Expiry: 10 Minutes · Best Pairs: USD/JPY, AUD/USD, AUD/CAD</span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-mono font-bold">
-                    Not validated
-                  </span>
-                </div>
-                <p className="text-xs text-neutral-300 leading-relaxed">
-                  Candidate hypothesis: a long rejection wick (more than half the candle range) near a recent high or low may precede a short-term reversal. The configured 5M-open entry and 10-minute expiry are test settings, not proof of an edge.
-                </p>
-              </div>
-
-              {/* Strategy 3 */}
-              <div className="bg-neutral-950 p-4 rounded-xl border border-cyan-800/80 space-y-2">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h4 className="font-bold text-white text-sm">3. 15-Minute Statistical Mean Reversion</h4>
-                    <span className="text-[11px] text-neutral-400">Expiry: 15 Minutes · Best Pairs: EUR/GBP, USD/CAD</span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-xs font-mono font-bold">
-                    Not validated
-                  </span>
-                </div>
-                <p className="text-xs text-neutral-300 leading-relaxed">
-                  Candidate hypothesis: price more than 8 pips from its 20-period moving average may revert toward the average. This needs historical and forward testing with the configured 5M-open entry and 15-minute expiry.
-                </p>
-              </div>
-
-              {/* Strategy 4 */}
-              <div className="bg-neutral-950 p-4 rounded-xl border border-purple-800/80 space-y-2">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h4 className="font-bold text-white text-sm">4. 20-to-30 Minute Volatility Breakout</h4>
-                    <span className="text-[11px] text-neutral-400">Expiry: 20–30 Minutes · Best Pairs: GBP/USD, EUR/JPY</span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40 text-xs font-mono font-bold">
-                    Not validated
-                  </span>
-                </div>
-                <p className="text-xs text-neutral-300 leading-relaxed">
-                  Candidate hypothesis: a break beyond a multi-candle consolidation may continue. It must pass a purged historical test and forward paper observation before it can be approved; configured expiry options are 20 or 30 minutes.
-                </p>
-              </div>
+              ) : (
+                [...synthesizedStrategies]
+                  .sort((a, b) =>
+                    Number(b.status === 'PROMOTED_ACTIVE') - Number(a.status === 'PROMOTED_ACTIVE') ||
+                    Number(b.status === 'PAPER_TRADING') - Number(a.status === 'PAPER_TRADING') ||
+                    (b.discoveryMetrics?.validationExpectedValueUnits ?? -Infinity) -
+                      (a.discoveryMetrics?.validationExpectedValueUnits ?? -Infinity)
+                  )
+                  .slice(0, 10)
+                  .map(gene => {
+                    const forward = strategyPerformance.find(item => item.strategyId === gene.id);
+                    const measuredTest = gene.accuracyStatus === 'BACKTESTED' && !!gene.backtestMetrics;
+                    const statusLabel = gene.status === 'PROMOTED_ACTIVE'
+                      ? 'FORWARD PAPER GATE PASSED'
+                      : gene.status === 'PAPER_TRADING'
+                        ? 'PAPER TRADING'
+                        : gene.status === 'REJECTED'
+                          ? 'REJECTED'
+                          : 'UNVALIDATED';
+                    return (
+                      <div key={gene.id} className="bg-neutral-950 p-4 rounded-xl border border-neutral-800 space-y-2">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <h4 className="font-bold text-white text-sm">{gene.name}</h4>
+                            <span className="text-[11px] text-neutral-400">
+                              {gene.symbol || 'Unassigned pair'} · {gene.optimalHorizonMinutes}M entry / expiry · {gene.sessionAffinity}
+                            </span>
+                          </div>
+                          <span className="px-2 py-0.5 rounded bg-neutral-800 text-neutral-300 text-[10px] font-mono">
+                            {statusLabel}
+                          </span>
+                        </div>
+                        <div className="font-mono text-[11px] text-cyan-200 break-all">{gene.mathematicalFormula}</div>
+                        {gene.discoveryMetrics && (
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono">
+                            <div><span className="text-neutral-500 block">Train WR · n</span><strong>{(gene.discoveryMetrics.trainWinRate * 100).toFixed(1)}% · {gene.discoveryMetrics.trainScoredTrades}</strong></div>
+                            <div><span className="text-neutral-500 block">Validation WR · n</span><strong>{(gene.discoveryMetrics.validationWinRate * 100).toFixed(1)}% · {gene.discoveryMetrics.validationScoredTrades}</strong></div>
+                            <div><span className="text-neutral-500 block">Validation EV</span><strong>{gene.discoveryMetrics.validationExpectedValueUnits.toFixed(4)} units</strong></div>
+                            <div><span className="text-neutral-500 block">Mutation pressure</span><strong>{(gene.mutationRate * 100).toFixed(1)}%</strong></div>
+                          </div>
+                        )}
+                        {measuredTest && gene.backtestMetrics ? (
+                          <div className="text-[11px] text-emerald-300 font-mono">
+                            Untouched-test result: {(gene.backtestMetrics.testWinRate * 100).toFixed(1)}% · scored n={gene.backtestMetrics.testScoredSampleSize} · 95% Wilson lower bound {(gene.backtestMetrics.confidenceInterval95[0] * 100).toFixed(1)}%.
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-neutral-500">No untouched-test accuracy has been recorded for this candidate.</div>
+                        )}
+                        {forward && (
+                          <div className="text-[11px] text-neutral-300 font-mono">
+                            Forward paper: {forward.wins}W / {forward.losses}L / {forward.scratches} scratches · {(forward.netReturnUnits ?? 0) > 0 ? '+' : ''}{(forward.netReturnUnits ?? 0).toFixed(3)} stake units.
+                          </div>
+                        )}
+                        {gene.validationFailureReason && (
+                          <div className="text-[10px] text-rose-300">{gene.validationFailureReason}</div>
+                        )}
+                      </div>
+                    );
+                  })
+              )}
             </div>
-
             <button
               onClick={() => setShowStrategiesModal(false)}
               className="w-full py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white font-bold rounded-xl transition-colors text-xs"
@@ -1110,10 +1367,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             {/* Timings */}
             <div className="bg-neutral-950 p-3.5 rounded-xl border border-neutral-800 space-y-2">
               <div className="text-neutral-400 text-[10px] uppercase font-bold tracking-wider">
-                5-MINUTE CANDLE SCHEDULE
+                {selectedSignal.entryTimeframeMinutes ?? selectedSignal.expiryMinutes ?? 5}-MINUTE ENTRY CANDLE SCHEDULE
               </div>
               <div className="flex justify-between text-neutral-200 text-xs">
-                <span>Entry Time (5M Open):</span>
+                <span>Entry Time ({selectedSignal.entryTimeframeMinutes ?? selectedSignal.expiryMinutes ?? 5}M Open):</span>
                 <strong className="text-emerald-400">
                   {selectedSignal.candleOpenTimeIst || formatIST(selectedSignal.actualEntryTimeUtc || selectedSignal.entryWindowStartUtc)}
                 </strong>
@@ -1154,7 +1411,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               </div>
               <div className="flex justify-between items-center">
                 <span className="font-bold text-white">
-                  {selectedSignal.strategyName || '5-Min Momentum Breakout'}
+                  {selectedSignal.strategyName || 'Unclassified historical signal'}
                 </span>
                 <span className="text-emerald-400 font-bold">
                   {selectedSignal.paperOnly ? 'PAPER ONLY · NOT APPROVED' : (selectedSignal.strategyEvidenceStatus === 'BACKTESTED' && typeof selectedSignal.strategyWinRate === 'number' ? `${selectedSignal.strategyWinRate.toFixed(1)}% Historical test WR · n=${selectedSignal.strategyHistoricalSampleSize || 0}` : 'Historical result not validated')}
@@ -1166,7 +1423,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 return (
                   <div className="text-[11px] text-neutral-400 pt-2">
                     Forward paper results: {forward && forward.trades > 0
-                      ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored outcomes` : 'No scored outcomes'} · ${forward.scratches} scratches · ${forward.netPips > 0 ? '+' : ''}${forward.netPips.toFixed(1)} modeled net pips`
+                      ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored outcomes` : 'No scored outcomes'} · ${forward.scratches} scratches · ${(forward.netReturnUnits ?? 0) > 0 ? '+' : ''}${(forward.netReturnUnits ?? 0).toFixed(3)} payout-adjusted stake units`
                       : 'No completed forward outcomes yet'}
                   </div>
                 );
@@ -1217,13 +1474,13 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 </div>
               )}
 
-              {/* RULE-BASED LOSS DIAGNOSTICS */}
+              {/* OBSERVED LOSS RECORD */}
               {selectedSignal.lossAutopsy && (
                 <div className="pt-2 border-t border-rose-900/60 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-rose-400 uppercase font-black tracking-wider flex items-center gap-1.5 font-mono">
                       <Microscope className="w-3.5 h-3.5 text-rose-400" />
-                      RULE-BASED LOSS DIAGNOSTICS
+                      OBSERVED LOSS RECORD · NO CAUSAL CLAIM
                     </span>
                     <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono text-[9px] font-bold">
                       {selectedSignal.lossAutopsy.rootCause.replace(/_/g, ' ')}
@@ -1231,14 +1488,14 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   </div>
                   <div className="p-3 rounded-xl bg-rose-950/30 border border-rose-900/60 text-xs text-neutral-300 space-y-2">
                     <div>
-                      <strong className="text-rose-300 block mb-1 text-[11px]">Rule-based Diagnostic:</strong>
+                      <strong className="text-rose-300 block mb-1 text-[11px]">Observed outcome:</strong>
                       <p className="leading-relaxed text-[11px] text-neutral-300">
                         {selectedSignal.lossAutopsy.rootCauseExplanation}
                       </p>
                     </div>
 
                     <div className="pt-1.5 border-t border-rose-900/40">
-                      <strong className="text-amber-400 block mb-1 text-[11px]">Algorithmic Lessons Learned:</strong>
+                      <strong className="text-amber-400 block mb-1 text-[11px]">Recorded evidence:</strong>
                       <ul className="list-disc list-inside space-y-1 text-[11px] text-neutral-300">
                         {selectedSignal.lossAutopsy.lessonsLearned.map((l, i) => (
                           <li key={i}>{l}</li>
@@ -1246,14 +1503,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       </ul>
                     </div>
 
-                    <div className="pt-1.5 border-t border-rose-900/40">
-                      <strong className="text-cyan-400 block mb-1 text-[11px]">Autonomously Evolved Antidote Strategy:</strong>
-                      <div className="p-2 rounded-lg bg-neutral-950 border border-cyan-800/60 font-mono text-[10px] text-cyan-300 space-y-0.5">
-                        <span className="font-bold text-white block">{selectedSignal.lossAutopsy.antidoteStrategyName}</span>
-                        <span>{selectedSignal.lossAutopsy.antidoteFormula}</span>
-                      </div>
-                    </div>
-                  </div>
+                    <div className="pt-1.5 border-t border-rose-900/40 text-[11px] text-neutral-400">
+                      No replacement genome was fabricated from this loss. Its outcome is already stored against the original evolved genome and can influence future selection only when the forward sample is sufficiently mature.
+                    </div>                  </div>
                 </div>
               )}
             </div>
@@ -1377,9 +1629,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       <span className="text-base font-extrabold text-emerald-400">{sess.hasMeasuredData ? `${sess.winRate}%` : "No data"}</span>
                     </div>
                     <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
-                      <span className="text-[10px] text-neutral-400 block uppercase">Observed Paper Net Pips</span>
-                      <span className={`text-sm font-bold ${sess.netPips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {sess.netPips > 0 ? '+' : ''}{sess.netPips} Pips
+                      <span className="text-[10px] text-neutral-400 block uppercase">Observed Paper Net Return</span>
+                      <span className={`text-sm font-bold ${sess.netReturnUnits >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {sess.netReturnUnits > 0 ? '+' : ''}{sess.netReturnUnits.toFixed(3)} Stake Units
                       </span>
                       <span className="text-[9px] text-neutral-500 block">({sess.wins}W / {sess.losses}L / {sess.scratches} scratches · {sess.totalTrades} total)</span>
                     </div>
@@ -1422,7 +1674,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     </span>
                   </h3>
                   <p className="text-xs text-neutral-400">
-                    Randomized formula candidates with historical validation and forward paper-trading evidence
+                    Executable symbolic candidates with measured historical and forward-paper evidence
                   </p>
                 </div>
               </div>
@@ -1439,10 +1691,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="space-y-0.5">
                   <span className="text-xs font-bold text-white uppercase tracking-wider block">
-                    Candidate Formula Generator
+                    Evolutionary Research Run
                   </span>
                   <p className="text-[11px] text-neutral-400">
-                    Generates candidate formulas. Validation and promotion require out-of-sample evidence from uploaded historical candles.
+                    Runs 300 candidates through train/validation ranking. Only pre-registered finalists access the untouched test; later promotion requires independent forward paper evidence.
                   </p>
                 </div>
                 <button
@@ -1451,13 +1703,13 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   className="flex items-center gap-2 px-4 py-2 rounded-xl bg-linear-to-r from-cyan-600 to-emerald-600 hover:from-cyan-500 hover:to-emerald-500 text-neutral-950 font-black text-xs transition-all shadow-lg shadow-cyan-950/50 disabled:opacity-50"
                 >
                   <Sparkles className={`w-4 h-4 ${isEvolvingStrategy ? 'animate-spin' : ''}`} />
-                  <span>{isEvolvingStrategy ? 'Evolving Next Generation...' : '🧬 Evolve New Strategy Now'}</span>
+                  <span>{isEvolvingStrategy ? `Evolving ${searchJob?.completed ?? 0}/300 candidates...` : '🧬 Run 300-Candidate Evolution'}</span>
                 </button>
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2 border-t border-neutral-850 text-xs font-mono">
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
-                  <span className="text-[10px] text-neutral-400 block uppercase">Forward Approved</span>
+                  <span className="text-[10px] text-neutral-400 block uppercase">Forward-paper gate passed (paper only)</span>
                   <span className="text-sm font-extrabold text-cyan-400">
                     {synthesizedStrategies.filter(s => s.status === 'PROMOTED_ACTIVE').length} Strategies
                   </span>
@@ -1488,7 +1740,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-4 space-y-3">
               <div>
                 <h4 className="text-sm font-bold text-white">Import externally sourced historical candles</h4>
-                <p className="text-[11px] text-neutral-400 mt-1">Upload 1-minute CSV or JSON candles. Validation requires at least 10,000 structurally valid M1 rows. Synthetic fallback candles are rejected. The app checks OHLC and timestamps but cannot independently authenticate an uploaded file's provider or contents; import only genuine broker/provider exports.</p>
+                <p className="text-[11px] text-neutral-400 mt-1">Upload 1-minute CSV or JSON candles. Candidate validation requires at least 60,000 structurally valid M1 rows to support the full 5m–30m horizon range. Synthetic fallback candles are rejected. The app checks OHLC and timestamps but cannot independently authenticate an uploaded file's provider or contents; import only genuine broker/provider exports.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <select
@@ -1513,7 +1765,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 How candidates become forward-approved:
               </strong>
               <p>
-                The generator samples four executable operator families and stores the exact coefficients used by the live evaluator. A generated equation is only a candidate: it starts unvalidated, must pass a chronological historical test using the scheduled entry/expiry model, and then must accumulate at least 200 scored forward paper outcomes before it can be marked forward-approved.
+                The generator evolves executable symbolic expression trees over causal market features using crossover, adaptive mutation and species-preserving parent selection. Candidate generation provides no accuracy; a candidate starts unvalidated, must pass the chronological historical gates, then must independently satisfy the 300-outcome forward paper gate before it can be marked forward-approved.
               </p>
             </div>
 
@@ -1548,7 +1800,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                           <span className="font-bold text-white text-sm">{gene.name}</span>
                         </div>
                         <span className="text-[11px] text-neutral-400 font-mono block">
-                          Optimal Horizon: <strong className="text-amber-300">{gene.optimalHorizonMinutes} Min Dynamic Expiry</strong> · Session: <strong className="text-cyan-300">{gene.sessionAffinity}</strong>
+                          Entry candle / expiry: <strong className="text-amber-300">{gene.optimalHorizonMinutes} minutes</strong> · Session: <strong className="text-cyan-300">{gene.sessionAffinity}</strong>
                         </span>
                       </div>
 
@@ -1581,7 +1833,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       <div className="flex items-center justify-between text-[10px] text-neutral-400 uppercase tracking-wider pb-1 border-b border-neutral-800">
                         <span className="text-cyan-400 font-bold">Mathematical Equation:</span>
                         <span className="px-1.5 py-0.2 rounded bg-purple-900/40 text-purple-300 text-[9px]">
-                          Operator: {gene.nonLinearOperator}
+                          Genome complexity: {gene.genome?.complexity ?? 'legacy'}
                         </span>
                       </div>
                       <div className="text-sm font-bold text-cyan-300 pt-1 overflow-x-auto">
@@ -1600,21 +1852,11 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     )}
                     {gene.forwardPerformance && (
                       <div className="text-[11px] font-mono text-neutral-300 bg-neutral-900/60 border border-neutral-800 rounded-lg p-3">
-                        Forward paper results: {gene.forwardPerformance.wins}W / {gene.forwardPerformance.losses}L / {gene.forwardPerformance.scratches} scratches · {gene.forwardPerformance.trades} completed trades · {gene.forwardPerformance.netPips > 0 ? '+' : ''}{gene.forwardPerformance.netPips.toFixed(1)} net pips
+                        Forward paper results: {gene.forwardPerformance.wins}W / {gene.forwardPerformance.losses}L / {gene.forwardPerformance.scratches} scratches · {gene.forwardPerformance.trades} completed contracts · {(gene.forwardPerformance.netReturnUnits ?? 0) > 0 ? '+' : ''}{(gene.forwardPerformance.netReturnUnits ?? 0).toFixed(3)} stake units
                       </div>
                     )}
                     {gene.accuracyStatus !== 'BACKTESTED' && (
-                      gene.operatorParameters ? (
-                        <button
-                          onClick={() => handleValidateGene(gene.id, gene.symbol)}
-                          disabled={validatingGeneId === gene.id}
-                          className="px-3 py-2 rounded-lg bg-cyan-900/60 border border-cyan-700 text-cyan-200 text-[11px] font-semibold disabled:opacity-50"
-                        >
-                          {validatingGeneId === gene.id ? 'Validating against imported history…' : `Validate against ${gene.symbol || historyImportPair} history`}
-                        </button>
-                      ) : (
-                        <span className="text-[10px] text-neutral-500">Legacy candidate has no stored executable coefficients. Generate a new candidate to validate it.</span>
-                      )
+                      <span className="text-[10px] text-neutral-500">Candidate remains unvalidated until the next pre-registered batch test.</span>
                     )}
 
                     {/* Parents & Lineage */}

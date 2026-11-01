@@ -63,7 +63,8 @@ export interface MarketSessionInfo {
   wins: number;
   losses: number;
   scratches: number;
-  netPips: number;
+  /** Aggregate payout-adjusted binary contract return, measured in stake units. */
+  netReturnUnits: number;
   bestStrategy: string;
 }
 
@@ -170,7 +171,7 @@ export interface ResearchSignal {
   netReturnUnits?: number | null;
   outcomeResult: 'WIN' | 'LOSS' | 'SCRATCH' | 'PENDING' | 'CANCELLED';
   
-  // Model Meta & 5-Minute Candle Synchronization
+  // Model metadata and 5–30 minute entry-candle synchronization
   ruleFamily: string;
   modelVersion: string;
   notes?: string;
@@ -179,6 +180,8 @@ export interface ResearchSignal {
   strategyWinRate?: number;
   strategyHistoricalSampleSize?: number;
   strategyEvidenceStatus?: 'UNVALIDATED' | 'INSUFFICIENT_SAMPLE' | 'BACKTESTED';
+  /** Forward evidence gate only; paperOnly remains true regardless. */
+  strategyForwardApproved?: boolean;
   strategyId?: string;
   advanceNoticeMinutes?: number;
   candleOpenTimeUtc?: string;
@@ -196,6 +199,10 @@ export interface ResearchSignal {
   whyHumansMissThis?: string;
   /** True when this is an internal forward-paper observation, not an approved actionable alert. */
   paperOnly?: boolean;
+  /** Entry candle timeframe; a supported 5–30 minute boundary, aligned with the expiry horizon. */
+  entryTimeframeMinutes?: 5 | 10 | 15 | 20 | 25 | 30;
+  /** Frozen causal 19-feature context captured when this prediction was made. */
+  marketFeatureVector?: number[];
   lossAutopsy?: LossAutopsy;
 }
 
@@ -208,11 +215,17 @@ export interface LossAutopsy {
   mathematicalFormula?: string;
   entryPrice: number;
   exitPrice: number;
-  grossReturnPips: number;
-  netReturnPips: number;
-  spreadPips: number;
+  /** Legacy forex diagnostics, absent for payout-settled binary contracts. */
+  grossReturnPips?: number;
+  netReturnPips?: number;
+  spreadPips?: number;
+  /** Actual binary return, if the signal was settled under the binary model. */
+  netReturnUnits?: number;
   marketSession: string;
+  strategyGeneId?: string;
+  /** OBSERVED_ADVERSE_SETTLEMENT is an outcome label, not a causal explanation. */
   rootCause:
+    | 'OBSERVED_ADVERSE_SETTLEMENT'
     | 'SPREAD_EXPANSION_SLIPPAGE'
     | 'MICRO_WICK_FALSE_ABSORPTION'
     | 'MOMENTUM_EXHAUSTION_DIVERGENCE'
@@ -220,10 +233,11 @@ export interface LossAutopsy {
     | 'NON_LINEAR_OPERATOR_OVERFITTING';
   rootCauseExplanation: string;
   lessonsLearned: string[];
-  antidoteStrategyGeneId: string;
-  antidoteStrategyName: string;
-  antidoteFormula: string;
-  antidoteOperator: string;
+  /** Deprecated legacy fields; new observations never fabricate antidote genomes. */
+  antidoteStrategyGeneId?: string;
+  antidoteStrategyName?: string;
+  antidoteFormula?: string;
+  antidoteOperator?: string;
   timestamp: string;
 }
 
@@ -280,6 +294,8 @@ export interface StrategyBacktestMetrics {
   expectedValueUnits: number;
   profitFactor: number;
   confidenceInterval95: [number, number];
+  /** One-sided lower bound after Bonferroni correction across the ten holdout finalists. */
+  multipleTestingLowerBound?: number;
   /** Win rates for the latest three consecutive 100-trade blocks in the untouched test. */
   testBlockWinRates: number[];
   trainPeriod: { start: string; end: string };
@@ -310,6 +326,9 @@ export interface StrategyPerformanceRecord {
   scoredOutcomes?: Array<{ result: 'WIN' | 'LOSS'; netReturnUnits: number; payoutPct: number }>;
   /** Recent signal IDs prevent the same outcome from being counted more than once. */
   signalIds?: string[];
+  /** Beta(1,1) posterior updated exactly once per decisive forward outcome. */
+  bayesAlpha?: number;
+  bayesBeta?: number;
   updatedAt: string;
 }
 
@@ -341,7 +360,8 @@ export interface SynthesizedStrategyGene {
   mathematicalFormula: string;
   parents: string[];
   mutationRate: number;
-  nonLinearOperator: 'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion';
+  /** Legacy operator label. New symbolic genomes do not use this field. */
+  nonLinearOperator?: 'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion';
   /** The same coefficients used by the live evaluator and historical backtester. */
   operatorParameters?: { alpha: number; beta: number; gamma: number; exponent: number; threshold: number };
   /** Executable symbolic-expression genome shared by the historical and live evaluators. */
@@ -449,6 +469,16 @@ export interface AgentReview {
   score?: number; // 0 - 100
 }
 
+export interface EvolutionSubGenerationMetrics {
+  generation: number;
+  candidateCount: number;
+  qualifiedParentCount: number;
+  distinctSpecies: number;
+  bestValidationExpectedValueUnits: number;
+  bestValidationWinRate: number;
+  meanMutationRate: number;
+}
+
 export interface EvolutionGeneration {
   generation: number;
   timestamp: string;
@@ -459,6 +489,13 @@ export interface EvolutionGeneration {
   bestF1Score: number;
   summary: string;
   lessonsLearned: string[];
+  /** Present only for real 300-candidate symbolic search batches. */
+  researchBatchId?: string;
+  status?: 'COMPLETED' | 'FAILED';
+  symbol?: ForexSymbol;
+  bestValidationExpectedValueUnits?: number;
+  holdoutPeriod?: { start: string; end: string };
+  subGenerations?: EvolutionSubGenerationMetrics[];
 }
 
 export interface AutopilotLog {

@@ -5,7 +5,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { FOREX_PAIRS, ForexSymbol, RuleFamily } from '../types/index.js';
+import { EvolutionGeneration, EvolutionSubGenerationMetrics, FOREX_PAIRS, ForexSymbol, RuleFamily, SynthesizedStrategyGene } from '../types/index.js';
 import { dataFeedEngine } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
@@ -13,6 +13,7 @@ import { researchEngine } from './researchEngine.js';
 import { autonomousScheduler } from './scheduler.js';
 import { runAllVerificationTests } from './tests.js';
 import { historicalDataStore } from './historicalData.js';
+import { binaryBreakEvenWinRate, genomeSpeciesKey, hasSufficientForwardParentEvidence, wilsonLowerBound } from './evolutionEngine.js';
 
 interface StrategySearchJob {
   jobId: string;
@@ -44,6 +45,54 @@ interface StrategySearchJob {
     testBlockWinRates: number[];
     reason?: string;
   }>;
+}
+
+function summarizeEvolutionSubGenerations(
+  genes: SynthesizedStrategyGene[]
+): EvolutionSubGenerationMetrics[] {
+  const groups = new Map<number, SynthesizedStrategyGene[]>();
+  for (const gene of genes) {
+    if (!groups.has(gene.generation)) groups.set(gene.generation, []);
+    groups.get(gene.generation)!.push(gene);
+  }
+  return [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([generation, population]) => {
+    const qualified = population.filter(gene => {
+      const metrics = gene.discoveryMetrics;
+      if (!metrics ||
+          metrics.trainScoredTrades < 150 ||
+          metrics.validationScoredTrades < 150 ||
+          metrics.validationExpectedValueUnits <= 0 ||
+          metrics.validationProfitFactor < 1.05 ||
+          (metrics.minimumPayoutPct ?? 0) < 80) return false;
+      const breakEven = binaryBreakEvenWinRate(metrics.minimumPayoutPct ?? 0);
+      if (metrics.validationWinRate <= breakEven ||
+          wilsonLowerBound(
+            metrics.validationWinRate * metrics.validationScoredTrades,
+            metrics.validationScoredTrades
+          ) <= breakEven) return false;
+      // Match the real parent selector: small paper samples are non-decisive,
+      // but mature negative/uncertain forward evidence excludes reproduction.
+      if (gene.paperMetrics &&
+          gene.paperMetrics.scoredTrades >= 100 &&
+          !hasSufficientForwardParentEvidence(gene.paperMetrics)) return false;
+      return true;
+    });
+    return {
+      generation,
+      candidateCount: population.length,
+      qualifiedParentCount: qualified.length,
+      distinctSpecies: new Set(qualified.map(gene => genomeSpeciesKey(gene.genome))).size,
+      bestValidationExpectedValueUnits: Math.max(0, ...population.map(gene =>
+        gene.discoveryMetrics?.validationExpectedValueUnits ?? 0
+      )),
+      bestValidationWinRate: Math.max(0, ...population.map(gene =>
+        gene.discoveryMetrics?.validationWinRate ?? 0
+      )),
+      meanMutationRate: population.length
+        ? Number((population.reduce((sum, gene) => sum + gene.mutationRate, 0) / population.length).toFixed(3))
+        : 0,
+    };
+  });
 }
 
 const strategySearchJobs = new Map<string, StrategySearchJob>();
@@ -126,35 +175,14 @@ apiRouter.get('/scan', async (_req: Request, res: Response) => {
   }
 });
 
-// POST /api/analyze — Deep quantitative analysis for a specific pair
-apiRouter.post('/analyze', async (req: Request, res: Response) => {
-  try {
-    const rawSymbol = ((req.body.symbol as string) || 'EUR/USD').toUpperCase();
-    const symbol = FOREX_PAIRS.find(p => p.replace('/', '') === rawSymbol.replace('/', '')) || 'EUR/USD';
-    const horizon = Number(req.body.horizon) || 10;
-    const ruleFamily = (req.body.ruleFamily as RuleFamily) || 'momentum_5';
-
-    const candles = historicalDataStore.getCandles(symbol);
-    if (candles.length < 10_000) {
-      return res.status(409).json({
-        error: `Insufficient uploaded historical data for research. Import at least 10,000 one-minute candles for ${symbol}; currently stored: ${candles.length}.`,
-        symbol,
-        storedCandles: candles.length,
-        requiredCandles: 10_000,
-      });
-    }
-    const exp = researchEngine.runWalkForwardExperiment(symbol, candles, ruleFamily, horizon, 1);
-    const reviews = await researchEngine.generateTrinityReviews(exp);
-
-    res.json({
-      symbol,
-      source: 'historical-import',
-      experiment: exp,
-      reviews,
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
+// Single-rule analysis on a repeatedly reused holdout is retired.
+// Use the 300-candidate chronological research batch, which selects finalists
+// on train/validation and consumes each pair's final test period once.
+apiRouter.post('/analyze', (_req: Request, res: Response) => {
+  return res.status(410).json({
+    error: 'Single-rule repeated holdout testing is disabled to prevent test-set overfitting. Use the 300-candidate evolutionary batch; a consumed holdout cannot be reused.',
+    requiredProcess: 'POST /api/strategies/search-batch',
+  });
 });
 
 // GET /api/signals — All signals or filtered
@@ -211,19 +239,67 @@ apiRouter.get('/strategies/performance', (_req: Request, res: Response) => {
   res.json({ strategies: db.getStrategyPerformance() });
 });
 
-// Validate one generated candidate against its pair's uploaded historical candles.
-apiRouter.post('/strategies/validate', (req: Request, res: Response) => {
-  try {
-    const gene = db.getSynthesizedStrategyById(String(req.body.geneId || ''));
-    if (!gene) return res.status(404).json({ error: 'Strategy candidate not found.' });
-    const symbol = gene.symbol || FOREX_PAIRS.find(p => p.replace('/', '') === String(req.body.symbol || '').toUpperCase().replace('/', ''));
-    if (!symbol) return res.status(400).json({ error: 'The candidate has no currency pair. Supply a valid symbol.' });
-    const candles = historicalDataStore.getCandles(symbol);
-    const validated = researchEngine.validateSynthesizedStrategy({ ...gene, symbol }, candles);
-    res.json({ success: true, gene: validated });
-  } catch (err: any) {
-    res.status(409).json({ error: err.message });
-  }
+// GET /api/evolution/state — measured learning state from persistent backend records.
+apiRouter.get('/evolution/state', (_req: Request, res: Response) => {
+  const evolvedStrategyIds = new Set(db.getSynthesizedStrategies().map(gene => gene.id));
+  const performance = db.getStrategyPerformance().filter(record => evolvedStrategyIds.has(record.strategyId));
+  const strategies = performance.map(record => {
+    const posterior = db.getStrategyBayesianPosterior(record.strategyId);
+    return {
+      strategyId: record.strategyId,
+      alpha: posterior.alpha,
+      beta: posterior.beta,
+      posteriorWinRate: posterior.mean,
+      decisiveOutcomes: posterior.observations,
+      bayesianUcbScore: db.getStrategyBayesianUcbScore(record.strategyId),
+      wins: record.binaryWins ?? record.wins,
+      losses: record.binaryLosses ?? record.losses,
+      scratches: record.binaryPushes ?? record.scratches,
+      netReturnUnits: record.netReturnUnits ?? 0,
+      updatedAt: record.updatedAt,
+    };
+  });
+  const generations = db.getGenerations();
+  const experiments = db.getExperiments();
+  const historicalExperiments = experiments.filter(e =>
+    e.experimentType !== 'LIVE_TRADE' && e.experimentType !== 'FORWARD_OBSERVATION'
+  );
+  const accepted = historicalExperiments.filter(e => e.auditorVerdict === 'ACCEPTED');
+  const rejected = historicalExperiments.filter(e => e.auditorVerdict === 'REJECTED');
+  res.json({
+    timestamp: new Date().toISOString(),
+    currentGeneration: generations.length > 0 ? generations[0].generation : 1,
+    totalExperiments: historicalExperiments.length,
+    totalForwardObservations: experiments.length - historicalExperiments.length,
+    acceptedCount: accepted.length,
+    rejectedCount: rejected.length,
+    generations,
+    topCandidates: accepted.slice(0, 10),
+    learning: {
+      posterior: 'Beta-Bernoulli',
+      selection: 'Bayesian upper-confidence score with forward-paper feedback',
+      decisiveUpdates: strategies.reduce((sum, item) => sum + item.decisiveOutcomes, 0),
+      strategyCount: strategies.length,
+    },
+    episodicMemory: {
+      storedTrades: db.getEpisodicMemoryCount(),
+      featureDimensions: 19,
+      nearestNeighbors: 10,
+      futureOutcomesExcluded: true,
+    },
+    regimes: db.getMarketRegimes(),
+    researchCoordinator: autonomousScheduler.getEvolutionResearchState(),
+    strategies,
+  });
+});
+
+// Individual holdout testing is deliberately disabled: the untouched test is only
+// exposed to pre-registered finalists from a complete discovery-ranked batch.
+apiRouter.post('/strategies/validate', (_req: Request, res: Response) => {
+  return res.status(409).json({
+    error: 'Individual candidate holdout testing is disabled to prevent repeated test-set selection. Run the 300-candidate research batch; only validation-qualified finalists are evaluated on the untouched test.',
+    requiredProcess: 'POST /api/strategies/search-batch',
+  });
 });
 
 // Run a real 300-candidate symbolic search against imported M1 history.
@@ -234,18 +310,29 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
     if (!symbol) return res.status(400).json({ error: 'Choose a supported forex pair.' });
     const activeJob = [...strategySearchJobs.values()].find(job => job.status === 'RUNNING');
     if (activeJob) return res.status(409).json({ error: 'A 300-candidate strategy search is already running.', jobId: activeJob.jobId });
+    if (researchEngine.isEvolutionBatchRunning()) {
+      return res.status(409).json({ error: 'The autonomous research coordinator already owns the evolutionary batch lock.' });
+    }
 
-    const candles = historicalDataStore.getCandles(symbol);
-    if (candles.length < 30_000) {
+    const candles = historicalDataStore.getLatestCandles(symbol, 120_000);
+    if (candles.length < 60_000) {
       return res.status(409).json({
-        error: `${symbol} has ${candles.length.toLocaleString()} imported M1 candles. At least 30,000 are required for a meaningful 300-trade test, especially for 20–30 minute expiries.`,
+        error: `${symbol} has ${candles.length.toLocaleString()} imported M1 candles. At least 60,000 genuine M1 candles are required to make the 300-outcome gate attainable even for 30-minute strategies.`,
         availableCandles: candles.length,
         requiredCandles: 30_000,
       });
     }
 
     const jobId = `strategy_search_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-    const latestGeneration = db.getGenerations()[0]?.generation || 7;
+    const latestCandidateGeneration = db.getSynthesizedStrategies().reduce(
+      (maximum, gene) => Math.max(maximum, gene.generation || 0),
+      0
+    );
+    const latestGeneration = Math.max(
+      db.getGenerations()[0]?.generation || 0,
+      latestCandidateGeneration
+    );
+    const batchGeneration = latestGeneration + 1;
     const job: StrategySearchJob = {
       jobId,
       symbol,
@@ -265,7 +352,7 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
       symbol,
       candles,
       jobId,
-      latestGeneration + 1,
+      batchGeneration,
       progress => {
         job.completed = progress.completed;
         job.passedHistorical = progress.passedHistorical;
@@ -302,10 +389,78 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
           minimumPayoutPct: gene.discoveryMetrics?.minimumPayoutPct ?? gene.backtestMetrics?.binaryPayoutPct ?? 0,
           reason: gene.validationFailureReason,
         }));
+
+      const bestValidation = results
+        .filter(gene => gene.discoveryMetrics)
+        .sort((a, b) =>
+          (b.discoveryMetrics!.validationExpectedValueUnits - a.discoveryMetrics!.validationExpectedValueUnits) ||
+          (b.discoveryMetrics!.validationWinRate - a.discoveryMetrics!.validationWinRate)
+        )[0];
+      const consumedHoldout = db.getResearchHoldoutWindow(jobId);
+      const historicallyPassed = results.filter(gene => gene.status === 'PAPER_TRADING').length;
+      const historicallyRejected = results.filter(gene => gene.status === 'REJECTED').length;
+      const batchRecord: EvolutionGeneration = {
+        generation: batchGeneration,
+        timestamp: job.finishedAt!,
+        totalExperiments: results.length,
+        acceptedCount: historicallyPassed,
+        rejectedCount: historicallyRejected,
+        topExperimentId: null,
+        bestF1Score: 0,
+        summary: `Symbolic evolution batch ${jobId} completed for ${symbol}: ${results.length} candidates generated, ${historicallyPassed} passed the historical gates, ${historicallyRejected} rejected and ${results.length - historicallyPassed - historicallyRejected} lacked sufficient evidence. Historical pass is not forward approval.`,
+        lessonsLearned: [
+          `Candidate search used train/validation ranking; ${job.replicationFinalists} preselected finalists were opened on the one-time holdout.`,
+          bestValidation
+            ? `Best discovery validation EV: ${bestValidation.discoveryMetrics!.validationExpectedValueUnits.toFixed(4)} stake units per trade at ${(bestValidation.discoveryMetrics!.validationWinRate * 100).toFixed(1)}% WR.`
+            : 'No candidate produced a qualifying discovery record.',
+          `Forward-paper approval remains separate and requires the full independent 300-outcome gate.`,
+        ],
+        researchBatchId: jobId,
+        status: 'COMPLETED',
+        symbol,
+        bestValidationExpectedValueUnits: bestValidation?.discoveryMetrics?.validationExpectedValueUnits ?? 0,
+        holdoutPeriod: consumedHoldout ? { start: consumedHoldout.startUtc, end: consumedHoldout.endUtc } : undefined,
+        subGenerations: summarizeEvolutionSubGenerations(results),
+      };
+      db.addGeneration(batchRecord);
     }).catch(error => {
       job.status = 'FAILED';
       job.finishedAt = new Date().toISOString();
       job.error = error?.message || 'Strategy search failed.';
+
+      // Record failed attempts too. Once a holdout was reserved, a failed batch
+      // still consumed that period and it must never be silently forgotten.
+      const alreadyRecorded = db.getGenerations().some(record => record.researchBatchId === jobId);
+      if (!alreadyRecorded) {
+        const consumedHoldout = db.getResearchHoldoutWindow(jobId);
+        const failedRecord: EvolutionGeneration = {
+          generation: batchGeneration,
+          timestamp: job.finishedAt,
+          totalExperiments: job.completed,
+          acceptedCount: job.passedHistorical,
+          rejectedCount: job.rejected,
+          topExperimentId: null,
+          bestF1Score: 0,
+          summary: `Evolution batch ${jobId} failed for ${symbol} after ${job.completed}/300 candidates. No success or accuracy is inferred from the partial run. ${consumedHoldout ? 'Its reserved holdout remains permanently consumed.' : 'No holdout was reserved before failure.'} Error: ${job.error}`,
+          lessonsLearned: [
+            `Failed after ${job.completed} candidates; ${job.passedHistorical} historical passes, ${job.insufficientSample} insufficient-sample candidates and ${job.rejected} rejected.`,
+            consumedHoldout
+              ? `Consumed holdout: ${consumedHoldout.startUtc} to ${consumedHoldout.endUtc}; this interval cannot be reused.`
+              : 'No test interval was reserved, so no new holdout period was consumed.',
+          ],
+          researchBatchId: jobId,
+          status: 'FAILED',
+          symbol,
+          bestValidationExpectedValueUnits: 0,
+          holdoutPeriod: consumedHoldout
+            ? { start: consumedHoldout.startUtc, end: consumedHoldout.endUtc }
+            : undefined,
+          subGenerations: summarizeEvolutionSubGenerations(
+            db.getSynthesizedStrategies().filter(gene => gene.searchBatchId === jobId)
+          ),
+        };
+        db.addGeneration(failedRecord);
+      }
     });
 
     // Keep only the most recent jobs in memory.
@@ -326,25 +481,13 @@ apiRouter.get('/strategies/search-batch/:jobId', (req: Request, res: Response) =
   return res.json(job);
 });
 
-// POST /api/strategies/evolve — Trigger immediate evolutionary synthesis of a novel strategy
-apiRouter.post('/strategies/evolve', async (_req: Request, res: Response) => {
-  try {
-    const pair: ForexSymbol = FOREX_PAIRS[Math.floor(Math.random() * FOREX_PAIRS.length)];
-    const { candles } = await dataFeedEngine.fetchCandles(pair, 60);
-    const generations = db.getGenerations();
-    const currentGen = (generations[0]?.generation || 7) + 1;
-    const newGene = researchEngine.synthesizeInfiniteNovelStrategy(candles, pair, currentGen);
-    
-    res.json({
-      success: true,
-      gene: newGene,
-      strategies: db.getSynthesizedStrategies(),
-      promotedCount: db.getPromotedActiveStrategies().length,
-      paperTradingCount: db.getPaperTradingStrategies().filter(gene => gene.status === 'PAPER_TRADING').length,
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
+// Single random-candidate creation is disabled. Use the complete 300-candidate
+// evolutionary search so that candidates are compared and tested under one protocol.
+apiRouter.post('/strategies/evolve', (_req: Request, res: Response) => {
+  return res.status(410).json({
+    error: 'Single random candidate generation has been retired. Start a complete 300-candidate evolutionary research batch instead.',
+    requiredProcess: 'POST /api/strategies/search-batch',
+  });
 });
 
 // POST /api/signals/clear-history — Purges closed trade history while keeping active/pending signals
@@ -416,24 +559,6 @@ apiRouter.post('/evolution/run', async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/evolution/state — Current evolutionary state and top candidates
-apiRouter.get('/evolution/state', (_req: Request, res: Response) => {
-  const generations = db.getGenerations();
-  const experiments = db.getExperiments();
-  const historicalExperiments = experiments.filter(e => e.experimentType !== 'LIVE_TRADE' && e.experimentType !== 'FORWARD_OBSERVATION');
-  const accepted = historicalExperiments.filter(e => e.auditorVerdict === 'ACCEPTED');
-  const rejected = historicalExperiments.filter(e => e.auditorVerdict === 'REJECTED');
-
-  res.json({
-    currentGeneration: generations.length > 0 ? generations[0].generation : 1,
-    totalExperiments: historicalExperiments.length,
-    totalForwardObservations: experiments.length - historicalExperiments.length,
-    acceptedCount: accepted.length,
-    rejectedCount: rejected.length,
-    generations,
-    topCandidates: accepted.slice(0, 10),
-  });
-});
 
 // GET /api/research/history
 apiRouter.get('/research/history', (_req: Request, res: Response) => {
