@@ -232,8 +232,13 @@ export interface LossAutopsy {
     | 'MOMENTUM_EXHAUSTION_DIVERGENCE'
     | 'SESSION_BOUNDARY_LIQUIDITY_VACUUM'
     | 'NON_LINEAR_OPERATOR_OVERFITTING';
+  /** Evidence state prevents old heuristic labels from being mistaken for proven causes. */
+  evidenceStatus?: 'OBSERVATION_ONLY' | 'HYPOTHESIS' | 'SUPPORTED';
   rootCauseExplanation: string;
   lessonsLearned: string[];
+  /** Historical heuristic claims are retained for audit but never treated as evidence. */
+  legacyUnverifiedExplanation?: string;
+  legacyUnverifiedLessons?: string[];
   /** Deprecated legacy fields; new observations never fabricate antidote genomes. */
   antidoteStrategyGeneId?: string;
   antidoteStrategyName?: string;
@@ -369,6 +374,11 @@ export interface SynthesizedStrategyGene {
   genome?: StrategyGenome;
   /** Candidate belongs to a 300-strategy search run. */
   searchBatchId?: string;
+  /** Exact reproduction metadata for the evolutionary search that produced this candidate. */
+  researchSeed?: string;
+  datasetFingerprint?: string;
+  featureSchemaVersion?: string;
+  researchEngineVersion?: string;
   validationFailureReason?: string;
   /** Train/validation-only metrics used to select finalists before the untouched test is opened. */
   discoveryMetrics?: StrategyDiscoveryMetrics;
@@ -492,6 +502,11 @@ export interface EvolutionGeneration {
   lessonsLearned: string[];
   /** Present only for real 300-candidate symbolic search batches. */
   researchBatchId?: string;
+  /** Exact reproduction manifest for this evolutionary batch. */
+  researchSeed?: string;
+  datasetFingerprint?: string;
+  featureSchemaVersion?: string;
+  researchEngineVersion?: string;
   status?: 'COMPLETED' | 'FAILED';
   symbol?: ForexSymbol;
   bestValidationExpectedValueUnits?: number;
