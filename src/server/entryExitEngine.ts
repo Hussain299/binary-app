@@ -293,13 +293,15 @@ export class EntryExitEngine {
   }
 
   /**
-   * Cancels legacy persisted signals whose decision/entry/expiry schedule ever
-   * touched a closed FX interval. They are not scored and cannot be revived after
-   * the Sunday reopen. Valid pre-close signals remain eligible for exact-bar
-   * recovery if their data is still available.
+   * Reconcile persisted active signals with the weekly FX calendar. Signals whose
+   * decision/entry/expiry crossed a closure are cancelled. On a closed weekend,
+   * already-expired-but-unsettled signals are also cancelled unscored so the UI
+   * cannot keep presenting Friday contracts as active Saturday/Sunday.
    */
   public cancelSignalsOutsideForexWeek(): ResearchSignal[] {
     const cancelled: ResearchSignal[] = [];
+    const nowMs = Date.now();
+    const marketOpen = isForexMarketOpenAt(nowMs);
     for (const signal of db.getActiveSignals()) {
       const predictionTimeMs = Date.parse(signal.predictionTimeUtc);
       const entryTimeMs = Date.parse(
@@ -308,7 +310,9 @@ export class EntryExitEngine {
       const expiryTimeMs = Date.parse(
         signal.plannedExitTimeUtc || signal.candleCloseTimeUtc || signal.entryWindowEndUtc
       );
-      if (isForexSignalScheduleValid(predictionTimeMs, entryTimeMs, expiryTimeMs)) continue;
+      const validSchedule = isForexSignalScheduleValid(predictionTimeMs, entryTimeMs, expiryTimeMs);
+      const expiredWhileClosed = !marketOpen && Number.isFinite(expiryTimeMs) && expiryTimeMs <= nowMs;
+      if (validSchedule && !expiredWhileClosed) continue;
 
       const previousState = signal.lifecycleState;
       signal.lifecycleState = 'EXPIRED';
@@ -321,7 +325,9 @@ export class EntryExitEngine {
         timestamp: new Date().toISOString(),
         fromState: previousState,
         toState: 'EXPIRED',
-        reason: 'Weekly FX market-hours guard cancelled a legacy signal whose decision, entry or expiry window fell outside the open market week. No WIN/LOSS was inferred and no learning update was recorded.',
+        reason: !validSchedule
+          ? 'Weekly FX market-hours guard cancelled a legacy signal whose decision, entry or expiry window fell outside the open market week. No WIN/LOSS was inferred and no learning update was recorded.'
+          : 'The contract/entry window elapsed while the FX market was closed. It was marked expired and unscored; no weekend price was used and no learning update was recorded.',
       });
       db.updateSignal(signal);
       cancelled.push(signal);
