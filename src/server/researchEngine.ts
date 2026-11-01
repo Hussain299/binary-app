@@ -1792,6 +1792,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       marketSession: signal.marketSessionName || 'Unknown session',
       strategyGeneId,
       rootCause: 'OBSERVED_ADVERSE_SETTLEMENT',
+      evidenceStatus: 'OBSERVATION_ONLY',
       rootCauseExplanation:
         `The paper contract settled ${outcome} for ${signal.direction} on ${signal.symbol}. The recorded entry/exit prices and market features describe what was observed; they do not establish why price moved or whether spread, liquidity, news or another mechanism caused the loss.`,
       lessonsLearned: [
