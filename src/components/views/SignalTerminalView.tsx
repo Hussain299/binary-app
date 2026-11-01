@@ -937,7 +937,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       </div>
                     </div>
 
-                    {/* ROW 4: STRATEGY & WIN RATE BANNER */}
+                    {/* ROW 4: EVOLVED GENOME & EVIDENCE */}
                     <div className="bg-neutral-950/80 p-2.5 rounded-xl border border-neutral-800/80 space-y-1.5 text-xs">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5 truncate">
@@ -977,9 +977,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
                       {sig.confluenceStrategies && sig.confluenceStrategies.length > 0 && (
                         <div className="flex flex-wrap gap-1 pt-1 border-t border-neutral-800/60">
+                          <span className="text-[9px] text-neutral-500 uppercase">Genome lineage:</span>
                           {sig.confluenceStrategies.map((c, i) => (
                             <span key={i} className="px-1.5 py-0.5 rounded bg-neutral-900 border border-neutral-800 text-[9px] text-neutral-300 font-mono flex items-center gap-1">
-                              <span className="text-emerald-400">✓</span> {c}
+                              <span className="text-cyan-400">›</span> {c}
                             </span>
                           ))}
                         </div>
@@ -1152,7 +1153,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-amber-800/80 space-y-2">
                 <span className="font-bold text-amber-400 block text-sm flex items-center gap-1.5">
                   <Clock className="w-4 h-4" />
-                  4. Starting Candle: 5m–30m · Decision: Exactly T−3m
+                  4. Entry Candle: 5m–30m · Decision: Exactly T−3m
                 </span>
                 <p>
                   Each candidate is evaluated for a matching <strong>5m, 10m, 15m, 20m, 25m or 30m entry candle</strong>. The signal must use a fully closed M1 decision bar exactly three minutes before that candle opens; expiry is measured on the matching horizon and exact expiry minute.
@@ -1362,7 +1363,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               </div>
               <div className="flex justify-between items-center">
                 <span className="font-bold text-white">
-                  {selectedSignal.strategyName || '5-Min Momentum Breakout'}
+                  {selectedSignal.strategyName || 'Unclassified historical signal'}
                 </span>
                 <span className="text-emerald-400 font-bold">
                   {selectedSignal.paperOnly ? 'PAPER ONLY · NOT APPROVED' : (selectedSignal.strategyEvidenceStatus === 'BACKTESTED' && typeof selectedSignal.strategyWinRate === 'number' ? `${selectedSignal.strategyWinRate.toFixed(1)}% Historical test WR · n=${selectedSignal.strategyHistoricalSampleSize || 0}` : 'Historical result not validated')}
