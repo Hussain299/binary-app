@@ -13,6 +13,7 @@ import { researchEngine } from './researchEngine.js';
 import { autonomousScheduler } from './scheduler.js';
 import { runAllVerificationTests } from './tests.js';
 import { historicalDataStore } from './historicalData.js';
+import { genomeSpeciesKey } from './evolutionEngine.js';
 
 interface StrategySearchJob {
   jobId: string;
@@ -44,6 +45,53 @@ interface StrategySearchJob {
     testBlockWinRates: number[];
     reason?: string;
   }>;
+}
+
+function summarizeEvolutionSubGenerations(genes: Array<{
+  generation: number;
+  mutationRate: number;
+  genome?: any;
+  discoveryMetrics?: {
+    trainScoredTrades: number;
+    validationScoredTrades: number;
+    validationWinRate: number;
+    validationExpectedValueUnits: number;
+    validationProfitFactor: number;
+    minimumPayoutPct: number;
+  };
+}>): import('../types/index.js').EvolutionSubGenerationMetrics[] {
+  const groups = new Map<number, typeof genes>();
+  for (const gene of genes) {
+    if (!groups.has(gene.generation)) groups.set(gene.generation, []);
+    groups.get(gene.generation)!.push(gene);
+  }
+  return [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([generation, population]) => {
+    const qualified = population.filter(gene => {
+      const metrics = gene.discoveryMetrics;
+      return !!metrics &&
+        metrics.trainScoredTrades >= 150 &&
+        metrics.validationScoredTrades >= 150 &&
+        metrics.validationWinRate >= 0.70 &&
+        metrics.validationExpectedValueUnits > 0 &&
+        metrics.validationProfitFactor >= 1.15 &&
+        metrics.minimumPayoutPct >= 80;
+    });
+    return {
+      generation,
+      candidateCount: population.length,
+      qualifiedParentCount: qualified.length,
+      distinctSpecies: new Set(qualified.map(gene => genomeSpeciesKey(gene.genome))).size,
+      bestValidationExpectedValueUnits: Math.max(0, ...population.map(gene =>
+        gene.discoveryMetrics?.validationExpectedValueUnits ?? 0
+      )),
+      bestValidationWinRate: Math.max(0, ...population.map(gene =>
+        gene.discoveryMetrics?.validationWinRate ?? 0
+      )),
+      meanMutationRate: population.length
+        ? Number((population.reduce((sum, gene) => sum + gene.mutationRate, 0) / population.length).toFixed(3))
+        : 0,
+    };
+  });
 }
 
 const strategySearchJobs = new Map<string, StrategySearchJob>();
@@ -366,6 +414,7 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
         symbol,
         bestValidationExpectedValueUnits: bestValidation?.discoveryMetrics?.validationExpectedValueUnits ?? 0,
         holdoutPeriod: consumedHoldout ? { start: consumedHoldout.startUtc, end: consumedHoldout.endUtc } : undefined,
+        subGenerations: summarizeEvolutionSubGenerations(results),
       };
       db.addGeneration(batchRecord);
     }).catch(error => {
@@ -400,6 +449,9 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
           holdoutPeriod: consumedHoldout
             ? { start: consumedHoldout.startUtc, end: consumedHoldout.endUtc }
             : undefined,
+          subGenerations: summarizeEvolutionSubGenerations(
+            db.getSynthesizedStrategies().filter(gene => gene.searchBatchId === jobId)
+          ),
         };
         db.addGeneration(failedRecord);
       }
