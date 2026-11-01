@@ -574,8 +574,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs text-neutral-300 font-medium transition-colors"
           >
             <Brain className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="hidden sm:inline">What AI Learns</span>
-            <span className="sm:hidden">AI Brain</span>
+            <span className="hidden sm:inline">Evolution State</span>
+            <span className="sm:hidden">Learning</span>
           </button>
 
           <button
@@ -934,7 +934,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           >
             <div className="flex items-center gap-2">
               <Activity className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Live AI Brain Background Activity ({autopilotLogs.length} events)</span>
+              <span>Research Engine Activity ({autopilotLogs.length} events)</span>
             </div>
             {showLogsAccordion ? (
               <ChevronUp className="w-4 h-4 text-neutral-500" />
@@ -957,7 +957,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <div className="flex justify-between items-center pb-3 border-b border-neutral-800">
               <div className="flex items-center gap-2">
                 <Brain className="w-6 h-6 text-emerald-400" />
-                <h3 className="text-lg font-bold text-white">What The AI Is Learning</h3>
+                <h3 className="text-lg font-bold text-white">Evolution & Learning State</h3>
               </div>
               <button
                 onClick={() => setShowLearningModal(false)}
