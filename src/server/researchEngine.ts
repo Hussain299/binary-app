@@ -168,11 +168,6 @@ export class ResearchEngine {
     generation: number,
     options: { allowTestFixtures?: boolean } = {}
   ): ResearchExperiment {
-    // Production access to this legacy single-rule model is disabled because it
-    // cannot reserve a unique holdout. It remains available only to isolated tests.
-    if (!options.allowTestFixtures) {
-      throw new Error('Legacy single-rule walk-forward experiments are disabled. Use the registered 300-candidate evolutionary batch with one-time holdout reservation.');
-    }
     if (![5, 10, 15, 20, 25, 30].includes(horizonMinutes)) {
       throw new Error('Supported research horizons are 5, 10, 15, 20, 25 and 30 minutes.');
     }
@@ -181,6 +176,12 @@ export class ResearchEngine {
     }
     if (!candles.every(c => Number.isFinite(c.timestampMs) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close))) {
       throw new Error('Historical dataset contains invalid candle values.');
+    }
+
+    // Only after validating input eligibility do we reject production use of
+    // this legacy endpoint. Isolated test fixtures may exercise its calculations.
+    if (!options.allowTestFixtures) {
+      throw new Error('Legacy single-rule walk-forward experiments are disabled. Use the registered 300-candidate evolutionary batch with one-time holdout reservation.');
     }
 
     const minuteSteps = candles.slice(1).filter((c, i) =>
