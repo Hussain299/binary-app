@@ -20,7 +20,7 @@ import {
 } from '../types/index.js';
 import { db } from './db.js';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
-import { selectEvolutionParents } from './evolutionEngine.js';
+import { calculateAdaptiveMutationRate, selectEvolutionParents } from './evolutionEngine.js';
 import { ADVANCE_NOTICE_MS, M1_CANDLE_MS, getNextCandleOpenMs, TradingTimeframeMinutes } from './tradingClock.js';
 
 type StrategyHorizon = 5 | 10 | 15 | 20 | 25 | 30;
@@ -887,32 +887,78 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     };
   }
 
-  private mutateGenomeExpression(node: StrategyExpressionNode, depth = 2): StrategyExpressionNode {
-    if (depth <= 0 || Math.random() < 0.24) return this.randomGenomeExpression(2);
+  private mutateGenomeExpression(
+    node: StrategyExpressionNode,
+    depth = 2,
+    requestedMutationRate = 0.20
+  ): StrategyExpressionNode {
+    const mutationRate = Math.max(0.05, Math.min(0.45, requestedMutationRate));
+    const replaceSubtreeRate = mutationRate * 0.30;
+    if (depth <= 0) {
+      return Math.random() < mutationRate
+        ? this.randomGenomeExpression(2)
+        : node;
+    }
+    if (Math.random() < replaceSubtreeRate) {
+      return this.randomGenomeExpression(2);
+    }
     if (node.kind === 'feature') {
-      return Math.random() < 0.5
-        ? { kind: 'feature', feature: this.genomeFeatures[Math.floor(Math.random() * this.genomeFeatures.length)] }
-        : { kind: 'unary', operator: 'signed_power', exponent: Number((0.7 + Math.random() * 1.4).toFixed(2)), input: node };
+      if (Math.random() < mutationRate) {
+        const alternatives = this.genomeFeatures.filter(feature => feature !== node.feature);
+        return {
+          kind: 'feature',
+          feature: alternatives[Math.floor(Math.random() * alternatives.length)] || node.feature,
+        };
+      }
+      if (Math.random() < mutationRate * 0.35) {
+        return {
+          kind: 'unary',
+          operator: 'signed_power',
+          exponent: Number((0.7 + Math.random() * 1.4).toFixed(2)),
+          input: node,
+        };
+      }
+      return node;
     }
     if (node.kind === 'constant') {
-      return { kind: 'constant', value: Number((node.value + (Math.random() - 0.5) * 0.8).toFixed(3)) };
+      if (Math.random() >= mutationRate) return node;
+      return {
+        kind: 'constant',
+        value: Number(Math.max(-2, Math.min(2, node.value + (Math.random() - 0.5) * 0.8)).toFixed(3)),
+      };
     }
     if (node.kind === 'unary') {
       const operators = ['tanh', 'abs', 'signed_power', 'log_abs', 'sin', 'cos', 'sqrt_abs', 'negate'] as const;
+      const operator = Math.random() < mutationRate
+        ? (operators.filter(item => item !== node.operator)[Math.floor(Math.random() * (operators.length - 1))] || node.operator)
+        : node.operator;
+      const exponent = Math.random() < mutationRate
+        ? Number((0.7 + Math.random() * 1.4).toFixed(2))
+        : node.exponent;
       return {
         ...node,
-        operator: Math.random() < 0.35 ? operators[Math.floor(Math.random() * operators.length)] : node.operator,
-        exponent: Number((0.7 + Math.random() * 1.4).toFixed(2)),
-        input: this.mutateGenomeExpression(node.input, depth - 1),
+        operator,
+        exponent,
+        input: this.mutateGenomeExpression(node.input, depth - 1, mutationRate),
       };
     }
+
     const operators = ['add', 'subtract', 'multiply', 'protected_divide', 'max', 'min', 'hypot', 'atan2'] as const;
-    const mutateLeft = Math.random() < 0.5;
+    const operator = Math.random() < mutationRate
+      ? (operators.filter(item => item !== node.operator)[Math.floor(Math.random() * (operators.length - 1))] || node.operator)
+      : node.operator;
+    const mutateBoth = Math.random() < mutationRate * 0.25;
+    const mutateLeft = mutateBoth || Math.random() < 0.5;
+    const mutateRight = mutateBoth || !mutateLeft;
     return {
       ...node,
-      operator: Math.random() < 0.35 ? operators[Math.floor(Math.random() * operators.length)] : node.operator,
-      left: mutateLeft ? this.mutateGenomeExpression(node.left, depth - 1) : node.left,
-      right: mutateLeft ? node.right : this.mutateGenomeExpression(node.right, depth - 1),
+      operator,
+      left: mutateLeft
+        ? this.mutateGenomeExpression(node.left, depth - 1, mutationRate)
+        : node.left,
+      right: mutateRight
+        ? this.mutateGenomeExpression(node.right, depth - 1, mutationRate)
+        : node.right,
     };
   }
 
@@ -1226,7 +1272,11 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       validationExpectedValueUnits: number;
       validationProfitFactor: number;
     }> = [];
-    const signatures = new Set<string>();
+    const signatures = new Set<string>(
+      db.getSynthesizedStrategies()
+        .map(gene => gene.genome?.signature)
+        .filter((signature): signature is string => !!signature)
+    );
     let insufficientSample = 0;
     let rejected = 0;
 
@@ -1358,11 +1408,13 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       parentPool || db.getSynthesizedStrategies(),
       30
     );
+    const mutationRate = calculateAdaptiveMutationRate(eligibleParents);
     const parentA = eligibleParents.length
       ? eligibleParents[Math.floor(Math.random() * eligibleParents.length)]
       : undefined;
-    const parentB = eligibleParents.length > 1
-      ? eligibleParents[Math.floor(Math.random() * eligibleParents.length)]
+    const remainingParents = eligibleParents.filter(gene => gene.id !== parentA?.id);
+    const parentB = remainingParents.length
+      ? remainingParents[Math.floor(Math.random() * remainingParents.length)]
       : undefined;
 
     let expression: StrategyExpressionNode;
@@ -1374,11 +1426,12 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
         left: JSON.parse(JSON.stringify(parentA.genome.expression)) as StrategyExpressionNode,
         right: JSON.parse(JSON.stringify(parentB.genome.expression)) as StrategyExpressionNode,
       };
-      expression = this.mutateGenomeExpression(expression, 2);
+      expression = this.mutateGenomeExpression(expression, 2, mutationRate);
     } else if (parentA?.genome) {
       expression = this.mutateGenomeExpression(
         JSON.parse(JSON.stringify(parentA.genome.expression)) as StrategyExpressionNode,
-        3
+        3,
+        mutationRate
       );
     } else {
       expression = this.randomGenomeExpression(3);
@@ -1421,7 +1474,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       generation,
       mathematicalFormula: formula,
       parents: parents.length ? parents : ['Random symbolic seed'],
-      mutationRate: Number((0.08 + Math.random() * 0.22).toFixed(3)),
+      mutationRate,
       nonLinearOperator: operator,
       operatorParameters: {
         alpha: 1,
