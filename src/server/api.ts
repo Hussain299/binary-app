@@ -281,6 +281,7 @@ apiRouter.get('/evolution/state', (_req: Request, res: Response) => {
       futureOutcomesExcluded: true,
     },
     regimes: db.getMarketRegimes(),
+    researchCoordinator: autonomousScheduler.getEvolutionResearchState(),
     strategies,
   });
 });
