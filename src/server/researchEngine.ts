@@ -1291,11 +1291,10 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       row.candle.timestampMs < data.validationEndMs
     );
 
-    // Freeze parents before this run. Only train/validation evidence may
-    // influence generation and finalist selection; the final test stays sealed.
-    // Parent selection is validation-only. Never read prior holdout results here:
-    // repeated generations must not adapt to the supposedly untouched test period.
-    const parentPool = selectEvolutionParents(db.getSynthesizedStrategies(), 30);
+    // Initial parents come only from discovery train/validation records and
+    // sufficiently mature forward-paper evidence. The holdout is never read.
+    const initialParentPool = selectEvolutionParents(db.getSynthesizedStrategies(), 30);
+    let currentParentPool = initialParentPool;
 
     const candidates: Array<{
       gene: SynthesizedStrategyGene;
@@ -1314,16 +1313,32 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     let insufficientSample = 0;
     let rejected = 0;
 
-    // Stage 1: search and rank all 300 expressions on discovery data only.
-    // No candidate is evaluated on the untouched final test in this loop.
-    for (let i = 0; i < 300; i++) {
+    // Stage 1: run ten actual genetic generations of 30 individuals each.
+    // Each generation is evaluated only on train/validation. Qualified survivors
+    // from that generation become the next generation's parents. The final test
+    // remains sealed until all 300 candidates and their finalists are frozen.
+    const POPULATION_SIZE = 30;
+    const GENERATION_COUNT = 10;
+    for (let i = 0; i < POPULATION_SIZE * GENERATION_COUNT; i++) {
+      if (i > 0 && i % POPULATION_SIZE === 0) {
+        const priorGeneration = candidates.slice(i - POPULATION_SIZE, i).map(item => item.gene);
+        const evolvedParents = selectEvolutionParents(
+          [...initialParentPool, ...priorGeneration],
+          30
+        );
+        // If the immediately prior generation has not yet discovered at least
+        // two robust parents, preserve the previous validated population.
+        if (evolvedParents.length >= 2) currentParentPool = evolvedParents;
+      }
+
+      const generation = baseGeneration + Math.floor(i / POPULATION_SIZE);
       let gene = this.synthesizeInfiniteNovelStrategy(
-        candles, symbol, baseGeneration + i, parentPool, searchBatchId, false
+        candles, symbol, generation, currentParentPool, searchBatchId, false
       );
       let attempts = 0;
       while (signatures.has(gene.genome?.signature || '') && attempts < 20) {
         gene = this.synthesizeInfiniteNovelStrategy(
-          candles, symbol, baseGeneration + 300 + i + attempts, parentPool, searchBatchId, false
+          candles, symbol, generation, currentParentPool, searchBatchId, false
         );
         attempts++;
       }
