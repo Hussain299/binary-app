@@ -22,6 +22,7 @@ import {
   calculateAdaptiveMutationRate,
   genomeSpeciesKey,
   hasSufficientForwardParentEvidence,
+  hasSufficientHistoricalApprovalEvidence,
   evolutionaryParentFitness,
   doesResearchHoldoutOverlap,
 } from './evolutionEngine.js';
@@ -201,6 +202,44 @@ export async function runAllVerificationTests(): Promise<{
     }
     if (strict.shouldTrigger) {
       throw new Error('The 0.70 genome threshold should reject the same activation score.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Historical promotion gate is payout-aware and confidence-adjusted', () => {
+    const evidence = {
+      sampleCount: 300,
+      testScoredSampleSize: 300,
+      trainScoredSampleSize: 180,
+      validationScoredSampleSize: 180,
+      trainWinRate: 0.64,
+      validationWinRate: 0.67,
+      testWinRate: 0.67,
+      testBlockWinRates: [0.62, 0.67, 0.72],
+      binaryPayoutPct: 80,
+      expectedValueUnits: 0.206,
+      profitFactor: 1.20,
+      confidenceInterval95: [0.61, 0.72] as [number, number],
+      multipleTestingLowerBound: 0.58,
+    };
+    if (!hasSufficientHistoricalApprovalEvidence(evidence, 'BACKTESTED', 300)) {
+      throw new Error('A payout-positive sample whose multiplicity-adjusted lower bound clears break-even should qualify for paper testing.');
+    }
+    if (hasSufficientHistoricalApprovalEvidence(
+      { ...evidence, multipleTestingLowerBound: 0.54 },
+      'BACKTESTED',
+      300
+    )) {
+      throw new Error('A sample whose multiplicity-adjusted lower bound does not clear payout break-even must be rejected.');
+    }
+    if (hasSufficientHistoricalApprovalEvidence(
+      { ...evidence, binaryPayoutPct: 79 },
+      'BACKTESTED',
+      300
+    )) {
+      throw new Error('Historical approval must enforce the permanent 80% minimum payout floor.');
+    }
+    if (hasSufficientHistoricalApprovalEvidence(evidence, 'UNVALIDATED', 300)) {
+      throw new Error('Candidates must never receive a historical approval from metrics without BACKTESTED status.');
     }
   });
 
