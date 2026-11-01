@@ -673,16 +673,45 @@ export class OpportunityEngine {
 
   public reviseDirection(
     opportunity: TradeOpportunity,
-    direction: "BUY" | "SELL"
+    direction: "BUY" | "SELL",
+    requestedEntryPrice = opportunity.proposedEntryPrice
   ): TradeOpportunity {
     if (opportunity.forecast.status !== "AVAILABLE" || opportunity.forecast.terminalPrices.length < MIN_ANALOGUES_FOR_SHORTLIST) {
       throw new Error("This opportunity has fewer than the required 100 historical paths to recalculate a direction safely.");
     }
-    const wins = opportunity.forecast.terminalPrices.filter(price =>
-      direction === "BUY" ? price > opportunity.proposedEntryPrice : price < opportunity.proposedEntryPrice
+    const isJpy = opportunity.symbol.includes("JPY");
+    const tickSize = isJpy ? 0.001 : 0.00001;
+    const averageRecentRange = opportunity.recentPriceHistory.length
+      ? opportunity.recentPriceHistory.reduce((sum, candle) => sum + (candle.high - candle.low), 0) /
+        opportunity.recentPriceHistory.length
+      : tickSize;
+    const maxEntryAdjustment = Math.max(3 * averageRecentRange, 3 * tickSize);
+    if (
+      !Number.isFinite(requestedEntryPrice) ||
+      requestedEntryPrice <= 0 ||
+      Math.abs(requestedEntryPrice - opportunity.proposedEntryPrice) > maxEntryAdjustment
+    ) {
+      throw new Error("The manual entry reference must be within three recent average M1 ranges of the original snapshot price.");
+    }
+
+    // Shift the complete analogue distribution by the manual entry adjustment.
+    // The observed path shape is retained; this is a scenario revision, not a fresh quote.
+    const priceShift = requestedEntryPrice - opportunity.proposedEntryPrice;
+    const terminalPrices = opportunity.forecast.terminalPrices.map(price => price + priceShift);
+    const shiftedPoints = opportunity.forecast.points.map(point => ({
+      ...point,
+      q10: point.q10 + priceShift,
+      q25: point.q25 + priceShift,
+      median: point.median + priceShift,
+      q75: point.q75 + priceShift,
+      q90: point.q90 + priceShift,
+    }));
+
+    const wins = terminalPrices.filter(price =>
+      direction === "BUY" ? price > requestedEntryPrice : price < requestedEntryPrice
     ).length;
-    const decisive = opportunity.forecast.terminalPrices.filter(price =>
-      Math.abs(price - opportunity.proposedEntryPrice) > 1e-12
+    const decisive = terminalPrices.filter(price =>
+      Math.abs(price - requestedEntryPrice) > 1e-12
     ).length;
     const winRate = decisive ? wins / decisive : null;
     const lower = decisive >= MIN_ANALOGUES_FOR_SHORTLIST ? wilson(wins, decisive) : null;
@@ -699,6 +728,7 @@ export class OpportunityEngine {
     const activationGate = Math.abs(opportunity.rawHypothesisScore) >= opportunity.activationThreshold;
     const counterEvidence = [
       "Human direction override: this is a revised hypothesis, not the original model recommendation.",
+      "A manual entry adjustment shifts the analogue path distribution; it is not a new executable market quote.",
     ];
     const reasons = lower === null
       ? ["Fewer than 100 decisive historical analogue outcomes remain after excluding ties."]
@@ -707,20 +737,20 @@ export class OpportunityEngine {
         : !activationGate
           ? ["The original hypothesis activation score did not clear its threshold; a direction override cannot manufacture a setup."]
           : lower > breakEven
-            ? ["Human-modified direction clears the historical analogue lower-bound check; it still requires paper-forward validation."]
-            : ["The human-modified direction does not clear the payout-adjusted conservative lower-bound check."];
+            ? ["Human-modified direction and entry reference clear the historical analogue lower-bound check; paper-forward validation is still required."]
+            : ["The human-modified scenario does not clear the payout-adjusted conservative lower-bound check."];
     const status: OpportunityAudit["status"] = lower === null
       ? "INSUFFICIENT_EVIDENCE"
       : dataAndSimilarityGate && activationGate && lower > breakEven
         ? "SHORTLISTED"
         : "REJECTED";
     const revisedAt = new Date().toISOString();
-    const id = `opp_rev_${stableHash(opportunity.id + "|" + direction + "|" + revisedAt).slice(0, 16)}`;
+    const id = `opp_rev_${stableHash(opportunity.id + "|" + direction + "|" + requestedEntryPrice.toPrecision(12) + "|" + revisedAt).slice(0, 16)}`;
     return {
       ...opportunity,
       id,
-      batchId: opportunity.batchId,
       direction,
+      proposedEntryPrice: requestedEntryPrice,
       generatedAt: revisedAt,
       staleAfter: opportunity.staleAfter,
       rawHypothesisScore: direction === "BUY"
@@ -728,6 +758,8 @@ export class OpportunityEngine {
         : -Math.abs(opportunity.rawHypothesisScore),
       forecast: {
         ...opportunity.forecast,
+        points: shiftedPoints,
+        terminalPrices,
         analogueCount: decisive,
         winRate: winRate === null ? null : Number(winRate.toFixed(4)),
         lowerConfidenceBound: lower === null ? null : Number(lower.toFixed(4)),
@@ -744,9 +776,11 @@ export class OpportunityEngine {
         status: "PENDING",
         decidedAt: revisedAt,
         parentOpportunityId: opportunity.id,
+        direction,
+        horizonMinutes: opportunity.horizonMinutes,
+        entryPrice: requestedEntryPrice,
       },
     };
-  }
-}
+  }}
 
 export const opportunityEngine = new OpportunityEngine();
