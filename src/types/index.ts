@@ -183,6 +183,11 @@ export interface OpportunityForecast {
 export interface OpportunityAudit {
   status: OpportunityAuditStatus;
   rankScore: number;
+  /** Later chronological holdout metrics; separated from the analogue library used for the graph. */
+  holdoutSampleSize: number;
+  holdoutWinRate: number | null;
+  holdoutLowerConfidenceBound: number | null;
+  holdoutExpectedValueLowerBound: number | null;
   reasons: string[];
   counterEvidence: string[];
   auditedAt: string;
