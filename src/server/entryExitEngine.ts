@@ -34,6 +34,7 @@ export interface SignalCreationParams {
   strategyWinRate?: number;
   strategyHistoricalSampleSize?: number;
   strategyEvidenceStatus?: 'UNVALIDATED' | 'INSUFFICIENT_SAMPLE' | 'BACKTESTED';
+  strategyForwardApproved?: boolean;
   strategyId?: string;
   candleOpenTimeUtc?: string;
   candleCloseTimeUtc?: string;
@@ -255,6 +256,7 @@ export class EntryExitEngine {
       strategyWinRate: defaultWinRate,
       strategyHistoricalSampleSize: params.strategyHistoricalSampleSize,
       strategyEvidenceStatus: params.strategyEvidenceStatus,
+      strategyForwardApproved: params.strategyForwardApproved ?? false,
       strategyId: params.strategyId || `rule:${params.ruleFamily}`,
       advanceNoticeMinutes: 3,
       candleOpenTimeUtc,
