@@ -963,7 +963,8 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
   }
 
   private geneSession(candle: Candle): MarketSessionId {
-    const hour = new Date(candle.timestampMs).getUTCHours();
+    // The signal is decided when this M1 candle closes, not when it opens.
+    const hour = new Date(candle.timestampMs + M1_CANDLE_MS).getUTCHours();
     if (hour >= 12 && hour < 16) return 'OVERLAP';
     if (hour >= 7 && hour < 12) return 'LONDON';
     if (hour >= 16 && hour < 21) return 'NEW_YORK';
