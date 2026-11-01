@@ -988,8 +988,9 @@ export async function runLearningPlatformVerificationTests(): Promise<Verificati
 
   await run('captures an immutable fresh T-3 snapshot exactly once', () => {
     const service = new LearningPlatformService(memoryAdapter());
-    const now = 1_800_000_000_000;
-    const opportunity = makeOpportunity(now - 1_000);
+    const snapshotMs = 1_800_000_000_000;
+    const now = snapshotMs + 1_000;
+    const opportunity = makeOpportunity(snapshotMs);
     const first = service.captureApprovedOpportunities([opportunity], now);
     opportunity.direction = 'SELL';
     const second = service.captureApprovedOpportunities([opportunity], now);
@@ -1000,8 +1001,9 @@ export async function runLearningPlatformVerificationTests(): Promise<Verificati
 
   await run('settles only from the exact complete trusted M1 window', () => {
     const service = new LearningPlatformService(memoryAdapter());
-    const now = 1_800_000_000_000;
-    const opportunity = makeOpportunity(now - 1_000);
+    const snapshotMs = 1_800_000_000_000;
+    const now = snapshotMs + 1_000;
+    const opportunity = makeOpportunity(snapshotMs);
     service.captureApprovedOpportunities([opportunity], now);
     const entryMs = Date.parse(opportunity.entryTimeUtc);
     const expiryMs = Date.parse(opportunity.expiryTimeUtc);
@@ -1031,8 +1033,9 @@ export async function runLearningPlatformVerificationTests(): Promise<Verificati
 
   await run('does not fill a missing minute from a later candle', () => {
     const service = new LearningPlatformService(memoryAdapter());
-    const now = 1_800_000_000_000;
-    const opportunity = makeOpportunity(now - 1_000);
+    const snapshotMs = 1_800_000_000_000;
+    const now = snapshotMs + 1_000;
+    const opportunity = makeOpportunity(snapshotMs);
     service.captureApprovedOpportunities([opportunity], now);
     const entryMs = Date.parse(opportunity.entryTimeUtc);
     const expiryMs = Date.parse(opportunity.expiryTimeUtc);
@@ -1058,7 +1061,7 @@ export async function runLearningPlatformVerificationTests(): Promise<Verificati
   });
 
   await run('rejects synthetic/test candles as outcome evidence', () => {
-    const opportunity = makeOpportunity(1_800_000_000_000 - 1_000);
+    const opportunity = makeOpportunity(1_800_000_000_000);
     const entryMs = Date.parse(opportunity.entryTimeUtc);
     const expiryMs = Date.parse(opportunity.expiryTimeUtc);
     const candles: Candle[] = Array.from({ length: 5 }, (_, index) => {
