@@ -135,6 +135,27 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
+  await runTest('ML', 'First-generation genomes have real empty lineage and no inert coefficients', () => {
+    const gene = researchEngine.synthesizeInfiniteNovelStrategy(
+      [],
+      'EUR/USD',
+      1,
+      [],
+      'test-first-generation',
+      false
+    );
+    if (!gene.genome) throw new Error('A new candidate must contain an executable symbolic genome.');
+    if (gene.parents.length !== 0) {
+      throw new Error('A first-generation genome must not claim a fictional parent.');
+    }
+    if (gene.operatorParameters !== undefined || gene.nonLinearOperator !== undefined) {
+      throw new Error('New symbolic genomes must not carry inactive legacy coefficients or operator labels.');
+    }
+    if (gene.accuracyStatus !== 'UNVALIDATED' || gene.verifiedAccuracy !== 0 || gene.sampleCount !== 0) {
+      throw new Error('A newly generated genome must have no accuracy claim or test sample.');
+    }
+  });
+
   await runTest('ML', 'Each genome controls its own inherited activation threshold', () => {
     const candles = makeM1TestCandles('EUR/USD', 120);
     const candle = candles[candles.length - 1];
