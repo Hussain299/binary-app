@@ -30,6 +30,7 @@ export interface MarketRegimeSnapshot extends RegimeAssessment {
 }
 
 export interface EvolutionParentCandidate {
+  id: string;
   genome?: StrategyGenome;
   discoveryMetrics?: StrategyDiscoveryMetrics;
 }
