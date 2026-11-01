@@ -65,6 +65,16 @@ export class AutonomousScheduler {
   };
   private currentGeneration = 1;
   private cycleCount = 0;
+  private lastPulseStartedAt: string | null = null;
+  private lastPulseCompletedAt: string | null = null;
+  private lastPulseTriggerSource: string | null = null;
+  private lastPulseSkippedReason: string | null = null;
+  private lastPulseError: string | null = null;
+  private lastPulseResult: { durationMs: number; pairsProcessed: number; signalsCreated: number; signalsUpdated: number } | null = null;
+  private lastPairDiagnostics: Array<{
+    symbol: ForexSymbol; source: string; freshFeed: boolean; newestCandleAt: string | null;
+    ageSeconds: number | null; candleCount: number; eligibleTimeframes: number[]; result: string;
+  }> = [];
 
   constructor() {
     const existingGens = db.getGenerations();
@@ -128,6 +138,43 @@ export class AutonomousScheduler {
     }
     this.nextResearchScanAt = null;
     this.logMind('MIND', 'Autonomous market and research schedulers paused. Any already-running research batch is allowed to finish safely.');
+  }
+
+  public getAutopilotStatus() {
+    const now = new Date();
+    const market = getForexMarketState(now);
+    const openSignals = db.getOpenSignals();
+    const awaitingSettlement = db.getSignalsAwaitingSettlement();
+    const eligibleStrategies = db.getPaperTradingStrategies();
+    const reasonCounts = new Map<string, number>();
+    for (const item of this.lastPairDiagnostics) {
+      reasonCounts.set(item.result, (reasonCounts.get(item.result) || 0) + 1);
+    }
+    return {
+      schedulerStarted: !!this.autopilotTimer,
+      warmupPending: !!this.autopilotWarmupTimer,
+      cycleRunning: this.isRunningCycle,
+      market,
+      pulseIntervalSeconds: this.autopilotIntervalMs / 1000,
+      lastPulseStartedAt: this.lastPulseStartedAt,
+      lastPulseCompletedAt: this.lastPulseCompletedAt,
+      lastPulseTriggerSource: this.lastPulseTriggerSource,
+      lastPulseSkippedReason: this.lastPulseSkippedReason,
+      lastPulseError: this.lastPulseError,
+      lastPulseResult: this.lastPulseResult,
+      openSignalsCount: openSignals.length,
+      verifyingSignalsCount: awaitingSettlement.length,
+      unresolvedSignalsCount: openSignals.length + awaitingSettlement.length,
+      maxConcurrentOpenSignals: 4,
+      availableOpenSlots: Math.max(0, 4 - openSignals.length),
+      paperStrategiesEligible: eligibleStrategies.length,
+      promotedStrategies: eligibleStrategies.filter(item => item.status === 'PROMOTED_ACTIVE').length,
+      freshPairs: this.lastPairDiagnostics.filter(item => item.freshFeed).length,
+      pairsScanned: this.lastPairDiagnostics.length,
+      blockedPairReasons: [...reasonCounts.entries()].map(([reason, count]) => ({ reason, count })),
+      pairDiagnostics: this.lastPairDiagnostics,
+      checkedAt: now.toISOString(),
+    };
   }
 
   public getEvolutionResearchState() {
@@ -402,6 +449,11 @@ export class AutonomousScheduler {
     experimentsRun: number;
     topExperiment: ResearchExperiment | null;
   }> {
+    const pulseNow = new Date();
+    this.lastPulseStartedAt = pulseNow.toISOString();
+    this.lastPulseTriggerSource = triggerSource;
+    this.lastPulseSkippedReason = null;
+    this.lastPulseError = null;
     const cancelledSignals = entryExitEngine.cancelSignalsOutsideForexWeek();
     if (cancelledSignals.length > 0) {
       this.logMind(
@@ -412,6 +464,10 @@ export class AutonomousScheduler {
     const marketState = getForexMarketState(Date.now());
     if (!marketState.isOpen) {
       // Do not fetch feeds, evaluate pending contracts, or create signals outside the FX week.
+      this.lastPulseSkippedReason = 'FOREX_MARKET_CLOSED';
+      this.lastPulseCompletedAt = new Date().toISOString();
+      this.lastPulseResult = { durationMs: 0, pairsProcessed: 0, signalsCreated: 0, signalsUpdated: 0 };
+      this.lastPairDiagnostics = [];
       return {
         durationMs: 0,
         pairsProcessed: 0,
@@ -423,6 +479,7 @@ export class AutonomousScheduler {
     }
 
     if (this.isRunningCycle) {
+      this.lastPulseSkippedReason = 'PREVIOUS_PULSE_STILL_RUNNING';
       return {
         durationMs: 0,
         pairsProcessed: 0,
@@ -442,6 +499,10 @@ export class AutonomousScheduler {
       const freshCandlesMap: Record<ForexSymbol, Candle[]> = {} as any;
       const trustedSources = new Set(['biquote', 'dukascopy', 'yahoo', 'imported']);
       let totalCandlesFetched = 0;
+      const pairDiagnostics: Array<{
+        symbol: ForexSymbol; source: string; freshFeed: boolean; newestCandleAt: string | null;
+        ageSeconds: number | null; candleCount: number; eligibleTimeframes: number[]; result: string;
+      }> = [];
 
       // 1. Autonomous market sensing. Keep two deliberately separate views:
       // - freshCandlesMap gates new hypotheses and entries;
@@ -449,6 +510,12 @@ export class AutonomousScheduler {
       //   entry/expiry reconciliation after feed gaps, app restarts, or weekends.
       for (const symbol of FOREX_PAIRS) {
         freshCandlesMap[symbol] = [];
+        const pairDiagnostic = {
+          symbol, source: 'none', freshFeed: false, newestCandleAt: null as string | null,
+          ageSeconds: null as number | null, candleCount: 0, eligibleTimeframes: [] as number[],
+          result: 'FEED_NOT_CHECKED',
+        };
+        pairDiagnostics.push(pairDiagnostic);
         const readTrustedHistory = () => db.getCandles(symbol, 5000)
           .filter(c => trustedSources.has(c.source))
           .sort((a, b) => a.timestampMs - b.timestampMs);
@@ -465,6 +532,11 @@ export class AutonomousScheduler {
             ageMs >= -60_000 &&
             ageMs <= 120_000;
 
+          pairDiagnostic.source = res.source;
+          pairDiagnostic.newestCandleAt = newest?.timestamp || null;
+          pairDiagnostic.ageSeconds = newest ? Math.round(ageMs / 1000) : null;
+          pairDiagnostic.freshFeed = isRealFreshFeed;
+
           // fetchCandles persists its response; reload the bounded trusted archive
           // so outcome reconciliation can see the exact historic expiry minute.
           lifecycleCandlesMap[symbol] = readTrustedHistory();
@@ -472,7 +544,14 @@ export class AutonomousScheduler {
             ? res.candles.filter(c => trustedSources.has(c.source))
             : [];
           totalCandlesFetched += freshCandlesMap[symbol].length;
+          pairDiagnostic.candleCount = freshCandlesMap[symbol].length;
+          pairDiagnostic.result = !isRealFreshFeed
+            ? 'NO_FRESH_TRUSTED_M1_FEED'
+            : freshCandlesMap[symbol].length < 35
+              ? 'INSUFFICIENT_FRESH_M1_CANDLES'
+              : 'FRESH_FEED_READY';
         } catch (err: any) {
+          pairDiagnostic.result = 'FEED_FETCH_FAILED';
           console.error(`[Autopilot] Sensing failed for ${symbol}:`, err.message);
         }
       }
@@ -536,8 +615,11 @@ export class AutonomousScheduler {
       // 3. Evolved-genome paper discovery only. The shared trading clock and
       // signal factory enforce exactly T-3m and matching 5–30m entry/expiry.
       const createdSignals: any[] = [];
-      const currentActive = db.getActiveSignals();
+      // EXIT_PENDING contracts remain eligible for candle reconciliation but do
+      // not consume a new-entry slot once their scheduled expiry has passed.
+      const currentActive = db.getOpenSignals();
       const activeSymbols = new Set(currentActive.map(s => s.symbol));
+      const diagnosticBySymbol = new Map(pairDiagnostics.map(item => [item.symbol, item]));
       const activeSession = getSessionFromTimestamp(new Date());
 
       const nowMs = Date.now();
@@ -546,16 +628,24 @@ export class AutonomousScheduler {
       // for the selected 5/10/15/20/25/30-minute entry candle.
       if (currentActive.length + createdSignals.length < 4) {
         for (const symbol of FOREX_PAIRS) {
-          if (currentActive.length + createdSignals.length >= 4) break;
-          // Strict Pair Isolation: If this pair already has an active or pending signal, NEVER create another!
+          const pairDiagnostic = diagnosticBySymbol.get(symbol);
+          if (currentActive.length + createdSignals.length >= 4) {
+            if (pairDiagnostic) pairDiagnostic.result = 'GLOBAL_OPEN_SIGNAL_CAP_REACHED';
+            continue;
+          }
+          // Pair exclusivity applies only while an entry is waiting or a contract is open.
           if (activeSymbols.has(symbol)) {
+            if (pairDiagnostic) pairDiagnostic.result = 'PAIR_ALREADY_HAS_OPEN_SIGNAL';
             continue;
           }
 
           const candles = (freshCandlesMap[symbol] || []).filter(candle =>
             candle.source !== 'synthetic' && candle.timestampMs + 60_000 <= nowMs
           );
-          if (candles.length < 35) continue;
+          if (candles.length < 35) {
+            if (pairDiagnostic?.freshFeed) pairDiagnostic.result = 'INSUFFICIENT_FRESH_M1_CANDLES';
+            continue;
+          }
 
           const c = candles[candles.length - 1];
           const eligibleSchedules = findEligibleStartTimeframes(nowMs, c.timestampMs + 60_000)
@@ -563,7 +653,11 @@ export class AutonomousScheduler {
               schedule.entryTimeMs,
               schedule.entryTimeMs + schedule.timeframeMinutes * 60_000
             ));
-          if (eligibleSchedules.length === 0) continue;
+          if (pairDiagnostic) pairDiagnostic.eligibleTimeframes = eligibleSchedules.map(item => item.timeframeMinutes);
+          if (eligibleSchedules.length === 0) {
+            if (pairDiagnostic) pairDiagnostic.result = 'NO_T_MINUS_3_ENTRY_WINDOW';
+            continue;
+          }
           const prev = candles[candles.length - 2];
           // Technical indicators
           const closes = candles.map(k => k.close);
@@ -591,11 +685,23 @@ export class AutonomousScheduler {
             (gene.sessionAffinity === 'ALL' || gene.sessionAffinity === activeSession.id) &&
             eligibleTimeframeSet.has(gene.optimalHorizonMinutes)
           );
+          const pairHasCompatibleGene = promotedGenes.some(gene =>
+            (!gene.symbol || gene.symbol === symbol) &&
+            (gene.sessionAffinity === 'ALL' || gene.sessionAffinity === activeSession.id) &&
+            eligibleTimeframeSet.has(gene.optimalHorizonMinutes)
+          );
+          if (!pairHasCompatibleGene) {
+            if (pairDiagnostic) pairDiagnostic.result = 'NO_QUALIFIED_PAIR_SESSION_HORIZON_STRATEGY';
+            continue;
+          }
           const selectedEntryTimeframe = eligibleGene?.optimalHorizonMinutes ?? eligibleSchedules[0].timeframeMinutes;
           const selectedSchedule = eligibleSchedules.find(item =>
             item.timeframeMinutes === selectedEntryTimeframe
           );
           if (!selectedSchedule) continue;
+          let regimeRejected = false;
+          let memoryVetoed = false;
+          let strategyEvaluated = false;
           let novelGeneCandidate: {
             gene: typeof promotedGenes[0];
             direction: 'BUY' | 'SELL';
@@ -615,6 +721,7 @@ export class AutonomousScheduler {
             const geneStyle = inferGenomeStyle(gene.genome?.expression);
             const regimeGate = isStrategyRegimeCompatible(geneStyle, regimeAssessment.regime);
             if (!regimeGate.allowed) {
+              regimeRejected = true;
               this.logMind(
                 'AUDITOR',
                 '[REGIME GATE] Suppressed evolved candidate ' + gene.id + ': ' + regimeGate.reason +
@@ -625,6 +732,7 @@ export class AutonomousScheduler {
               );
               continue;
             }
+            strategyEvaluated = true;
             const evalResult = researchEngine.evaluateSynthesizedGeneSignal(
               gene,
               c,
@@ -643,6 +751,7 @@ export class AutonomousScheduler {
                 predictionTimeUtc: new Date().toISOString(),
               });
               if (memoryAssessment.veto) {
+                memoryVetoed = true;
                 this.logMind(
                   'AUDITOR',
                   '[EPISODIC MEMORY VETO] ' + symbol + ' ' + evalResult.direction +
@@ -705,12 +814,29 @@ export class AutonomousScheduler {
               symbol,
               signal.id
             );
+            if (pairDiagnostic) pairDiagnostic.result = 'SIGNAL_CREATED';
             break; // Single high-conviction signal per pulse
+          }
+
+          if (pairDiagnostic && pairDiagnostic.result === 'FRESH_FEED_READY') {
+            pairDiagnostic.result = memoryVetoed
+              ? 'EPISODIC_MEMORY_VETO'
+              : regimeRejected && !strategyEvaluated
+                ? 'REGIME_GATE_REJECTED'
+                : strategyEvaluated
+                  ? 'NO_STRATEGY_TRIGGER'
+                  : 'NO_ELIGIBLE_STRATEGY_TRIGGER';
           }
 
           // No hand-written fallback is permitted. If no evolved, historically
           // qualified genome triggers, the system abstains for this pair/window.
 
+        }
+      }
+
+      if (currentActive.length + createdSignals.length >= 4) {
+        for (const diagnostic of pairDiagnostics) {
+          if (diagnostic.result === 'FRESH_FEED_READY') diagnostic.result = 'GLOBAL_OPEN_SIGNAL_CAP_REACHED';
         }
       }
 
@@ -722,6 +848,14 @@ export class AutonomousScheduler {
       const topExp: ResearchExperiment | null = null;
 
       const durationMs = Date.now() - startTime;
+      this.lastPairDiagnostics = pairDiagnostics;
+      this.lastPulseCompletedAt = new Date().toISOString();
+      this.lastPulseResult = {
+        durationMs,
+        pairsProcessed: Object.keys(freshCandlesMap).length,
+        signalsCreated: createdSignals.length,
+        signalsUpdated: updatedSignals.length,
+      };
       db.logCronRun(
         durationMs,
         'SUCCESS',
@@ -738,6 +872,9 @@ export class AutonomousScheduler {
       };
     } catch (err: any) {
       const durationMs = Date.now() - startTime;
+      this.lastPulseError = err.message || String(err);
+      this.lastPulseCompletedAt = new Date().toISOString();
+      this.lastPulseResult = { durationMs, pairsProcessed: 0, signalsCreated: 0, signalsUpdated: 0 };
       db.logCronRun(durationMs, 'ERROR', `Autopilot pulse error: ${err.message}`);
       return {
         durationMs,
