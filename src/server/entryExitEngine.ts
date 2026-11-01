@@ -414,7 +414,7 @@ export class EntryExitEngine {
               timestamp: new Date().toISOString(),
               fromState: 'WAITING_FOR_ENTRY',
               toState: 'EXPIRED',
-              reason: `Exact 5M entry candle was unavailable at ${signal.candleOpenTimeUtc}; no late substitute entry was taken.`,
+              reason: `Exact ${signal.entryTimeframeMinutes ?? 5}M entry candle was unavailable at ${signal.candleOpenTimeUtc}; no late substitute entry was taken.`,
             });
             changed = true;
           }
