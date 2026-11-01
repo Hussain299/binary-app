@@ -13,7 +13,7 @@ import { researchEngine } from './researchEngine.js';
 import { autonomousScheduler } from './scheduler.js';
 import { runAllVerificationTests } from './tests.js';
 import { historicalDataStore } from './historicalData.js';
-import { binaryBreakEvenWinRate, genomeSpeciesKey, wilsonLowerBound } from './evolutionEngine.js';
+import { binaryBreakEvenWinRate, genomeSpeciesKey, hasSufficientForwardParentEvidence, wilsonLowerBound } from './evolutionEngine.js';
 
 interface StrategySearchJob {
   jobId: string;
@@ -62,13 +62,20 @@ function summarizeEvolutionSubGenerations(
           metrics.trainScoredTrades < 150 ||
           metrics.validationScoredTrades < 150 ||
           metrics.validationExpectedValueUnits <= 0 ||
-          metrics.validationProfitFactor < 1.15 ||
+          metrics.validationProfitFactor < 1.05 ||
           (metrics.minimumPayoutPct ?? 0) < 80) return false;
       const breakEven = binaryBreakEvenWinRate(metrics.minimumPayoutPct ?? 0);
-      return wilsonLowerBound(
-        metrics.validationWinRate * metrics.validationScoredTrades,
-        metrics.validationScoredTrades
-      ) > breakEven;
+      if (metrics.validationWinRate <= breakEven ||
+          wilsonLowerBound(
+            metrics.validationWinRate * metrics.validationScoredTrades,
+            metrics.validationScoredTrades
+          ) <= breakEven) return false;
+      // Match the real parent selector: small paper samples are non-decisive,
+      // but mature negative/uncertain forward evidence excludes reproduction.
+      if (gene.paperMetrics &&
+          gene.paperMetrics.scoredTrades >= 100 &&
+          !hasSufficientForwardParentEvidence(gene.paperMetrics)) return false;
+      return true;
     });
     return {
       generation,
