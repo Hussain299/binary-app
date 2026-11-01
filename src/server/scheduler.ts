@@ -397,6 +397,13 @@ export class AutonomousScheduler {
     experimentsRun: number;
     topExperiment: ResearchExperiment | null;
   }> {
+    const cancelledSignals = entryExitEngine.cancelSignalsOutsideForexWeek();
+    if (cancelledSignals.length > 0) {
+      this.logMind(
+        'AUDITOR',
+        `[MARKET HOURS CLEANUP] Cancelled ${cancelledSignals.length} legacy signal(s) with weekend-invalid decision/entry/expiry times. No outcomes were scored.`
+      );
+    }
     const marketState = getForexMarketState(Date.now());
     if (!marketState.isOpen) {
       // Do not fetch feeds, evaluate pending contracts, or create signals outside the FX week.
