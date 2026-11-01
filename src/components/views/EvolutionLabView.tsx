@@ -206,24 +206,10 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
       }
       if (snapshot.status === 'FAILED') throw new Error(snapshot.error || 'The strategy search failed.');
       await refreshGenerationHistory();
-      await refreshEvolutionCandidates();
     } catch (error: any) {
       setSearchError(error.message || 'The strategy search failed.');
     } finally {
       setIsSearchingBatch(false);
-    }
-  };
-
-  const refreshEvolutionCandidates = async () => {
-    try {
-      const response = await fetch('/api/strategies/synthesized');
-      const payload = await response.json();
-      if (response.ok && Array.isArray(payload.strategies)) {
-        // The table is driven by the stored strategy endpoint; a refresh causes
-        // the parent component to fetch its latest strategy records next render.
-      }
-    } catch {
-      // The generation record remains the durable source of completed batch history.
     }
   };
 
@@ -264,7 +250,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
           className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-emerald-950 bg-emerald-400 hover:bg-emerald-300 rounded transition-colors disabled:opacity-50"
         >
           <Sparkles className={`w-3.5 h-3.5 ${isRunning ? 'animate-spin' : ''}`} />
-          <span>{isRunning ? 'Running Research Cycle...' : 'Run Autonomous Research Cycle'}</span>
+          <span>{isRunning ? 'Scanning for paper signals...' : 'Run Paper Signal Scan'}</span>
         </button>
       </div>
 
@@ -427,7 +413,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
           ))}
           <div className="bg-emerald-950/40 border border-emerald-800/80 p-2.5 rounded text-emerald-300 flex flex-col justify-between">
             <span className="text-emerald-500 text-[10px] block">Step 12</span>
-            <span className="font-medium mt-1">Repeat Automatically</span>
+            <span className="font-medium mt-1">Mature Forward Evidence Influences Parents</span>
           </div>
         </div>
       </div>
@@ -439,8 +425,8 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
         {storedGenerations.length === 0 ? (
           <div className="h-48 flex flex-col items-center justify-center text-center text-neutral-500 font-mono text-xs bg-neutral-900/40 border border-neutral-800 rounded">
             <Dna className="w-8 h-8 text-neutral-600 mb-2" />
-            <p className="text-neutral-400 font-medium text-sm">No Research Cycles Recorded Yet</p>
-            <p className="mt-1">Run a research cycle when imported historical data is available.</p>
+            <p className="text-neutral-400 font-medium text-sm">No evolutionary batches recorded yet</p>
+            <p className="mt-1">Import genuine M1 history and complete a registered 300-candidate batch.</p>
           </div>
         ) : (
           storedGenerations.map(gen => (
