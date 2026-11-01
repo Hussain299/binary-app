@@ -16,7 +16,7 @@ import {
 import { db } from './db.js';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
 import { getSessionFromTimestamp } from './dataFeeds.js';
-import { ADVANCE_NOTICE_MS, CLOCK_ALIGNMENT_TOLERANCE_MS, M1_CANDLE_MS, getNextCandleOpenMs, isAlignedCandleOpen, TradingTimeframeMinutes } from './tradingClock.js';
+import { ADVANCE_NOTICE_MS, CLOCK_ALIGNMENT_TOLERANCE_MS, MAX_DECISION_PROCESSING_DELAY_MS, M1_CANDLE_MS, getNextCandleOpenMs, isAlignedCandleOpen, TradingTimeframeMinutes } from './tradingClock.js';
 
 export interface SignalCreationParams {
   symbol: ForexSymbol;
@@ -135,7 +135,7 @@ export class EntryExitEngine {
       const currentTimeMs = now.getTime();
       if (
         currentTimeMs < expectedDecisionTimeMs - CLOCK_ALIGNMENT_TOLERANCE_MS ||
-        currentTimeMs >= expectedDecisionTimeMs + M1_CANDLE_MS
+        currentTimeMs >= expectedDecisionTimeMs + MAX_DECISION_PROCESSING_DELAY_MS
       ) {
         throw new Error('Signal creation is outside the permitted three-minute advance decision window.');
       }
