@@ -30,6 +30,7 @@ import {
   MarketRegimeSnapshot,
   updateBetaPosterior,
   bayesianUcbScore,
+  doesResearchHoldoutOverlap,
 } from './evolutionEngine.js';
 
 interface DatabaseSchema {
@@ -373,13 +374,12 @@ class DatabaseService {
     if (!Array.isArray(this.state.researchHoldoutWindows)) {
       this.state.researchHoldoutWindows = [];
     }
-    const overlaps = this.state.researchHoldoutWindows.some(item => {
-      if (item.symbol !== symbol) return false;
-      const previousStart = Date.parse(item.startUtc);
-      const previousEnd = Date.parse(item.endUtc);
-      return Number.isFinite(previousStart) && Number.isFinite(previousEnd) &&
-        startMs <= previousEnd && endMs >= previousStart;
-    });
+    const overlaps = doesResearchHoldoutOverlap(
+      this.state.researchHoldoutWindows,
+      symbol,
+      startMs,
+      endMs
+    );
     if (overlaps) return false;
     this.state.researchHoldoutWindows.push({
       symbol,
