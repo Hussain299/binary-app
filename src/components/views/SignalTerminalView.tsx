@@ -688,7 +688,6 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </div>
           )}
         </div>
-      </div>
 
         {/* 4. OPTIONAL LIVE AUTOPILOT STREAM (COLLAPSIBLE AT BOTTOM) */}
         <div className="mt-6 border border-neutral-800/80 rounded-xl bg-neutral-900/40 overflow-hidden">
