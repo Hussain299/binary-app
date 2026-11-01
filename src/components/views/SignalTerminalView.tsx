@@ -1167,7 +1167,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-amber-800/80 space-y-2">
                 <span className="font-bold text-amber-400 block text-sm flex items-center gap-1.5">
                   <Clock className="w-4 h-4" />
-                  4. Dynamic Expiry (5m to 30m) & Strict 5M Open Entry
+                  4. Aligned Entry Candle (5m to 30m) & Exact T−3m Decision
                 </span>
                 <p>
                   Each candidate is evaluated for a matching <strong>5m, 10m, 15m, 20m, 25m or 30m entry candle</strong>. The signal must use a fully closed M1 decision bar exactly three minutes before that candle opens; expiry is measured on the matching horizon and exact expiry minute.
