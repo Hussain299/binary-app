@@ -10,6 +10,15 @@ import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
 import { calculateBinarySettlement } from './binarySettlement.js';
+import {
+  assessNearestNeighbors,
+  bayesianUcbScore,
+  classifyMarketRegime,
+  inferGenomeStyle,
+  isStrategyRegimeCompatible,
+  updateBetaPosterior,
+  EpisodicTradeMemory,
+} from './evolutionEngine.js';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -72,6 +81,189 @@ export async function runAllVerificationTests(): Promise<{
     const lowPayout = calculateBinarySettlement('BUY', 1.1, 1.1001, 75);
     if (lowPayout.netReturnUnits !== 0.75) {
       throw new Error('Observed payout must be reflected exactly in the binary return.');
+    }
+  });
+
+  await runTest('ML', 'Online Bayesian posterior updates exactly once per decisive outcome', () => {
+    const prior = { alpha: 1, beta: 1 };
+    const afterWin = updateBetaPosterior(prior, 'WIN');
+    const afterLoss = updateBetaPosterior(afterWin, 'LOSS');
+    const afterScratch = updateBetaPosterior(afterLoss, 'SCRATCH');
+    if (afterWin.alpha !== 2 || afterWin.beta !== 1) {
+      throw new Error('A WIN must increment only the Beta alpha parameter.');
+    }
+    if (afterLoss.alpha !== 2 || afterLoss.beta !== 2) {
+      throw new Error('A LOSS must increment only the Beta beta parameter.');
+    }
+    if (afterScratch.alpha !== 2 || afterScratch.beta !== 2) {
+      throw new Error('A SCRATCH must not alter the decisive-outcome posterior.');
+    }
+    if (!(bayesianUcbScore(afterLoss, 2) > 0 && bayesianUcbScore(afterLoss, 2) <= 2)) {
+      throw new Error('Bayesian UCB score must be finite and bounded for a valid posterior.');
+    }
+  });
+
+  await runTest('ML', 'k-NN uses ten closest earlier trades and rejects future information', () => {
+    const featureVector = Array(19).fill(0);
+    const memory: EpisodicTradeMemory[] = Array.from({ length: 10 }, (_, index) => ({
+      signalId: 'prior-' + index,
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      ruleFamily: 'momentum_5',
+      featureVector: [...featureVector],
+      outcome: 'LOSS',
+      netReturnUnits: -1,
+      closedAt: new Date(Date.parse('2026-10-01T00:00:00.000Z') + index * 60_000).toISOString(),
+    }));
+    memory.push({
+      signalId: 'future-win',
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      ruleFamily: 'momentum_5',
+      featureVector: [...featureVector],
+      outcome: 'WIN',
+      netReturnUnits: 0.8,
+      closedAt: '2026-10-03T00:00:00.000Z',
+    });
+    memory.push({
+      signalId: 'wrong-direction',
+      symbol: 'EUR/USD',
+      direction: 'SELL',
+      ruleFamily: 'momentum_5',
+      featureVector: [...featureVector],
+      outcome: 'WIN',
+      netReturnUnits: 0.8,
+      closedAt: '2026-10-01T00:00:00.000Z',
+    });
+    const result = assessNearestNeighbors({
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      ruleFamily: 'momentum_5',
+      featureVector,
+      predictionTimeUtc: '2026-10-02T00:00:00.000Z',
+    }, memory);
+    if (result.neighborsFound !== 10 || result.matches.some(item => item.signalId === 'future-win' || item.signalId === 'wrong-direction')) {
+      throw new Error('k-NN must use exactly ten comparable, strictly earlier outcomes and exclude future/opposite-direction trades.');
+    }
+    if (result.status !== 'NEGATIVE_EXPECTANCY' || !result.veto || result.weightedExpectedReturnUnits !== -1) {
+      throw new Error('A tightly matched negative-expectancy neighborhood must veto the candidate.');
+    }
+  });
+
+  await runTest('ML', 'k-NN is neutral when data is scarce or similarity is weak', () => {
+    const vector = Array(19).fill(0);
+    const sparse: EpisodicTradeMemory[] = Array.from({ length: 9 }, (_, index) => ({
+      signalId: 'sparse-' + index,
+      symbol: 'GBP/USD',
+      direction: 'SELL',
+      ruleFamily: 'wick_reversal',
+      featureVector: [...vector],
+      outcome: 'LOSS',
+      netReturnUnits: -1,
+      closedAt: new Date(Date.parse('2026-10-01T00:00:00.000Z') + index * 60_000).toISOString(),
+    }));
+    const query = {
+      symbol: 'GBP/USD',
+      direction: 'SELL' as const,
+      ruleFamily: 'wick_reversal',
+      featureVector: vector,
+      predictionTimeUtc: '2026-10-02T00:00:00.000Z',
+    };
+    const insufficient = assessNearestNeighbors(query, sparse);
+    if (insufficient.veto || insufficient.status !== 'INSUFFICIENT_HISTORY') {
+      throw new Error('Fewer than ten neighbors must not produce a veto.');
+    }
+    const distant = Array.from({ length: 10 }, (_, index) => ({
+      ...sparse[index % sparse.length],
+      signalId: 'distant-' + index,
+      featureVector: Array(19).fill(1),
+    }));
+    const weak = assessNearestNeighbors(query, distant);
+    if (weak.veto || weak.status !== 'WEAK_SIMILARITY') {
+      throw new Error('Distant historical contexts must not be treated as equivalent setups.');
+    }
+  });
+
+  await runTest('ML', 'Regime engine detects high-trend breakouts and low-volatility Asia', () => {
+    const build = (mode: 'trend' | 'quiet'): Candle[] => {
+      const rows: Candle[] = [];
+      let price = 1.1;
+      for (let i = 0; i < 80; i++) {
+        const open = price;
+        const delta = mode === 'trend'
+          ? (i < 60 ? (i % 2 === 0 ? 0.00001 : -0.00001) : 0.00035)
+          : (i < 60 ? (i % 2 === 0 ? 0.00008 : -0.00008) : (i % 2 === 0 ? 0.000001 : -0.000001));
+        const close = open + delta;
+        const halfRange = mode === 'trend'
+          ? (i < 60 ? 0.00006 : 0.00075)
+          : (i < 60 ? 0.0005 : 0.00001);
+        rows.push({
+          symbol: 'EUR/USD',
+          timestamp: new Date(Date.parse('2026-10-01T00:00:00.000Z') + i * 60_000).toISOString(),
+          timestampMs: Date.parse('2026-10-01T00:00:00.000Z') + i * 60_000,
+          open,
+          high: Math.max(open, close) + halfRange,
+          low: Math.min(open, close) - halfRange,
+          close,
+          volume: 100,
+          source: 'test_fixture',
+        });
+        price = close;
+      }
+      return rows;
+    };
+    const trend = classifyMarketRegime(build('trend'), 'LONDON');
+    const quietAsia = classifyMarketRegime(build('quiet'), 'ASIA');
+    if (trend.regime !== 'HIGH_TREND_BREAKOUT') {
+      throw new Error('A strongly directional, expanding-ATR sequence should classify as HIGH_TREND_BREAKOUT; got ' + trend.regime);
+    }
+    if (quietAsia.regime !== 'LOW_VOL_ASIA') {
+      throw new Error('A low-range Asian session should classify as LOW_VOL_ASIA; got ' + quietAsia.regime);
+    }
+    if (isStrategyRegimeCompatible('MEAN_REVERSION', trend.regime).allowed) {
+      throw new Error('Mean reversion must be suppressed in a high-trend breakout.');
+    }
+    if (isStrategyRegimeCompatible('TREND', quietAsia.regime).allowed) {
+      throw new Error('Trend breakout must be suppressed in low-volatility Asia.');
+    }
+  });
+
+  await runTest('ML', 'Regime engine fails open only for unknown or mixed evidence', () => {
+    const tooShort: Candle[] = [];
+    const assessment = classifyMarketRegime(tooShort, 'ASIA');
+    if (assessment.regime !== 'UNKNOWN') {
+      throw new Error('Insufficient candles must produce UNKNOWN rather than a fabricated regime.');
+    }
+    if (!isStrategyRegimeCompatible('TREND', 'UNKNOWN').allowed) {
+      throw new Error('Unknown regime must not invent a directional classification.');
+    }
+  });
+
+  await runTest('ML', 'Genome style inference distinguishes trend and mean-reversion feature families', () => {
+    const trend = {
+      kind: 'binary' as const,
+      operator: 'add' as const,
+      left: { kind: 'feature' as const, feature: 'return_1' as const },
+      right: {
+        kind: 'binary' as const,
+        operator: 'add' as const,
+        left: { kind: 'feature' as const, feature: 'ema_spread' as const },
+        right: { kind: 'feature' as const, feature: 'directional_efficiency' as const },
+      },
+    };
+    const fade = {
+      kind: 'binary' as const,
+      operator: 'add' as const,
+      left: { kind: 'feature' as const, feature: 'wick_imbalance' as const },
+      right: {
+        kind: 'binary' as const,
+        operator: 'add' as const,
+        left: { kind: 'feature' as const, feature: 'range_position_13' as const },
+        right: { kind: 'feature' as const, feature: 'rsi_centered' as const },
+      },
+    };
+    if (inferGenomeStyle(trend) !== 'TREND' || inferGenomeStyle(fade) !== 'MEAN_REVERSION') {
+      throw new Error('Genome style must be derived from its actual executable feature tree.');
     }
   });
 
