@@ -459,10 +459,10 @@ export const OpportunityResearchView: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {[
-                  ['Analogue win rate', percent(selected.forecast.winRate), 'Historical comparison only'],
-                  ['95% lower bound', percent(selected.forecast.lowerConfidenceBound), 'Conservative estimate'],
+                  ['Holdout win rate', percent(selected.audit.holdoutWinRate), 'Later unseen test segment'],
+                  ['Adjusted holdout lower bound', percent(selected.audit.holdoutLowerConfidenceBound), 'Multiple-testing corrected'],
                   ['Payout break-even', percent(selected.forecast.payoutBreakEvenProbability), 'At 80% payout floor'],
-                  ['Analogue sample', String(selected.forecast.analogueCount), 'Temporally separated outcomes'],
+                  ['Independent holdout n', String(selected.audit.holdoutSampleSize), 'Decisive outcomes only'],
                 ].map(([label, value, sub]) => (
                   <div key={label} className="rounded-lg border border-white/[0.07] bg-black/10 px-3 py-2.5">
                     <div className="text-[10px] text-neutral-500">{label}</div>
