@@ -13,7 +13,7 @@ import { researchEngine } from './researchEngine.js';
 import { autonomousScheduler } from './scheduler.js';
 import { runAllVerificationTests } from './tests.js';
 import { historicalDataStore } from './historicalData.js';
-import { genomeSpeciesKey } from './evolutionEngine.js';
+import { binaryBreakEvenWinRate, genomeSpeciesKey, wilsonLowerBound } from './evolutionEngine.js';
 
 interface StrategySearchJob {
   jobId: string;
@@ -58,13 +58,17 @@ function summarizeEvolutionSubGenerations(
   return [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([generation, population]) => {
     const qualified = population.filter(gene => {
       const metrics = gene.discoveryMetrics;
-      return !!metrics &&
-        metrics.trainScoredTrades >= 150 &&
-        metrics.validationScoredTrades >= 150 &&
-        metrics.validationWinRate >= 0.70 &&
-        metrics.validationExpectedValueUnits > 0 &&
-        metrics.validationProfitFactor >= 1.15 &&
-        (metrics.minimumPayoutPct ?? 0) >= 80;
+      if (!metrics ||
+          metrics.trainScoredTrades < 150 ||
+          metrics.validationScoredTrades < 150 ||
+          metrics.validationExpectedValueUnits <= 0 ||
+          metrics.validationProfitFactor < 1.15 ||
+          (metrics.minimumPayoutPct ?? 0) < 80) return false;
+      const breakEven = binaryBreakEvenWinRate(metrics.minimumPayoutPct ?? 0);
+      return wilsonLowerBound(
+        metrics.validationWinRate * metrics.validationScoredTrades,
+        metrics.validationScoredTrades
+      ) > breakEven;
     });
     return {
       generation,
@@ -298,11 +302,14 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
     if (!symbol) return res.status(400).json({ error: 'Choose a supported forex pair.' });
     const activeJob = [...strategySearchJobs.values()].find(job => job.status === 'RUNNING');
     if (activeJob) return res.status(409).json({ error: 'A 300-candidate strategy search is already running.', jobId: activeJob.jobId });
+    if (researchEngine.isEvolutionBatchRunning()) {
+      return res.status(409).json({ error: 'The autonomous research coordinator already owns the evolutionary batch lock.' });
+    }
 
-    const candles = historicalDataStore.getCandles(symbol);
-    if (candles.length < 30_000) {
+    const candles = historicalDataStore.getLatestCandles(symbol, 120_000);
+    if (candles.length < 60_000) {
       return res.status(409).json({
-        error: `${symbol} has ${candles.length.toLocaleString()} imported M1 candles. At least 30,000 are required for a meaningful 300-trade test, especially for 20–30 minute expiries.`,
+        error: `${symbol} has ${candles.length.toLocaleString()} imported M1 candles. At least 60,000 genuine M1 candles are required to make the 300-outcome gate attainable even for 30-minute strategies.`,
         availableCandles: candles.length,
         requiredCandles: 30_000,
       });
