@@ -168,6 +168,11 @@ export class ResearchEngine {
     generation: number,
     options: { allowTestFixtures?: boolean } = {}
   ): ResearchExperiment {
+    // Production access to this legacy single-rule model is disabled because it
+    // cannot reserve a unique holdout. It remains available only to isolated tests.
+    if (!options.allowTestFixtures) {
+      throw new Error('Legacy single-rule walk-forward experiments are disabled. Use the registered 300-candidate evolutionary batch with one-time holdout reservation.');
+    }
     if (![5, 10, 15, 20, 25, 30].includes(horizonMinutes)) {
       throw new Error('Supported research horizons are 5, 10, 15, 20, 25 and 30 minutes.');
     }
@@ -386,7 +391,10 @@ export class ResearchEngine {
     const trainMetrics = evaluateSet(trainSet, selectedThreshold);
     const validationMetrics = bestValidation;
     const testMetrics = evaluateSet(testSet, selectedThreshold);
-    if (trainMetrics.trades < 30 || validationMetrics.trades < 20 || testMetrics.trades < 30) {
+    // Synthetic fixtures exercise calculation and report wiring only. These
+    // results never enter the real database or approval pipeline.
+    if (!options.allowTestFixtures &&
+        (trainMetrics.trades < 30 || validationMetrics.trades < 20 || testMetrics.trades < 30)) {
       throw new Error(
         `Insufficient executed model trades (train=${trainMetrics.trades}, validation=${validationMetrics.trades}, test=${testMetrics.trades}). Import more historical data.`
       );
@@ -484,6 +492,7 @@ export class ResearchEngine {
         featureCount,
         spreadModeledPips: modeledSpreadPips,
         algorithm: 'logistic_regression',
+        testFixture: options.allowTestFixtures === true,
         epochs,
         learningRate,
         l2Penalty,
@@ -511,7 +520,7 @@ export class ResearchEngine {
       createdAt: new Date().toISOString(),
     };
 
-    db.addExperiment(experiment);
+    if (!options.allowTestFixtures) db.addExperiment(experiment);
     return experiment;
   }
 
@@ -540,7 +549,7 @@ export class ResearchEngine {
       : `Research pipeline configuration for generation ${exp.generation}.
 - Model: logistic regression fitted only on the chronological training partition.
 - Threshold: selected from a fixed candidate set using validation EV, then frozen before the untouched test.
-- Execution alignment: 3-minute advance decision, next 5M candle open and ${exp.horizonMinutes}m expiry.
+- Execution alignment: closed M1 decision exactly three minutes before the ${exp.horizonMinutes}m entry candle open and matching expiry.
 - Purged embargo: ${exp.purgedWindowCandles} M1 candles between partitions.
 - Test opportunities: n=${exp.metrics.sampleSize}; scored WIN/LOSS outcomes: n=${exp.metrics.scoredTradeSampleSize}.`;
 
@@ -581,7 +590,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     };
 
     reviews.push(scientistReview, engineerReview, auditorReview);
-    for (const review of reviews) db.addReview(review);
+    if (exp.parameters.testFixture !== true) {
+      for (const review of reviews) db.addReview(review);
+    }
     return reviews;
   }
 
