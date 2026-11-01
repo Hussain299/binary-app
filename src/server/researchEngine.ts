@@ -1351,6 +1351,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     const previousHoldoutEndMs = db.getLatestResearchHoldoutEndMs(symbol);
     const data = this.prepareGeneResearchData(candles, previousHoldoutEndMs);
     const holdoutEndMs = data.candles[data.candles.length - 1].timestampMs + M1_CANDLE_MS;
+    const breakEvenRate = binaryBreakEvenWinRate(data.payoutPct);
     if (!db.claimResearchHoldoutWindow(symbol, searchBatchId, data.testStartMs, holdoutEndMs)) {
       throw new Error('This chronological test period overlaps a holdout window already inspected for this pair. Import at least 30,000 newer M1 candles to create a genuinely new test period.');
     }
@@ -1433,8 +1434,13 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
 
       if (train.scoredTrades < 150 || validation.scoredTrades < 150) {
         insufficientSample++;
-      } else if (validation.winRate < 0.70 || validation.expectedValueUnits <= 0 || validation.profitFactor < 1.15) {
-        rejected++;
+      } else {
+        const validationLowerBound = wilsonLowerBound(validation.wins, validation.scoredTrades);
+        if (train.winRate <= breakEvenRate ||
+            validation.winRate <= breakEvenRate ||
+            validationLowerBound <= breakEvenRate ||
+            validation.expectedValueUnits <= 0 ||
+            validation.profitFactor < 1.05) rejected++;
       }
 
       db.addSynthesizedStrategy(gene);
@@ -1467,7 +1473,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
         candidate.validationScoredTrades >= 150 &&
         wilsonLowerBound(candidate.validationWins, candidate.validationScoredTrades) > breakEvenRate &&
         candidate.validationExpectedValueUnits > 0 &&
-        candidate.validationProfitFactor >= 1.15
+        candidate.trainWinRate > breakEvenRate &&
+        candidate.validationWinRate > breakEvenRate &&
+        candidate.validationProfitFactor >= 1.05
       )
       .sort((a, b) =>
         b.validationExpectedValueUnits - a.validationExpectedValueUnits ||
