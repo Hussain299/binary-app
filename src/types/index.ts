@@ -156,8 +156,13 @@ export interface ResearchSignal {
   actualExitPrice: number | null;
   
   // Confidence & Verification
-  confidence: number; // 0.0 - 1.0
+  /** Raw model/strategy activation score; never present this as a win probability. */
+  confidence: number;
   calibrationStatus: 'CALIBRATED' | 'UNCALIBRATED' | 'OVERCONFIDENT';
+  /** Empirical probability calibrated only from earlier settled outcomes; absent until sample suffices. */
+  calibratedProbability?: number;
+  calibrationSampleSize?: number;
+  calibrationBrierScore?: number;
   lifecycleState: SignalLifecycleState;
   lifecycleHistory: SignalLifecycleEvent[];
   
@@ -328,8 +333,13 @@ export interface StrategyPerformanceRecord {
   binaryPushes?: number;
   minimumPayoutPct?: number;
   negativeReturnUnits?: number;
-  /** Recent unique completed outcomes used to calculate a rolling 300-trade approval window. */
-  scoredOutcomes?: Array<{ result: 'WIN' | 'LOSS'; netReturnUnits: number; payoutPct: number }>;
+  /** Recent unique completed outcomes; rawScore enables strictly historical score calibration. */
+  scoredOutcomes?: Array<{
+    result: 'WIN' | 'LOSS';
+    netReturnUnits: number;
+    payoutPct: number;
+    rawScore?: number;
+  }>;
   /** Recent signal IDs prevent the same outcome from being counted more than once. */
   signalIds?: string[];
   /** Beta(1,1) posterior updated exactly once per decisive forward outcome. */
