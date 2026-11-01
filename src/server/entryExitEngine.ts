@@ -16,7 +16,7 @@ import {
 import { db } from './db.js';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
 import { getSessionFromTimestamp } from './dataFeeds.js';
-import { getNextCandleOpenMs, isAlignedCandleOpen, TradingTimeframeMinutes } from './tradingClock.js';
+import { ADVANCE_NOTICE_MS, CLOCK_ALIGNMENT_TOLERANCE_MS, M1_CANDLE_MS, getNextCandleOpenMs, isAlignedCandleOpen, TradingTimeframeMinutes } from './tradingClock.js';
 
 export interface SignalCreationParams {
   symbol: ForexSymbol;
@@ -125,6 +125,20 @@ export class EntryExitEngine {
       throw new Error('Scheduled entry time is invalid or not aligned to the selected 5–30 minute candle.');
     }
     const nextCandleOpenMs = suppliedEntryOpenMs;
+    if (!isTest && params.candleOpenTimeUtc) {
+      const expectedDecisionTimeMs = nextCandleOpenMs - ADVANCE_NOTICE_MS;
+      const actualDecisionTimeMs = signalCandleMs + M1_CANDLE_MS;
+      if (Math.abs(actualDecisionTimeMs - expectedDecisionTimeMs) > CLOCK_ALIGNMENT_TOLERANCE_MS) {
+        throw new Error('Signal candle must close exactly three minutes before the selected entry candle opens.');
+      }
+      const currentTimeMs = now.getTime();
+      if (
+        currentTimeMs < expectedDecisionTimeMs - CLOCK_ALIGNMENT_TOLERANCE_MS ||
+        currentTimeMs >= expectedDecisionTimeMs + M1_CANDLE_MS
+      ) {
+        throw new Error('Signal creation is outside the permitted three-minute advance decision window.');
+      }
+    }
     const nextCandleCloseMs = nextCandleOpenMs + (expiryMinutes * 60 * 1000);
 
     const candleOpenTimeUtc = new Date(nextCandleOpenMs).toISOString();
