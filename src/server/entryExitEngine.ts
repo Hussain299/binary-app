@@ -44,6 +44,7 @@ export interface SignalCreationParams {
   mathematicalFormula?: string;
   whyHumansMissThis?: string;
   paperOnly?: boolean;
+  marketFeatureVector?: number[];
 }
 
 export class EntryExitEngine {
@@ -241,6 +242,7 @@ export class EntryExitEngine {
       mathematicalFormula: params.mathematicalFormula,
       whyHumansMissThis: params.whyHumansMissThis,
       paperOnly: params.paperOnly ?? false,
+      marketFeatureVector: params.marketFeatureVector ? [...params.marketFeatureVector] : undefined,
     };
 
     return db.addSignal(signal);
