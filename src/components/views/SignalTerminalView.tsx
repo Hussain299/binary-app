@@ -116,7 +116,6 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const [historyImportPair, setHistoryImportPair] = useState<string>('EUR/USD');
   const [isImportingHistory, setIsImportingHistory] = useState<boolean>(false);
   const [historyImportMessage, setHistoryImportMessage] = useState<string>('');
-  const [validatingGeneId, setValidatingGeneId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState<number>(Date.now());
 
   // Real-time 1-second ticking timer for candle countdowns
@@ -331,28 +330,6 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     } finally {
       setIsImportingHistory(false);
       event.target.value = '';
-    }
-  };
-
-  const handleValidateGene = async (geneId: string, symbol?: string) => {
-    setValidatingGeneId(geneId);
-    setHistoryImportMessage('');
-    try {
-      const res = await fetch('/api/strategies/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ geneId, symbol: symbol || historyImportPair }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Strategy validation failed.');
-      await fetchSynthesizedStrategies();
-      setHistoryImportMessage(
-        `${data.gene.name}: untouched-test win rate ${data.gene.verifiedAccuracy}% from ${data.gene.sampleCount} trades. Status: ${data.gene.status}.`
-      );
-    } catch (error: any) {
-      setHistoryImportMessage(error.message || 'Strategy validation failed.');
-    } finally {
-      setValidatingGeneId(null);
     }
   };
 
@@ -1167,7 +1144,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-amber-800/80 space-y-2">
                 <span className="font-bold text-amber-400 block text-sm flex items-center gap-1.5">
                   <Clock className="w-4 h-4" />
-                  4. Aligned Entry Candle (5m to 30m) & Exact T−3m Decision
+                  4. Starting Candle: 5m–30m · Decision: Exactly T−3m
                 </span>
                 <p>
                   Each candidate is evaluated for a matching <strong>5m, 10m, 15m, 20m, 25m or 30m entry candle</strong>. The signal must use a fully closed M1 decision bar exactly three minutes before that candle opens; expiry is measured on the matching horizon and exact expiry minute.
@@ -1671,7 +1648,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   className="flex items-center gap-2 px-4 py-2 rounded-xl bg-linear-to-r from-cyan-600 to-emerald-600 hover:from-cyan-500 hover:to-emerald-500 text-neutral-950 font-black text-xs transition-all shadow-lg shadow-cyan-950/50 disabled:opacity-50"
                 >
                   <Sparkles className={`w-4 h-4 ${isEvolvingStrategy ? 'animate-spin' : ''}`} />
-                  <span>{isEvolvingStrategy ? 'Evolving Next Generation...' : '🧬 Run 300-Candidate Evolution'}</span>
+                  <span>{isEvolvingStrategy ? `Evolving ${searchJob?.completed ?? 0}/300 candidates...` : '🧬 Run 300-Candidate Evolution'}</span>
                 </button>
               </div>
 
