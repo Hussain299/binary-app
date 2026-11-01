@@ -311,11 +311,11 @@ export async function runAllVerificationTests(): Promise<{
     const now = new Date().toISOString();
     let validEntryMs = Date.now() + 5 * 60_000;
     let scheduleSearchAttempts = 0;
-    while (!isForexMarketIntervalOpen(validEntryMs, validEntryMs + 10 * 60_000) && scheduleSearchAttempts < 250) {
+    while (!isForexMarketIntervalOpen(validEntryMs, validEntryMs + 10 * 60_000) && scheduleSearchAttempts < 4320) {
       validEntryMs += 60_000;
       scheduleSearchAttempts++;
     }
-    if (scheduleSearchAttempts >= 250) {
+    if (scheduleSearchAttempts >= 4320) {
       throw new Error('Test could not locate a future open-FX entry interval.');
     }
     const terminalPrices = Array.from({ length: 120 }, (_, index) =>
