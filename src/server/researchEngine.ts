@@ -91,6 +91,12 @@ export class ResearchEngine {
       entryTimeframeMinutes: StrategyHorizon;
     }> = [];
 
+    const closes = candles.map(item => item.close);
+    const ema9 = this.calculateEMA(closes, 9);
+    const ema21 = this.calculateEMA(closes, 21);
+    const rsi14 = this.calculateRSI(closes, 14);
+    const atr14 = this.calculateATR(candles, 14);
+
     // The M1 decision candle must be fully closed at exactly T-3m. Entry is
     // at the next aligned N-minute candle open; settlement uses the M1 bar
     // whose close equals entry + N minutes (not the following minute).
@@ -104,16 +110,14 @@ export class ResearchEngine {
       );
       if (entryTime - decisionTime !== ADVANCE_NOTICE_MS) continue;
 
-      const entryIndex = candles.findIndex((item, index) =>
-        index >= i + 1 &&
-        Math.abs(item.timestampMs - entryTime) <= 5_000
-      );
-      if (entryIndex < 0) continue;
+      let entryIndex = i + 1;
+      while (entryIndex < n && candles[entryIndex].timestampMs < entryTime - 5_000) entryIndex++;
+      if (entryIndex >= n || Math.abs(candles[entryIndex].timestampMs - entryTime) > 5_000) continue;
 
       const expiryTime = entryTime + entryTimeframeMinutes * M1_CANDLE_MS;
       const exitCandleTime = expiryTime - M1_CANDLE_MS;
       let exitIndex = entryIndex;
-      while (exitIndex < n && candles[exitIndex].timestampMs < exitCandleTime) exitIndex++;
+      while (exitIndex < n && candles[exitIndex].timestampMs < exitCandleTime - 5_000) exitIndex++;
       if (exitIndex >= n ||
           Math.abs(candles[exitIndex].timestampMs - exitCandleTime) > 5_000) continue;
 
@@ -121,11 +125,6 @@ export class ResearchEngine {
       const body = Math.abs(candle.close - candle.open);
       const upperWick = candle.high - Math.max(candle.open, candle.close);
       const lowerWick = Math.min(candle.open, candle.close) - candle.low;
-      const closes = candles.map(item => item.close);
-      const ema9 = this.calculateEMA(closes, 9);
-      const ema21 = this.calculateEMA(closes, 21);
-      const rsi14 = this.calculateRSI(closes, 14);
-      const atr14 = this.calculateATR(candles, 14);
       let min20 = Infinity;
       let max20 = -Infinity;
       for (let k = i - 19; k <= i; k++) {
