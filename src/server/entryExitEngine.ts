@@ -16,6 +16,7 @@ import {
 import { db } from './db.js';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
 import { getSessionFromTimestamp } from './dataFeeds.js';
+import { getNextCandleOpenMs, isAlignedCandleOpen, TradingTimeframeMinutes } from './tradingClock.js';
 
 export interface SignalCreationParams {
   symbol: ForexSymbol;
@@ -45,6 +46,7 @@ export interface SignalCreationParams {
   whyHumansMissThis?: string;
   paperOnly?: boolean;
   marketFeatureVector?: number[];
+  entryTimeframeMinutes?: TradingTimeframeMinutes;
 }
 
 export class EntryExitEngine {
@@ -102,22 +104,32 @@ export class EntryExitEngine {
         : 15
     );
 
-    // Strict 5-Minute Candle Alignment:
-    // Every trade opens exactly on the full 5-minute candle boundary (:00, :05, :10, :15, :20, :25, :30, :35, :40, :45, :50, :55)
-    // Never random mid-candle entries like :32 or :37.
-    const FIVE_MIN_MS = 5 * 60 * 1000;
+    // Entry candle timeframe is explicit (5–30m). The scheduler supplies the
+    // exact aligned boundary after checking the closed M1 decision candle is T-3m.
     const isTest = params.ruleFamily.startsWith('test_');
     const signalCandleMs = params.signalCandle.timestampMs || Date.now();
-    // For live trading, anchor directly to the current clock Date.now(); tests anchor to signalCandleMs
-    const refMs = isTest ? signalCandleMs : Date.now();
-    let next5mCandleOpenMs = Math.ceil(refMs / FIVE_MIN_MS) * FIVE_MIN_MS;
-    if (next5mCandleOpenMs <= refMs) {
-      next5mCandleOpenMs += FIVE_MIN_MS;
+    const entryTimeframeMinutes = params.entryTimeframeMinutes ?? 5;
+    if (![5, 10, 15, 20, 25, 30].includes(entryTimeframeMinutes)) {
+      throw new Error('Entry timeframe must be one of 5, 10, 15, 20, 25 or 30 minutes.');
     }
-    const next5mCandleCloseMs = next5mCandleOpenMs + (expiryMinutes * 60 * 1000);
+    const refMs = isTest ? signalCandleMs : Date.now();
+    const calculatedEntryOpenMs = getNextCandleOpenMs(refMs, entryTimeframeMinutes);
+    const suppliedEntryOpenMs = params.candleOpenTimeUtc
+      ? Date.parse(params.candleOpenTimeUtc)
+      : calculatedEntryOpenMs;
+    if (!Number.isFinite(suppliedEntryOpenMs) ||
+        !isAlignedCandleOpen(suppliedEntryOpenMs, entryTimeframeMinutes)) {
+      throw new Error('Scheduled entry time is invalid or not aligned to the selected 5–30 minute candle.');
+    }
+    const nextCandleOpenMs = suppliedEntryOpenMs;
+    const nextCandleCloseMs = nextCandleOpenMs + (expiryMinutes * 60 * 1000);
 
-    const candleOpenTimeUtc = params.candleOpenTimeUtc || new Date(next5mCandleOpenMs).toISOString();
-    const candleCloseTimeUtc = params.candleCloseTimeUtc || new Date(next5mCandleCloseMs).toISOString();
+    const candleOpenTimeUtc = new Date(nextCandleOpenMs).toISOString();
+    const candleCloseTimeUtc = params.candleCloseTimeUtc || new Date(nextCandleCloseMs).toISOString();
+    if (params.candleCloseTimeUtc &&
+        Math.abs(Date.parse(params.candleCloseTimeUtc) - nextCandleCloseMs) > 5_000) {
+      throw new Error('Scheduled close time must equal the entry boundary plus the selected expiry.');
+    }
 
     const candleOpenTimeIst = new Intl.DateTimeFormat('en-IN', {
       timeZone: 'Asia/Kolkata',
@@ -145,11 +157,11 @@ export class EntryExitEngine {
     if (params.direction === 'BUY') {
       triggerPrice = Number((signalHigh + 0.2 * pipUnit).toFixed(isJpy ? 3 : 5));
       invalidationPrice = Number((signalLow - 1.0 * pipUnit).toFixed(isJpy ? 3 : 5));
-      entryCondition = `Strict 5M Candle Open (${candleOpenTimeIst}) [Trigger: ${triggerPrice}] · ${expiryMinutes}m Expiry`;
+      entryCondition = `Strict ${entryTimeframeMinutes}M Candle Open (${candleOpenTimeIst}) [Trigger: ${triggerPrice}] · ${expiryMinutes}m Expiry`;
     } else {
       triggerPrice = Number((signalLow - 0.2 * pipUnit).toFixed(isJpy ? 3 : 5));
       invalidationPrice = Number((signalHigh + 1.0 * pipUnit).toFixed(isJpy ? 3 : 5));
-      entryCondition = `Strict 5M Candle Open (${candleOpenTimeIst}) [Trigger: ${triggerPrice}] · ${expiryMinutes}m Expiry`;
+      entryCondition = `Strict ${entryTimeframeMinutes}M Candle Open (${candleOpenTimeIst}) [Trigger: ${triggerPrice}] · ${expiryMinutes}m Expiry`;
     }
 
     // Entry window: valid from next candle open for tests, or from 5m candle open for live
@@ -161,7 +173,7 @@ export class EntryExitEngine {
         timestamp: nowUtc,
         fromState: 'DETECTED',
         toState: 'WAITING_FOR_ENTRY',
-        reason: `3-Minute Advance Signal Detected. Trade strictly scheduled for 5M Candle Open (${candleOpenTimeIst}). Expiry: ${expiryMinutes}m (${candleCloseTimeIst}).`,
+        reason: `3-Minute Advance Signal Detected. Trade strictly scheduled for ${entryTimeframeMinutes}M Candle Open (${candleOpenTimeIst}). Expiry: ${expiryMinutes}m (${candleCloseTimeIst}).`,
       },
     ];
 
@@ -230,6 +242,7 @@ export class EntryExitEngine {
       advanceNoticeMinutes: 3,
       candleOpenTimeUtc,
       candleCloseTimeUtc,
+      entryTimeframeMinutes,
       candleOpenTimeIst,
       candleCloseTimeIst,
       marketSession: getSessionFromTimestamp(now).id,
@@ -350,7 +363,7 @@ export class EntryExitEngine {
             }
           }
         } else if (signal.candleOpenTimeUtc) {
-          // B. Strict Live 5-Minute Candle Opening Trigger (Trades strictly open on 5M candle open!)
+          // B. Strict live entry-candle opening trigger (never substitute a later M1 bar).
           const candleOpenMs = Date.parse(signal.candleOpenTimeUtc);
           const newestCandle = candles[candles.length - 1];
           const nowMs = Date.now();
@@ -371,7 +384,7 @@ export class EntryExitEngine {
               timestamp: new Date().toISOString(),
               fromState: 'WAITING_FOR_ENTRY',
               toState: 'ACTIVE',
-              reason: `Trade opened on the exact 5M candle boundary (${signal.candleOpenTimeIst || entryTimeUtc}) at price ${entryFillPrice}. Expiry: ${signal.expiryMinutes} minutes (${signal.candleCloseTimeIst || plannedExitTimeUtc}).`,
+              reason: `Trade opened on the exact ${signal.entryTimeframeMinutes ?? 5}M candle boundary (${signal.candleOpenTimeIst || entryTimeUtc}) at price ${entryFillPrice}. Expiry: ${signal.expiryMinutes} minutes (${signal.candleCloseTimeIst || plannedExitTimeUtc}).`,
               price: entryFillPrice,
             });
 
