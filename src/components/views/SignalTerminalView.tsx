@@ -140,6 +140,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const [isClearingHistory, setIsClearingHistory] = useState<boolean>(false);
   const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
   const [sessionData, setSessionData] = useState<MarketSessionInfo[]>([]);
+  const [sessionMarketTime, setSessionMarketTime] = useState<{ marketOpen: boolean; marketStatus: string; marketMessage: string } | null>(null);
   const [synthesizedStrategies, setSynthesizedStrategies] = useState<SynthesizedStrategyGene[]>([]);
   const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformanceRecord[]>([]);
   const [evolutionTelemetry, setEvolutionTelemetry] = useState<EvolutionTelemetry | null>(null);
@@ -164,6 +165,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
       if (res.ok) {
         const data = await res.json();
         if (data?.sessions) setSessionData(data.sessions);
+        if (data?.marketTime) setSessionMarketTime(data.marketTime);
       }
     } catch (e) {
       console.warn('Failed to fetch session accuracy:', e);
@@ -643,7 +645,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <Globe className="w-3.5 h-3.5 text-emerald-400" />
             <span className="hidden sm:inline">Sessions</span>
             <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-[10px] text-emerald-400 font-mono font-bold">
-              {sessionData.find(s => s.isActive)?.shortName || 'Live'}
+              {sessionMarketTime?.marketOpen === false ? 'Market Closed' : sessionData.find(s => s.isActive)?.shortName || 'Live'}
             </span>
           </button>
 
@@ -1610,7 +1612,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                         <span className="font-bold text-white text-sm">{sess.name}</span>
                       </div>
                       <span className="text-[10px] text-neutral-400 font-mono block mt-0.5">
-                        {sess.istRange} ({sess.utcRange})
+                        {sess.hoursLabel} · {sess.istRange} · {sess.utcRange}
                       </span>
                     </div>
                     {sess.isActive ? (
