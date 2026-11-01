@@ -285,7 +285,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
               className="flex items-center gap-2 rounded-lg bg-cyan-400 px-4 py-2 text-xs font-bold text-neutral-950 hover:bg-cyan-300 disabled:opacity-40"
             >
               <Sparkles className={`w-3.5 h-3.5 ${isSearchingBatch ? 'animate-spin' : ''}`} />
-              {isSearchingBatch ? 'Testing 300 strategies…' : 'Generate & Test 300 Strategies'}
+              {isSearchingBatch ? 'Testing 300 strategies…' : 'Evolve 300 Candidates'}
             </button>
           </div>
         </div>
@@ -346,7 +346,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
                 <div className="text-[9px] text-neutral-500">Selected using validation only</div>
               </div>
               <div className="rounded-lg bg-neutral-950 border border-neutral-800 p-3">
-                <div className="text-[10px] text-neutral-500">Actionable strategies approved</div>
+                <div className="text-[10px] text-neutral-500">Forward-paper gate passed (paper only)</div>
                 <div className="text-xl font-bold text-white">{searchBatch.approvedCount}</div>
                 <div className="text-[9px] text-neutral-500">approved after historical + forward 300 gates</div>
               </div>
