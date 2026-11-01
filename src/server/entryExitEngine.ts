@@ -307,8 +307,6 @@ export class EntryExitEngine {
    */
   public cancelSignalsOutsideForexWeek(): ResearchSignal[] {
     const cancelled: ResearchSignal[] = [];
-    const nowMs = Date.now();
-    const marketOpen = isForexMarketOpenAt(nowMs);
     for (const signal of db.getActiveSignals()) {
       const predictionTimeMs = Date.parse(signal.predictionTimeUtc);
       const entryTimeMs = Date.parse(
@@ -318,8 +316,11 @@ export class EntryExitEngine {
         signal.plannedExitTimeUtc || signal.candleCloseTimeUtc || signal.entryWindowEndUtc
       );
       const validSchedule = isForexSignalScheduleValid(predictionTimeMs, entryTimeMs, expiryTimeMs);
-      const expiredWhileClosed = !marketOpen && Number.isFinite(expiryTimeMs) && expiryTimeMs <= nowMs;
-      if (validSchedule && !expiredWhileClosed) continue;
+
+      // A valid contract may have expired immediately before the weekend. Preserve it
+      // until its exact, trusted M1 expiry candle can be reconciled; never erase it
+      // merely because the current wall clock is outside FX trading hours.
+      if (validSchedule) continue;
 
       const previousState = signal.lifecycleState;
       signal.lifecycleState = 'EXPIRED';
@@ -332,9 +333,7 @@ export class EntryExitEngine {
         timestamp: new Date().toISOString(),
         fromState: previousState,
         toState: 'EXPIRED',
-        reason: !validSchedule
-          ? 'Weekly FX market-hours guard cancelled a legacy signal whose decision, entry or expiry window fell outside the open market week. No WIN/LOSS was inferred and no learning update was recorded.'
-          : 'The contract/entry window elapsed while the FX market was closed. It was marked expired and unscored; no weekend price was used and no learning update was recorded.',
+        reason: 'Weekly FX market-hours guard cancelled an invalid legacy schedule. No WIN/LOSS was inferred and no learning update was recorded.',
       });
       db.updateSignal(signal);
       cancelled.push(signal);
@@ -347,16 +346,36 @@ export class EntryExitEngine {
    * Advances states through the causal state machine.
    */
   public evaluateSignals(candlesMap: Record<ForexSymbol, Candle[]>, includeTest: boolean = false): ResearchSignal[] {
-    const marketOpen = isForexMarketOpenAt(Date.now());
     const cancelledOutsideHours = this.cancelSignalsOutsideForexWeek();
-    const activeSignals = db.getActiveSignals(includeTest).filter(signal =>
-      marketOpen || (includeTest && signal.ruleFamily.startsWith('test_'))
-    );
+    // Reconciliation is evidence-driven, not dependent on the current session clock.
+    // This also lets an exact pre-weekend expiry candle settle after the market reopens.
+    const activeSignals = db.getActiveSignals(includeTest);
     const updatedSignals: ResearchSignal[] = [...cancelledOutsideHours];
 
     for (const signal of activeSignals) {
-      const candles = candlesMap[signal.symbol];
-      if (!candles || candles.length === 0) continue;
+      const candles = candlesMap[signal.symbol] || [];
+      if (candles.length === 0) {
+        const expiryMs = Date.parse(
+          signal.plannedExitTimeUtc || signal.candleCloseTimeUtc || ''
+        );
+        if (
+          signal.lifecycleState === 'ACTIVE' &&
+          Number.isFinite(expiryMs) &&
+          Date.now() >= expiryMs
+        ) {
+          signal.lifecycleState = 'EXIT_PENDING';
+          signal.lifecycleHistory = Array.isArray(signal.lifecycleHistory) ? signal.lifecycleHistory : [];
+          signal.lifecycleHistory.push({
+            timestamp: new Date().toISOString(),
+            fromState: 'ACTIVE',
+            toState: 'EXIT_PENDING',
+            reason: 'Scheduled expiry has passed, but no trusted M1 candles are currently available. Outcome remains unscored until the exact expiry candle can be verified.',
+          });
+          db.updateSignal(signal);
+          updatedSignals.push(signal);
+        }
+        continue;
+      }
 
       let changed = false;
 
@@ -506,24 +525,26 @@ export class EntryExitEngine {
         }
       }
 
-      // 2. Process ACTIVE state
-      if (!changed && signal.lifecycleState === 'ACTIVE' && signal.plannedExitTimeUtc && signal.actualEntryPrice) {
+      // 2. Process ACTIVE / EXIT_PENDING state from the exact expiry M1 bar.
+      if (
+        !changed &&
+        ['ACTIVE', 'EXIT_PENDING'].includes(signal.lifecycleState) &&
+        signal.plannedExitTimeUtc &&
+        signal.actualEntryPrice
+      ) {
         const plannedExitMs = Date.parse(signal.plannedExitTimeUtc);
         const newestCandle = candles[candles.length - 1];
         const nowMs = Date.now();
-        
         const isTest = signal.ruleFamily?.startsWith('test_');
-        // Match the historical replay exactly: the M1 candle opened one minute
-        // before expiry closes at the binary contract's target expiry timestamp.
-        // Never use a later candle as a substitute when the target candle is missing.
-        const targetExitCandle = candles.find(c =>
-          Math.abs((c.timestampMs + 60_000) - plannedExitMs) <= 5_000
-        );
+        const targetExitCandle = Number.isFinite(plannedExitMs)
+          ? candles.find(c => Math.abs((c.timestampMs + 60_000) - plannedExitMs) <= 5_000)
+          : undefined;
         const exitCandle = targetExitCandle && (isTest || nowMs >= plannedExitMs)
           ? targetExitCandle
           : null;
 
         if (exitCandle) {
+          const previousState = signal.lifecycleState;
           const isJpy = signal.symbol.includes('JPY');
           const pipFactor = isJpy ? 100 : 10000;
           const exitPrice = exitCandle.close;
@@ -541,8 +562,8 @@ export class EntryExitEngine {
 
           signal.actualExitTimeUtc = exitCandle.timestamp;
           signal.actualExitPrice = exitPrice;
-          signal.grossReturnPips = grossPips; // Informational price movement only; not the contract P/L.
-          signal.netReturnPips = null; // Binary options are not scored using forex pip spreads.
+          signal.grossReturnPips = grossPips;
+          signal.netReturnPips = null;
           signal.netReturnUnits = settlement.netReturnUnits;
           signal.payoutPct = payoutPct;
           signal.payoutSource = signal.payoutSource ?? 'ASSUMED_MINIMUM';
@@ -556,26 +577,45 @@ export class EntryExitEngine {
               : '0.00 stake units (push)';
           signal.lifecycleHistory.push({
             timestamp: new Date().toISOString(),
-            fromState: 'ACTIVE',
+            fromState: previousState,
             toState: 'CLOSED',
             reason: `Binary contract expired at ${signal.plannedExitTimeUtc}. Entry ${entryPrice}; expiry ${exitPrice}; payout ${payoutPct}% (${signal.payoutSource}); result ${settlement.outcome}; return ${unitText}.`,
             price: exitPrice,
           });
-
           changed = true;
         } else if (
+          Number.isFinite(plannedExitMs) &&
           (isTest || nowMs >= plannedExitMs) &&
           newestCandle.timestampMs + 60_000 > plannedExitMs
         ) {
-          // The contract expiry minute has passed, but its exact M1 close is
-          // absent. Mark the observation unscored instead of settling a later bar.
+          // Coverage has passed the exact expiry minute and the exact bar is absent.
+          // This is a data-integrity failure, not a market outcome.
+          const previousState = signal.lifecycleState;
           signal.lifecycleState = 'EXPIRED';
           signal.outcomeResult = 'CANCELLED';
+          signal.netReturnUnits = null;
+          signal.lifecycleHistory.push({
+            timestamp: new Date().toISOString(),
+            fromState: previousState,
+            toState: 'EXPIRED',
+            reason: `Exact binary expiry candle was missing at ${signal.plannedExitTimeUtc}; no later candle was substituted, so no WIN/LOSS was recorded.`,
+          });
+          changed = true;
+        } else if (
+          Number.isFinite(plannedExitMs) &&
+          !isTest &&
+          nowMs >= plannedExitMs &&
+          signal.lifecycleState === 'ACTIVE'
+        ) {
+          // The contract has reached expiry, but the stored feed has not reached that
+          // timestamp yet. Keep it reconcilable instead of leaving an expired timer
+          // labelled as an active trade.
+          signal.lifecycleState = 'EXIT_PENDING';
           signal.lifecycleHistory.push({
             timestamp: new Date().toISOString(),
             fromState: 'ACTIVE',
-            toState: 'EXPIRED',
-            reason: `Exact binary expiry candle was missing at ${signal.plannedExitTimeUtc}; no later candle was substituted, so no WIN/LOSS was recorded.`,
+            toState: 'EXIT_PENDING',
+            reason: 'Scheduled expiry has passed, but the exact expiry M1 candle has not arrived in the trusted feed yet. No result has been inferred.',
           });
           changed = true;
         }
