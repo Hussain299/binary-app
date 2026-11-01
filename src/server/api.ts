@@ -503,6 +503,8 @@ apiRouter.post('/signals/clear-history', (_req: Request, res: Response) => {
 
 // POST /api/signals/evaluate — Step causal entry/exit engine on active signals
 apiRouter.post('/signals/evaluate', async (_req: Request, res: Response) => {
+  // Clean up impossible legacy schedules without scoring them, even when the market is closed.
+  const cancelledOutsideHours = entryExitEngine.cancelSignalsOutsideForexWeek();
   // This manual endpoint is a second entry point into the exit engine; it must
   // enforce the same weekly closure as the autonomous scheduler.
   const marketTime = dataFeedEngine.getMarketSessions();
@@ -513,6 +515,7 @@ apiRouter.post('/signals/evaluate', async (_req: Request, res: Response) => {
       evaluatedCount: 0,
       transitionedCount: 0,
       completedOutcomesRecorded: 0,
+      legacySignalsCancelled: cancelledOutsideHours.length,
     });
   }
   try {
