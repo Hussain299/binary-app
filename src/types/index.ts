@@ -196,6 +196,8 @@ export interface ResearchSignal {
   whyHumansMissThis?: string;
   /** True when this is an internal forward-paper observation, not an approved actionable alert. */
   paperOnly?: boolean;
+  /** Entry candle timeframe; a supported 5–30 minute boundary, aligned with the expiry horizon. */
+  entryTimeframeMinutes?: 5 | 10 | 15 | 20 | 25 | 30;
   /** Frozen causal 19-feature context captured when this prediction was made. */
   marketFeatureVector?: number[];
   lossAutopsy?: LossAutopsy;
