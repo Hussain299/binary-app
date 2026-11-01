@@ -35,6 +35,7 @@ export default function App() {
   const [generations, setGenerations] = useState<EvolutionGeneration[]>([]);
   const [providers, setProviders] = useState<ProviderHealth[]>([]);
   const [autopilotLogs, setAutopilotLogs] = useState<AutopilotLog[]>([]);
+  const [autopilotStatus, setAutopilotStatus] = useState<any>(null);
   const [activeNotification, setActiveNotification] = useState<AppNotification | null>(null);
   const notifiedIdsRef = React.useRef<Set<string>>(new Set());
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -42,13 +43,14 @@ export default function App() {
 
   const fetchAllData = async () => {
     try {
-      const [sigRes, histRes, revRes, genRes, healthRes, autoRes] = await Promise.all([
+      const [sigRes, histRes, revRes, genRes, healthRes, autoRes, autoStatusRes] = await Promise.all([
         fetch('/api/signals').then(r => r.json()).catch(() => ({ signals: [] })),
         fetch('/api/research/history').then(r => r.json()).catch(() => ({ experiments: [], generations: [] })),
         fetch('/api/research/agents').then(r => r.json()).catch(() => ({ reviews: [] })),
         fetch('/api/evolution/state').then(r => r.json()).catch(() => ({ generations: [] })),
         fetch('/api/system/health').then(r => r.json()).catch(() => ({ providers: [] })),
         fetch('/api/autopilot/logs').then(r => r.json()).catch(() => ({ logs: [] })),
+        fetch('/api/autopilot/status').then(r => r.json()).catch(() => null),
       ]);
 
       if (sigRes?.signals) {
@@ -92,6 +94,7 @@ export default function App() {
       if (genRes?.generations) setGenerations(genRes.generations);
       if (healthRes?.providers) setProviders(healthRes.providers);
       if (autoRes?.logs) setAutopilotLogs(autoRes.logs);
+      if (autoStatusRes) setAutopilotStatus(autoStatusRes);
     } catch (err) {
       console.error('Failed to sync SignalForge data:', err);
     }
@@ -175,6 +178,7 @@ export default function App() {
               signals={signals}
               onEvaluateSignals={handleEvaluateSignals}
               isEvaluating={isEvaluating}
+              autopilotStatus={autopilotStatus}
             />
           )}
           {activeTab === 'opportunities' && <OpportunityResearchView />}

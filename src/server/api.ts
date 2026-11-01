@@ -191,7 +191,9 @@ apiRouter.post('/analyze', (_req: Request, res: Response) => {
 apiRouter.get('/signals', (_req: Request, res: Response) => {
   res.json({
     signals: db.getSignals(),
-    activeCount: db.getActiveSignals().length,
+    activeCount: db.getOpenSignals().length,
+    verifyingCount: db.getSignalsAwaitingSettlement().length,
+    unresolvedCount: db.getActiveSignals().length,
     sessions: db.getSessionAccuracyBreakdown(),
   });
 });
@@ -737,7 +739,8 @@ apiRouter.get('/system/health', (_req: Request, res: Response) => {
     dbType: 'JSON File Store',
     dbPath: 'data/signalforge.db.json',
     totalCandlesStored: db.getTotalCandlesCount(),
-    activeSignalsCount: db.getActiveSignals().length,
+    activeSignalsCount: db.getOpenSignals().length,
+    verifyingSignalsCount: db.getSignalsAwaitingSettlement().length,
     totalExperimentsRun: db.getExperiments().filter(e => e.experimentType !== 'LIVE_TRADE' && e.experimentType !== 'FORWARD_OBSERVATION').length,
     totalForwardObservations: db.getExperiments().filter(e => e.experimentType === 'LIVE_TRADE' || e.experimentType === 'FORWARD_OBSERVATION').length,
     lastCronRun: cron.lastRun,
@@ -785,7 +788,8 @@ apiRouter.post('/tests/run', handleRunTests);
 apiRouter.get('/autopilot/logs', (_req: Request, res: Response) => {
   res.json({
     logs: db.getAutopilotLogs(40),
-    activeCount: db.getActiveSignals().length,
+    activeCount: db.getOpenSignals().length,
+    verifyingCount: db.getSignalsAwaitingSettlement().length,
     timestamp: new Date().toISOString(),
   });
 });
@@ -863,13 +867,13 @@ apiRouter.post('/learning/champion', (req: Request, res: Response) => {
 });
 
 apiRouter.get('/autopilot/status', (_req: Request, res: Response) => {
+  const scheduler = autonomousScheduler.getAutopilotStatus();
   res.json({
-    status: 'ACTIVE_AUTOPILOT',
-    mode: 'AUTOMATED_SIGNAL_AND_RESEARCH',
-    activeSignalsCount: db.getActiveSignals().length,
+    status: scheduler.schedulerStarted ? 'SCHEDULER_RUNNING' : 'SCHEDULER_STOPPED',
+    mode: 'AUTOMATED_PAPER_SIGNAL_AND_RESEARCH',
+    ...scheduler,
     totalCandles: db.getTotalCandlesCount(),
     pairsMonitored: FOREX_PAIRS.length,
-    intervalSeconds: 20,
     timestamp: new Date().toISOString(),
   });
 });

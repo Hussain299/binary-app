@@ -19,6 +19,7 @@ interface DailyAuditViewProps {
   signals: ResearchSignal[];
   onEvaluateSignals: () => void;
   isEvaluating: boolean;
+  autopilotStatus?: any;
 }
 
 const PENDING_STATES = ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE', 'EXIT_PENDING'];
@@ -149,6 +150,7 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
   signals,
   onEvaluateSignals,
   isEvaluating,
+  autopilotStatus,
 }) => {
   const [selectedDate, setSelectedDate] = useState<string>(() => todayIST());
   const [filter, setFilter] = useState<AuditFilter>('ALL');
@@ -269,6 +271,57 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
         <span>{dayLabel(selectedDate)}</span>
         <span className="sf-audit-refresh-note"><span className="sf-audit-live-dot" /> Auto-refresh enabled</span>
       </div>
+
+      {autopilotStatus && (
+        <section className="rounded-xl border border-white/[.08] bg-[#0c151e]/85 px-4 py-3" aria-label="Autopilot health">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[9px] font-bold uppercase tracking-[.13em] text-neutral-500">Signal engine</span>
+              <span className={'rounded-full border px-2 py-1 text-[9px] font-bold ' + (autopilotStatus.schedulerStarted ? 'border-emerald-400/20 bg-emerald-400/[.07] text-emerald-200' : 'border-rose-400/20 bg-rose-400/[.07] text-rose-200')}>
+                {autopilotStatus.schedulerStarted ? 'SCHEDULER RUNNING' : 'SCHEDULER STOPPED'}
+              </span>
+              <span className={'rounded-full border px-2 py-1 text-[9px] font-semibold ' + (autopilotStatus.market?.isOpen ? 'border-emerald-400/15 text-emerald-200' : 'border-amber-400/15 text-amber-200')}>
+                {autopilotStatus.market?.isOpen ? 'FX MARKET OPEN' : 'FX MARKET CLOSED'}
+              </span>
+            </div>
+            <span className="text-[9px] text-neutral-500">
+              Last scan {formatIST(autopilotStatus.lastPulseCompletedAt, true)}
+            </span>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-5">
+            <div><span className="block text-[8px] uppercase tracking-wide text-neutral-600">Fresh pairs</span><strong className="mt-1 block text-sm tabular-nums text-neutral-100">{autopilotStatus.freshPairs ?? 0}<span className="ml-1 text-[9px] font-normal text-neutral-500">/ {autopilotStatus.pairsMonitored ?? 0}</span></strong></div>
+            <div><span className="block text-[8px] uppercase tracking-wide text-neutral-600">Open entry slots</span><strong className="mt-1 block text-sm tabular-nums text-neutral-100">{autopilotStatus.openSignalsCount ?? 0}<span className="ml-1 text-[9px] font-normal text-neutral-500">/ {autopilotStatus.maxConcurrentOpenSignals ?? 4}</span></strong></div>
+            <div><span className="block text-[8px] uppercase tracking-wide text-neutral-600">Awaiting settlement</span><strong className="mt-1 block text-sm tabular-nums text-amber-200">{autopilotStatus.verifyingSignalsCount ?? 0}</strong></div>
+            <div><span className="block text-[8px] uppercase tracking-wide text-neutral-600">Eligible strategies</span><strong className="mt-1 block text-sm tabular-nums text-neutral-100">{autopilotStatus.paperStrategiesEligible ?? 0}</strong></div>
+            <div><span className="block text-[8px] uppercase tracking-wide text-neutral-600">Last scan created</span><strong className="mt-1 block text-sm tabular-nums text-neutral-100">{autopilotStatus.lastPulseResult?.signalsCreated ?? 0}</strong></div>
+          </div>
+          {(autopilotStatus.lastPulseError || autopilotStatus.lastPulseSkippedReason || (autopilotStatus.lastPulseResult?.signalsCreated ?? 0) === 0) && (
+            <div className="mt-3 border-t border-white/[.06] pt-2 text-[9px] leading-relaxed text-neutral-400">
+              <span className="font-semibold text-neutral-300">Latest scan explanation: </span>
+              {autopilotStatus.lastPulseError
+                ? autopilotStatus.lastPulseError
+                : autopilotStatus.lastPulseSkippedReason
+                  ? String(autopilotStatus.lastPulseSkippedReason).replace(/_/g, ' ')
+                  : autopilotStatus.blockedPairReasons?.length
+                    ? autopilotStatus.blockedPairReasons.slice().sort((a: any, b: any) => b.count - a.count).slice(0, 2).map((item: any) => String(item.reason).replace(/_/g, ' ') + ' (' + item.count + ')').join(' · ')
+                    : 'No qualified setup passed the current entry, data and strategy gates.'}
+            </div>
+          )}
+          {Array.isArray(autopilotStatus.pairDiagnostics) && autopilotStatus.pairDiagnostics.length > 0 && (
+            <details className="mt-2 border-t border-white/[.06] pt-2">
+              <summary className="cursor-pointer text-[9px] font-semibold text-neutral-500">Pair-by-pair scan diagnostics ({autopilotStatus.pairDiagnostics.length})</summary>
+              <div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">
+                {autopilotStatus.pairDiagnostics.map((item: any) => (
+                  <div key={item.symbol} className="flex min-w-0 items-center justify-between gap-2 rounded-md bg-white/[.025] px-2 py-1.5">
+                    <span className="shrink-0 text-[9px] font-semibold text-neutral-300">{item.symbol}</span>
+                    <span className="truncate text-right text-[8px] text-neutral-500">{String(item.result || 'UNKNOWN').replace(/_/g, ' ')}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </section>
+      )}
 
       <section className="sf-audit-metrics" aria-label="Daily paper audit summary">
         <div className="sf-audit-metric">

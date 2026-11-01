@@ -1,6 +1,6 @@
-import React from 'react';
-import { BarChart3, TrendingUp, Activity, AlertTriangle } from 'lucide-react';
-import { ResearchExperiment, ResearchSignal } from '../../types/index.js';
+import React, { useEffect, useState } from 'react';
+import { BarChart3, TrendingUp, Activity, AlertTriangle, Clock3 } from 'lucide-react';
+import { MarketSessionInfo, ResearchExperiment, ResearchSignal } from '../../types/index.js';
 
 interface PerformanceAnalyticsViewProps {
   experiments: ResearchExperiment[];
@@ -8,6 +8,34 @@ interface PerformanceAnalyticsViewProps {
 }
 
 export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> = ({ experiments, signals }) => {
+  const [sessionBreakdown, setSessionBreakdown] = useState<MarketSessionInfo[]>([]);
+  const [sessionUpdatedAt, setSessionUpdatedAt] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    const loadSessions = async () => {
+      try {
+        const response = await fetch('/api/sessions/accuracy');
+        if (!response.ok) throw new Error('Session report unavailable (HTTP ' + response.status + ').');
+        const payload = await response.json();
+        if (!disposed && Array.isArray(payload.sessions)) {
+          setSessionBreakdown(payload.sessions);
+          setSessionUpdatedAt(new Date().toISOString());
+          setSessionError(null);
+        }
+      } catch (error: any) {
+        if (!disposed) setSessionError(error?.message || 'Session report unavailable.');
+      }
+    };
+    void loadSessions();
+    const timer = setInterval(loadSessions, 30_000);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, []);
+
   const allCompleted = signals.filter(signal =>
     signal.lifecycleState === 'CLOSED' &&
     ['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult)
@@ -75,6 +103,74 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
           <span className="text-[10px] text-neutral-400 block mt-1">Legacy exploratory records; not approval evidence</span>
         </div>
       </div>
+
+      <section className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-5 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+              <Clock3 className="w-4 h-4 text-cyan-300" />
+              Session-wise forward accuracy
+            </h4>
+            <p className="mt-1 text-[10px] text-neutral-500">
+              All settled, valid paper observations attributed by actual entry time · DST-aware · IST session hours
+            </p>
+          </div>
+          <span className="text-[9px] text-neutral-500">
+            {sessionUpdatedAt ? 'Updated ' + new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }).format(new Date(sessionUpdatedAt)) + ' IST' : 'Loading session ledger…'}
+          </span>
+        </div>
+        {sessionError && (
+          <div role="status" className="rounded-lg border border-amber-500/20 bg-amber-500/[.05] p-3 text-[10px] text-amber-200">
+            {sessionError}
+          </div>
+        )}
+        {sessionBreakdown.length > 0 ? (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-5">
+            {sessionBreakdown.map(session => {
+              const scoredTrades = session.wins + session.losses;
+              return (
+                <article key={session.id} className={'min-w-0 rounded-xl border p-3 ' + (session.isActive ? 'border-emerald-400/25 bg-emerald-400/[.045]' : 'border-white/[.07] bg-[#090f16]/70')}>
+                  <div className="flex min-h-8 items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-[11px] font-semibold text-neutral-100">{session.shortName}</div>
+                      <div className="mt-1 text-[8px] text-neutral-500">{session.istRange}</div>
+                    </div>
+                    {session.isActive && <span className="shrink-0 rounded-full border border-emerald-400/20 bg-emerald-400/[.07] px-2 py-0.5 text-[8px] font-bold text-emerald-200">LIVE</span>}
+                  </div>
+                  <div className="mt-4 flex items-end justify-between gap-2">
+                    <strong className="text-2xl font-semibold tracking-tight tabular-nums text-white">
+                      {session.hasMeasuredData ? session.winRate.toFixed(1) + '%' : '—'}
+                    </strong>
+                    <span className={'text-[10px] font-mono font-semibold tabular-nums ' + (session.netReturnUnits > 0 ? 'text-emerald-300' : session.netReturnUnits < 0 ? 'text-rose-300' : 'text-neutral-400')}>
+                      {session.totalTrades ? (session.netReturnUnits > 0 ? '+' : '') + session.netReturnUnits.toFixed(2) + 'u' : 'No return'}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-[9px] text-neutral-400">
+                    <span className="text-emerald-300">{session.wins}W</span>
+                    <span className="mx-1 text-neutral-600">/</span>
+                    <span className="text-rose-300">{session.losses}L</span>
+                    <span className="mx-1 text-neutral-600">/</span>
+                    <span>{session.scratches}P</span>
+                  </div>
+                  <div className="mt-1 text-[8px] text-neutral-600">
+                    {scoredTrades} decisive · {session.totalTrades} settled total
+                  </div>
+                  <div className="mt-3 border-t border-white/[.06] pt-2 text-[8px] leading-relaxed text-neutral-500">
+                    {session.bestStrategy}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : !sessionError ? (
+          <div className="rounded-lg border border-white/[.06] bg-black/10 p-5 text-center text-[10px] text-neutral-500">
+            Waiting for session data from the paper ledger.
+          </div>
+        ) : null}
+        <p className="text-[9px] leading-relaxed text-neutral-600">
+          Win rate = WIN ÷ (WIN + LOSS). Pushes are excluded. No-data sessions display a dash, not 0%. Small samples are descriptive only, not proof of an edge.
+        </p>
+      </section>
 
       <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-5 space-y-3">
         <h4 className="text-sm font-semibold text-white flex items-center gap-2">
