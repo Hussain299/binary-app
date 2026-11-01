@@ -5,7 +5,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { EvolutionGeneration, FOREX_PAIRS, ForexSymbol, RuleFamily } from '../types/index.js';
+import { EvolutionGeneration, EvolutionSubGenerationMetrics, FOREX_PAIRS, ForexSymbol, RuleFamily, SynthesizedStrategyGene } from '../types/index.js';
 import { dataFeedEngine } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
@@ -47,20 +47,10 @@ interface StrategySearchJob {
   }>;
 }
 
-function summarizeEvolutionSubGenerations(genes: Array<{
-  generation: number;
-  mutationRate: number;
-  genome?: any;
-  discoveryMetrics?: {
-    trainScoredTrades: number;
-    validationScoredTrades: number;
-    validationWinRate: number;
-    validationExpectedValueUnits: number;
-    validationProfitFactor: number;
-    minimumPayoutPct: number;
-  };
-}>): import('../types/index.js').EvolutionSubGenerationMetrics[] {
-  const groups = new Map<number, typeof genes>();
+function summarizeEvolutionSubGenerations(
+  genes: SynthesizedStrategyGene[]
+): EvolutionSubGenerationMetrics[] {
+  const groups = new Map<number, SynthesizedStrategyGene[]>();
   for (const gene of genes) {
     if (!groups.has(gene.generation)) groups.set(gene.generation, []);
     groups.get(gene.generation)!.push(gene);
@@ -74,7 +64,7 @@ function summarizeEvolutionSubGenerations(genes: Array<{
         metrics.validationWinRate >= 0.70 &&
         metrics.validationExpectedValueUnits > 0 &&
         metrics.validationProfitFactor >= 1.15 &&
-        metrics.minimumPayoutPct >= 80;
+        (metrics.minimumPayoutPct ?? 0) >= 80;
     });
     return {
       generation,
