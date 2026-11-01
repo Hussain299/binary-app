@@ -143,7 +143,9 @@ export function isForexSignalScheduleValid(
   if (!Number.isFinite(predictionTimeMs) || !Number.isFinite(entryTimeMs) ||
       !Number.isFinite(expiryTimeMs) || predictionTimeMs > entryTimeMs ||
       !isForexMarketOpenAt(predictionTimeMs)) return false;
-  return isForexMarketIntervalOpen(entryTimeMs, expiryTimeMs);
+  return isForexMarketIntervalOpen(predictionTimeMs, expiryTimeMs) &&
+    isForexMarketOpenAt(entryTimeMs) &&
+    isForexMarketIntervalOpen(entryTimeMs, expiryTimeMs);
 }
 
 /** True only when the whole [entry, expiry) interval occurs before the weekly close. */
