@@ -1,0 +1,354 @@
+import type {
+  Candle,
+  MarketSessionId,
+  StrategyExpressionNode,
+  StrategyFeatureName,
+} from "../types/index.js";
+
+export type StrategyStyle = "TREND" | "MEAN_REVERSION" | "HYBRID" | "UNKNOWN";
+export type MarketRegime =
+  | "HIGH_TREND_BREAKOUT"
+  | "LOW_VOL_ASIA"
+  | "RANGE"
+  | "MIXED"
+  | "UNKNOWN";
+
+export interface RegimeAssessment {
+  regime: MarketRegime;
+  directionalEfficiency: number | null;
+  atrRatio: number | null;
+  observationCount: number;
+  reason: string;
+}
+
+export interface BetaPosterior {
+  alpha: number;
+  beta: number;
+}
+
+export interface EpisodicTradeMemory {
+  signalId: string;
+  symbol: string;
+  direction: "BUY" | "SELL";
+  ruleFamily: string;
+  featureVector: number[];
+  outcome: "WIN" | "LOSS";
+  netReturnUnits: number;
+  closedAt: string;
+}
+
+export interface NeighborMatch extends EpisodicTradeMemory {
+  distance: number;
+}
+
+export interface NeighborAssessment {
+  status: "INSUFFICIENT_HISTORY" | "WEAK_SIMILARITY" | "NEGATIVE_EXPECTANCY" | "SUPPORTIVE";
+  neighborsFound: number;
+  requiredNeighbors: number;
+  meanDistance: number | null;
+  maximumDistance: number | null;
+  weightedExpectedReturnUnits: number | null;
+  winRate: number | null;
+  veto: boolean;
+  matches: NeighborMatch[];
+  reason: string;
+}
+
+export const FEATURE_VECTOR_LENGTH = 19;
+export const DEFAULT_NEIGHBOR_COUNT = 10;
+export const DEFAULT_MAX_NEIGHBOR_RMS_DISTANCE = 0.55;
+
+export function updateBetaPosterior(
+  posterior: BetaPosterior,
+  outcome: "WIN" | "LOSS" | "SCRATCH"
+): BetaPosterior {
+  if (!Number.isFinite(posterior.alpha) || posterior.alpha <= 0 ||
+      !Number.isFinite(posterior.beta) || posterior.beta <= 0) {
+    throw new Error("Beta posterior parameters must be finite and strictly positive.");
+  }
+  if (outcome === "WIN") return { alpha: posterior.alpha + 1, beta: posterior.beta };
+  if (outcome === "LOSS") return { alpha: posterior.alpha, beta: posterior.beta + 1 };
+  return { alpha: posterior.alpha, beta: posterior.beta };
+}
+
+export function betaPosteriorMean(posterior: BetaPosterior): number {
+  const total = posterior.alpha + posterior.beta;
+  if (!Number.isFinite(total) || total <= 0) return 0.5;
+  return posterior.alpha / total;
+}
+
+/** Bayesian upper-confidence score: posterior mean plus an uncertainty bonus. */
+export function bayesianUcbScore(
+  posterior: BetaPosterior,
+  totalObservedDecisions: number
+): number {
+  const observations = Math.max(0, posterior.alpha + posterior.beta - 2);
+  const mean = betaPosteriorMean(posterior);
+  const bonus = 0.35 * Math.sqrt(Math.log(Math.max(2, totalObservedDecisions + 2)) / (observations + 1));
+  return mean + bonus;
+}
+
+export function inferGenomeStyle(expression?: StrategyExpressionNode): StrategyStyle {
+  if (!expression) return "UNKNOWN";
+  const trendFeatures = new Set<StrategyFeatureName>([
+    "return_1", "return_3", "return_5", "return_13",
+    "ema_spread", "ema_curvature", "directional_efficiency", "range_expansion",
+  ]);
+  const meanReversionFeatures = new Set<StrategyFeatureName>([
+    "wick_imbalance", "rsi_centered", "rsi_momentum",
+    "range_position_13", "range_position_34",
+  ]);
+  let trend = 0;
+  let meanReversion = 0;
+  const visit = (node: StrategyExpressionNode): void => {
+    if (node.kind === "feature") {
+      if (trendFeatures.has(node.feature)) trend += 1;
+      if (meanReversionFeatures.has(node.feature)) meanReversion += 1;
+      return;
+    }
+    if (node.kind === "unary") {
+      visit(node.input);
+      return;
+    }
+    if (node.kind === "binary") {
+      visit(node.left);
+      visit(node.right);
+    }
+  };
+  visit(expression);
+  if (trend === 0 && meanReversion === 0) return "UNKNOWN";
+  if (trend >= meanReversion + 2) return "TREND";
+  if (meanReversion >= trend + 2) return "MEAN_REVERSION";
+  return "HYBRID";
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function trueRange(candle: Candle, previousClose: number): number {
+  return Math.max(
+    0,
+    candle.high - candle.low,
+    Math.abs(candle.high - previousClose),
+    Math.abs(candle.low - previousClose)
+  );
+}
+
+export function classifyMarketRegime(
+  inputCandles: Candle[],
+  session: MarketSessionId
+): RegimeAssessment {
+  const ordered = [...inputCandles]
+    .filter(c => Number.isFinite(c.timestampMs) && Number.isFinite(c.open) &&
+      Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close) &&
+      c.high >= c.low && c.high >= Math.max(c.open, c.close) &&
+      c.low <= Math.min(c.open, c.close))
+    .sort((a, b) => a.timestampMs - b.timestampMs)
+    .filter((c, index, rows) => index === 0 || c.timestampMs !== rows[index - 1].timestampMs);
+
+  if (ordered.length < 60) {
+    return {
+      regime: "UNKNOWN",
+      directionalEfficiency: null,
+      atrRatio: null,
+      observationCount: ordered.length,
+      reason: "At least 60 unique valid candles are required for a stable regime comparison.",
+    };
+  }
+
+  const period = 20;
+  const start = ordered.length - period - 1;
+  const netMove = Math.abs(ordered[ordered.length - 1].close - ordered[start].close);
+  let pathLength = 0;
+  for (let i = start + 1; i < ordered.length; i++) {
+    pathLength += Math.abs(ordered[i].close - ordered[i - 1].close);
+  }
+  const efficiency = pathLength > 0 ? netMove / pathLength : 0;
+
+  const ranges = ordered.slice(1).map((candle, index) =>
+    trueRange(candle, ordered[index].close)
+  );
+  const atrPeriod = 14;
+  const currentAtr = ranges.slice(-atrPeriod).reduce((sum, value) => sum + value, 0) / atrPeriod;
+  const historicalAtr: number[] = [];
+  const lastHistoricalEnd = ranges.length - atrPeriod;
+  const firstHistoricalEnd = Math.max(atrPeriod - 1, lastHistoricalEnd - 29);
+  for (let end = firstHistoricalEnd; end <= lastHistoricalEnd; end++) {
+    const window = ranges.slice(end - atrPeriod + 1, end + 1);
+    if (window.length === atrPeriod) {
+      historicalAtr.push(window.reduce((sum, value) => sum + value, 0) / atrPeriod);
+    }
+  }
+  const baselineAtr = median(historicalAtr);
+  if (!(baselineAtr > 0) || !Number.isFinite(currentAtr)) {
+    return {
+      regime: "UNKNOWN",
+      directionalEfficiency: efficiency,
+      atrRatio: null,
+      observationCount: ordered.length,
+      reason: "Volatility baseline is degenerate; regime gate is not applied.",
+    };
+  }
+  const atrRatio = currentAtr / baselineAtr;
+
+  if (efficiency >= 0.55 && atrRatio >= 1.2) {
+    return {
+      regime: "HIGH_TREND_BREAKOUT",
+      directionalEfficiency: efficiency,
+      atrRatio,
+      observationCount: ordered.length,
+      reason: "Directional efficiency and current ATR expansion both exceed the configured breakout thresholds.",
+    };
+  }
+  if (session === "ASIA" && atrRatio <= 0.75) {
+    return {
+      regime: "LOW_VOL_ASIA",
+      directionalEfficiency: efficiency,
+      atrRatio,
+      observationCount: ordered.length,
+      reason: "Asian session volatility is below 75% of its recent ATR baseline.",
+    };
+  }
+  if (efficiency <= 0.25) {
+    return {
+      regime: "RANGE",
+      directionalEfficiency: efficiency,
+      atrRatio,
+      observationCount: ordered.length,
+      reason: "Net displacement is small relative to the total 20-candle path.",
+    };
+  }
+  return {
+    regime: "MIXED",
+    directionalEfficiency: efficiency,
+    atrRatio,
+    observationCount: ordered.length,
+    reason: "The market does not meet a high-confidence trend, range, or low-volatility Asian classification.",
+  };
+}
+
+export function isStrategyRegimeCompatible(
+  style: StrategyStyle,
+  regime: MarketRegime
+): { allowed: boolean; reason: string } {
+  if (regime === "UNKNOWN" || regime === "MIXED") {
+    return { allowed: true, reason: "Regime evidence is insufficient or mixed; no regime-specific suppression applied." };
+  }
+  if (regime === "HIGH_TREND_BREAKOUT" && style === "MEAN_REVERSION") {
+    return { allowed: false, reason: "Mean-reversion setup suppressed during a high-efficiency, expanding-volatility breakout." };
+  }
+  if (regime === "LOW_VOL_ASIA" && style === "TREND") {
+    return { allowed: false, reason: "Trend-breakout setup suppressed during low-volatility Asian-session conditions." };
+  }
+  return { allowed: true, reason: "Strategy style is compatible with the measured market regime." };
+}
+
+export function assessNearestNeighbors(
+  query: {
+    symbol: string;
+    direction: "BUY" | "SELL";
+    ruleFamily: string;
+    featureVector: number[];
+    predictionTimeUtc: string;
+  },
+  memory: EpisodicTradeMemory[],
+  options: {
+    k?: number;
+    maximumRmsDistance?: number;
+  } = {}
+): NeighborAssessment {
+  const k = options.k ?? DEFAULT_NEIGHBOR_COUNT;
+  const maximumRmsDistance = options.maximumRmsDistance ?? DEFAULT_MAX_NEIGHBOR_RMS_DISTANCE;
+  const predictionTime = Date.parse(query.predictionTimeUtc);
+  if (!Number.isFinite(predictionTime) || query.featureVector.length !== FEATURE_VECTOR_LENGTH ||
+      !query.featureVector.every(Number.isFinite)) {
+    throw new Error("k-NN query requires a valid prediction timestamp and a finite 19-feature vector.");
+  }
+  if (!Number.isInteger(k) || k < 1 || !Number.isFinite(maximumRmsDistance) || maximumRmsDistance <= 0) {
+    throw new Error("k-NN configuration is invalid.");
+  }
+
+  const candidates: NeighborMatch[] = [];
+  for (const item of memory) {
+    if (item.symbol !== query.symbol || item.direction !== query.direction ||
+        item.ruleFamily !== query.ruleFamily || item.featureVector.length !== FEATURE_VECTOR_LENGTH ||
+        !item.featureVector.every(Number.isFinite) ||
+        !Number.isFinite(item.netReturnUnits)) continue;
+    const closedAt = Date.parse(item.closedAt);
+    // Strictly exclude outcomes that were not known at the decision timestamp.
+    if (!Number.isFinite(closedAt) || closedAt >= predictionTime) continue;
+    let squared = 0;
+    for (let i = 0; i < FEATURE_VECTOR_LENGTH; i++) {
+      const delta = query.featureVector[i] - item.featureVector[i];
+      squared += delta * delta;
+    }
+    const distance = Math.sqrt(squared / FEATURE_VECTOR_LENGTH);
+    candidates.push({ ...item, distance });
+  }
+  candidates.sort((a, b) => a.distance - b.distance || a.closedAt.localeCompare(b.closedAt));
+  const matches = candidates.slice(0, k);
+  const maximumDistance = matches.length ? Math.max(...matches.map(item => item.distance)) : null;
+  const meanDistance = matches.length
+    ? matches.reduce((sum, item) => sum + item.distance, 0) / matches.length
+    : null;
+
+  if (matches.length < k) {
+    return {
+      status: "INSUFFICIENT_HISTORY",
+      neighborsFound: matches.length,
+      requiredNeighbors: k,
+      meanDistance,
+      maximumDistance,
+      weightedExpectedReturnUnits: null,
+      winRate: null,
+      veto: false,
+      matches,
+      reason: "Not enough earlier settled trades exist in this pair, direction, and strategy family; k-NN remains advisory-neutral.",
+    };
+  }
+  if (maximumDistance !== null && maximumDistance > maximumRmsDistance) {
+    return {
+      status: "WEAK_SIMILARITY",
+      neighborsFound: matches.length,
+      requiredNeighbors: k,
+      meanDistance,
+      maximumDistance,
+      weightedExpectedReturnUnits: null,
+      winRate: null,
+      veto: false,
+      matches,
+      reason: "The ten nearest historical setups are not sufficiently close to this market context.",
+    };
+  }
+
+  const weighted = matches.reduce((acc, item) => {
+    const weight = 1 / Math.max(0.05, item.distance);
+    acc.weight += weight;
+    acc.return += weight * item.netReturnUnits;
+    if (item.outcome === "WIN") acc.wins += weight;
+    return acc;
+  }, { weight: 0, return: 0, wins: 0 });
+  const expectedReturn = weighted.weight > 0 ? weighted.return / weighted.weight : 0;
+  const winRate = weighted.weight > 0 ? weighted.wins / weighted.weight : 0;
+  const veto = expectedReturn <= 0;
+  return {
+    status: veto ? "NEGATIVE_EXPECTANCY" : "SUPPORTIVE",
+    neighborsFound: matches.length,
+    requiredNeighbors: k,
+    meanDistance,
+    maximumDistance,
+    weightedExpectedReturnUnits: expectedReturn,
+    winRate,
+    veto,
+    matches,
+    reason: veto
+      ? "The ten sufficiently similar, strictly earlier outcomes have non-positive inverse-distance-weighted binary return."
+      : "The ten sufficiently similar, strictly earlier outcomes have positive inverse-distance-weighted binary return.",
+  };
+}
