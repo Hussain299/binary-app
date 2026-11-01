@@ -3,7 +3,8 @@
  *
  * The genome activation/conviction score is not a probability. This module
  * estimates an empirical win probability from earlier settled observations only.
- * It never changes the raw score or the trading trigger.
+ * It never changes the raw score or the trading trigger. Diagnostic metrics use
+ * a chronological tail that was not used to fit the diagnostic calibrator.
  */
 
 export interface CalibrationObservation {
@@ -15,7 +16,9 @@ export interface CalibratedScore {
   probability: number | null;
   status: "CALIBRATED" | "UNCALIBRATED" | "OVERCONFIDENT";
   sampleSize: number;
+  /** Forward-challenged Brier score; null until a chronological validation slice exists. */
   brierScore: number | null;
+  /** Forward-challenged expected calibration error; null until a validation slice exists. */
   expectedCalibrationError: number | null;
 }
 
@@ -42,7 +45,103 @@ function mergeBlocks(left: CalibrationBlock, right: CalibrationBlock): Calibrati
   };
 }
 
-/** Fit monotonic isotonic calibration using only outcomes already observed. */
+/** Group equal scores before binning so ties can never be split across calibration bins. */
+function buildIsotonicBlocks(input: readonly CalibrationObservation[]): CalibrationBlock[] {
+  const sorted = input.slice().sort((a, b) => a.rawScore - b.rawScore);
+  const scoreGroups: CalibrationBlock[] = [];
+  for (const observation of sorted) {
+    const last = scoreGroups[scoreGroups.length - 1];
+    if (last && last.maxScore === observation.rawScore) {
+      last.scoreTotal += observation.rawScore;
+      last.wins += observation.outcome === "WIN" ? 1 : 0;
+      last.count += 1;
+    } else {
+      scoreGroups.push({
+        minScore: observation.rawScore,
+        maxScore: observation.rawScore,
+        scoreTotal: observation.rawScore,
+        wins: observation.outcome === "WIN" ? 1 : 0,
+        count: 1,
+      });
+    }
+  }
+
+  // Build approximately equal-count bins without splitting identical raw scores.
+  const targetBinSize = Math.max(20, Math.floor(sorted.length / 10));
+  const blocks: CalibrationBlock[] = [];
+  let current: CalibrationBlock | null = null;
+  for (const group of scoreGroups) {
+    current = current
+      ? mergeBlocks(current, group)
+      : { ...group };
+    if (current.count >= targetBinSize && blocks.length < 9) {
+      blocks.push(current);
+      current = null;
+    }
+  }
+  if (current) {
+    if (blocks.length > 0 && current.count < targetBinSize) {
+      blocks[blocks.length - 1] = mergeBlocks(blocks[blocks.length - 1], current);
+    } else {
+      blocks.push(current);
+    }
+  }
+
+  // Pool Adjacent Violators: fitted win probability may not decrease as raw score rises.
+  for (let index = 0; index < blocks.length - 1;) {
+    if (blockProbability(blocks[index]) <= blockProbability(blocks[index + 1])) {
+      index++;
+      continue;
+    }
+    blocks.splice(index, 2, mergeBlocks(blocks[index], blocks[index + 1]));
+    if (index > 0) index--;
+  }
+  return blocks;
+}
+
+function probabilityForScore(blocks: readonly CalibrationBlock[], score: number): number {
+  const matched = blocks.find(block => score <= block.maxScore);
+  return blockProbability(matched || blocks[blocks.length - 1]);
+}
+
+function forwardCalibrationDiagnostics(
+  training: readonly CalibrationObservation[],
+  validation: readonly CalibrationObservation[]
+): { brierScore: number | null; expectedCalibrationError: number | null } {
+  if (training.length < 100 || validation.length < 20) {
+    return { brierScore: null, expectedCalibrationError: null };
+  }
+  const blocks = buildIsotonicBlocks(training);
+  const predictions = validation.map(observation => ({
+    probability: probabilityForScore(blocks, observation.rawScore),
+    outcome: observation.outcome === "WIN" ? 1 : 0,
+  }));
+
+  const brier = predictions.reduce(
+    (sum, item) => sum + Math.pow(item.probability - item.outcome, 2),
+    0
+  ) / predictions.length;
+
+  const sortedPredictions = predictions.slice().sort((a, b) => a.probability - b.probability);
+  const calibrationBinCount = Math.min(5, Math.max(1, Math.floor(sortedPredictions.length / 10)));
+  let ece = 0;
+  for (let bin = 0; bin < calibrationBinCount; bin++) {
+    const start = Math.floor((bin * sortedPredictions.length) / calibrationBinCount);
+    const end = Math.floor(((bin + 1) * sortedPredictions.length) / calibrationBinCount);
+    const slice = sortedPredictions.slice(start, end);
+    if (slice.length === 0) continue;
+    const meanPrediction = slice.reduce((sum, item) => sum + item.probability, 0) / slice.length;
+    const observedRate = slice.reduce((sum, item) => sum + item.outcome, 0) / slice.length;
+    ece += (slice.length / sortedPredictions.length) * Math.abs(meanPrediction - observedRate);
+  }
+
+  return {
+    brierScore: Number(brier.toFixed(4)),
+    expectedCalibrationError: Number(ece.toFixed(4)),
+  };
+}
+
+/** Fit monotonic calibration using earlier outcomes; validate diagnostics on a later time slice. */
 export function calibratePredictionScore(
   rawScore: number,
   input: readonly CalibrationObservation[],
@@ -55,74 +154,38 @@ export function calibratePredictionScore(
     throw new Error("Calibration minimum sample size must be an integer of at least 20.");
   }
 
-  const observations = input.filter(item =>
+  // Preserve chronology for forward diagnostics; old records without raw scores are ignored.
+  const chronological = input.filter(item =>
     Number.isFinite(item.rawScore) &&
     item.rawScore >= 0 &&
     item.rawScore <= 1 &&
     (item.outcome === "WIN" || item.outcome === "LOSS")
-  ).slice().sort((a, b) => a.rawScore - b.rawScore);
+  );
 
-  if (observations.length < minimumSampleSize) {
+  if (chronological.length < minimumSampleSize) {
     return {
       probability: null,
       status: "UNCALIBRATED",
-      sampleSize: observations.length,
+      sampleSize: chronological.length,
       brierScore: null,
       expectedCalibrationError: null,
     };
   }
 
-  // Equal-count bins, with at least twenty observations per initial bin.
-  const binCount = Math.min(10, Math.max(2, Math.floor(observations.length / 20)));
-  const blocks: CalibrationBlock[] = [];
-  for (let bin = 0; bin < binCount; bin++) {
-    const start = Math.floor((bin * observations.length) / binCount);
-    const end = Math.floor(((bin + 1) * observations.length) / binCount);
-    const slice = observations.slice(start, end);
-    if (slice.length === 0) continue;
-    blocks.push({
-      minScore: slice[0].rawScore,
-      maxScore: slice[slice.length - 1].rawScore,
-      scoreTotal: slice.reduce((sum, item) => sum + item.rawScore, 0),
-      wins: slice.filter(item => item.outcome === "WIN").length,
-      count: slice.length,
-    });
-  }
+  const validationSize = Math.max(20, Math.floor(chronological.length * 0.25));
+  const training = chronological.slice(0, chronological.length - validationSize);
+  const validation = chronological.slice(chronological.length - validationSize);
+  const diagnostics = forwardCalibrationDiagnostics(training, validation);
 
-  // Pool Adjacent Violators: fitted win probability may not decrease as raw score rises.
-  for (let index = 0; index < blocks.length - 1;) {
-    if (blockProbability(blocks[index]) <= blockProbability(blocks[index + 1])) {
-      index++;
-      continue;
-    }
-    blocks.splice(index, 2, mergeBlocks(blocks[index], blocks[index + 1]));
-    if (index > 0) index--;
-  }
-
-  const fittedBlockForScore = (score: number): CalibrationBlock => {
-    const exact = blocks.find(block => score <= block.maxScore);
-    return exact || blocks[blocks.length - 1];
-  };
-  const calibrated = blockProbability(fittedBlockForScore(rawScore));
-
-  let squaredError = 0;
-  let calibrationError = 0;
-  for (const block of blocks) {
-    const probability = blockProbability(block);
-    const observedRate = block.wins / block.count;
-    calibrationError += (block.count / observations.length) * Math.abs(observedRate - probability);
-  }
-  for (const observation of observations) {
-    const probability = blockProbability(fittedBlockForScore(observation.rawScore));
-    const outcome = observation.outcome === "WIN" ? 1 : 0;
-    squaredError += Math.pow(probability - outcome, 2);
-  }
+  // The live estimate uses all outcomes known before this prediction timestamp.
+  const finalBlocks = buildIsotonicBlocks(chronological);
+  const probability = probabilityForScore(finalBlocks, rawScore);
 
   return {
-    probability: Number(calibrated.toFixed(4)),
-    status: rawScore - calibrated >= 0.10 ? "OVERCONFIDENT" : "CALIBRATED",
-    sampleSize: observations.length,
-    brierScore: Number((squaredError / observations.length).toFixed(4)),
-    expectedCalibrationError: Number(calibrationError.toFixed(4)),
+    probability: Number(probability.toFixed(4)),
+    status: rawScore - probability >= 0.10 ? "OVERCONFIDENT" : "CALIBRATED",
+    sampleSize: chronological.length,
+    brierScore: diagnostics.brierScore,
+    expectedCalibrationError: diagnostics.expectedCalibrationError,
   };
 }
