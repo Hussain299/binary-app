@@ -951,7 +951,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                           </span>
                         </div>
                         <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800/80 font-mono text-[11px] font-bold shrink-0">
-                          {sig.paperOnly ? 'PAPER ONLY · NOT APPROVED' : (sig.strategyEvidenceStatus === 'BACKTESTED' && typeof sig.strategyWinRate === 'number' ? `${sig.strategyWinRate.toFixed(1)}% Historical test WR · n=${sig.strategyHistoricalSampleSize || 0}` : 'Historical result not validated')}
+                          {sig.paperOnly ? (sig.strategyForwardApproved ? 'FORWARD GATE PASSED · PAPER ONLY' : 'PAPER ONLY · NOT APPROVED') : (sig.strategyEvidenceStatus === 'BACKTESTED' && typeof sig.strategyWinRate === 'number' ? `${sig.strategyWinRate.toFixed(1)}% Historical test WR · n=${sig.strategyHistoricalSampleSize || 0}` : 'Historical result not validated')}
                         </span>
                       </div>
 
