@@ -195,19 +195,24 @@ function wilson(wins: number, sampleSize: number): number {
  * The 3.8 z-score is a conservative one-sided multiple-comparison adjustment
  * for up to 600 pair/family/horizon opportunities in a full batch.
  */
-function evaluateIndependentHoldout(
-  context: PairContext,
+export function evaluateOpportunityHoldout(
+  candles: readonly Candle[],
+  historicalRows: ReadonlyArray<{ index: number; vector: number[] }>,
+  holdoutStartIndex: number,
   horizon: Horizon,
-  directionAt: (row: HistoricalFeatureRow) => HistoricalDirection
+  directionAt: (row: { index: number; vector: number[] }) => HistoricalDirection
 ): HoldoutMetrics {
+  if (!Number.isInteger(holdoutStartIndex) || holdoutStartIndex < 0 ||
+      ![5, 10, 15, 20, 25, 30].includes(horizon)) {
+    throw new Error("A valid holdout boundary and supported horizon are required.");
+  }
   let wins = 0;
   let losses = 0;
   let scratches = 0;
   let busyUntilMs = -Infinity;
-  const candles = context.candles;
 
-  for (const row of context.historicalFeatureRows) {
-    if (row.index < context.holdoutStartIndex) continue;
+  for (const row of historicalRows) {
+    if (row.index < holdoutStartIndex) continue;
     const direction = directionAt(row);
     if (!direction) continue;
 
@@ -237,7 +242,8 @@ function evaluateIndependentHoldout(
 
   const sampleSize = wins + losses;
   const winRate = sampleSize ? wins / sampleSize : null;
-  // Do not claim a positive edge from an immature sample.
+  // One-sided Wilson bound with a conservative Bonferroni-style correction
+  // for selecting among up to 600 pair/family/horizon candidates per batch.
   const lowerBound = sampleSize >= MIN_ANALOGUES_FOR_SHORTLIST
     ? wilsonLowerBound(wins, sampleSize, 3.8)
     : null;
@@ -254,6 +260,20 @@ function evaluateIndependentHoldout(
     lowerConfidenceBound: lowerBound === null ? null : Number(lowerBound.toFixed(4)),
     expectedValueLowerBound: expectedValue === null ? null : Number(expectedValue.toFixed(4)),
   };
+}
+
+function evaluateIndependentHoldout(
+  context: PairContext,
+  horizon: Horizon,
+  directionAt: (row: HistoricalFeatureRow) => HistoricalDirection
+): HoldoutMetrics {
+  return evaluateOpportunityHoldout(
+    context.candles,
+    context.historicalFeatureRows,
+    context.holdoutStartIndex,
+    horizon,
+    directionAt
+  );
 }
 
 function makeForecast(
