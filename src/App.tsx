@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header.tsx';
 import { Sidebar, ViewTab } from './components/Sidebar.tsx';
-import { SignalTerminalView } from './components/views/SignalTerminalView.tsx';
+import { DailyAuditView } from './components/views/DailyAuditView.tsx';
 import { OpportunityResearchView } from './components/views/OpportunityResearchView.tsx';
 import { LearningWorkbenchView } from './components/views/LearningWorkbenchView.tsx';
 import { MarketExplorerView } from './components/views/MarketExplorerView.tsx';
@@ -136,7 +136,7 @@ export default function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   const activeSignalsCount = signals.filter(s =>
-    ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE'].includes(s.lifecycleState)
+    ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE', 'EXIT_PENDING'].includes(s.lifecycleState)
   ).length;
 
   return (
@@ -177,9 +177,8 @@ export default function App() {
         <main className="app-main min-w-0 flex h-full flex-1 flex-col overflow-hidden bg-transparent">
           <div key={activeTab} className="sf-view-stage">
           {activeTab === 'terminal' && (
-            <SignalTerminalView
+            <DailyAuditView
               signals={signals}
-              autopilotLogs={autopilotLogs}
               onEvaluateSignals={handleEvaluateSignals}
               isEvaluating={isEvaluating}
             />
@@ -223,7 +222,7 @@ export default function App() {
           }`}
         >
           <Zap className="w-4 h-4" />
-          <span className="text-[10px]">Signals</span>
+          <span className="text-[10px]">Audit</span>
         </button>
 
         <button

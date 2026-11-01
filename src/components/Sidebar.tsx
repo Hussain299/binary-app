@@ -55,7 +55,7 @@ const groups: Array<{
   {
     label: 'Workspace',
     items: [
-      { id: 'terminal', label: 'Signals', icon: Zap, count: 'signals' },
+      { id: 'terminal', label: 'Daily audit', icon: Zap, count: 'signals' },
       { id: 'opportunities', label: 'Opportunities', icon: BrainCircuit },
       { id: 'explorer', label: 'Markets', icon: LineChart },
       { id: 'strategy', label: 'Strategies', icon: Lightbulb },
