@@ -109,6 +109,9 @@ export class EntryExitEngine {
     const isTest = params.ruleFamily.startsWith('test_');
     const signalCandleMs = params.signalCandle.timestampMs || Date.now();
     const entryTimeframeMinutes = params.entryTimeframeMinutes ?? 5;
+    if (!isTest && params.entryTimeframeMinutes !== undefined && entryTimeframeMinutes !== expiryMinutes) {
+      throw new Error('The research entry timeframe and expiry horizon must match so training and forward outcomes use the same contract.');
+    }
     if (![5, 10, 15, 20, 25, 30].includes(entryTimeframeMinutes)) {
       throw new Error('Entry timeframe must be one of 5, 10, 15, 20, 25 or 30 minutes.');
     }
@@ -164,8 +167,8 @@ export class EntryExitEngine {
       entryCondition = `Strict ${entryTimeframeMinutes}M Candle Open (${candleOpenTimeIst}) [Trigger: ${triggerPrice}] · ${expiryMinutes}m Expiry`;
     }
 
-    // Entry window: valid from next candle open for tests, or from 5m candle open for live
-    const entryWindowStartMs = isTest ? (signalCandleMs + 60 * 1000) : next5mCandleOpenMs;
+    // Entry window: test fixtures preserve their synthetic path; live signals use the explicit N-minute candle open.
+    const entryWindowStartMs = isTest ? (signalCandleMs + 60 * 1000) : nextCandleOpenMs;
     const entryWindowEndMs = entryWindowStartMs + (expiryMinutes * 60 * 1000);
 
     const initialHistory: SignalLifecycleEvent[] = [
