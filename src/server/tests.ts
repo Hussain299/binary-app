@@ -4,7 +4,7 @@
  * Research Trinity Audits, and System State.
  */
 
-import { Candle, ForexSymbol, LossAutopsy, ResearchSignal, SynthesizedStrategyGene, VerificationTestResult } from '../types/index.js';
+import { Candle, ForexSymbol, LossAutopsy, ResearchSignal, SynthesizedStrategyGene, TradeOpportunity, VerificationTestResult } from '../types/index.js';
 import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
@@ -39,6 +39,7 @@ import {
 } from './researchReproducibility.js';
 import { sanitizeLossAutopsy, OBSERVATION_ONLY_LESSONS } from './researchGovernance.js';
 import { calibratePredictionScore } from './predictionCalibration.js';
+import { opportunityEngine } from './opportunityEngine.js';
 import {
   assessPaperCapitalRisk,
   CONSERVATIVE_PAPER_RISK_POLICY,
@@ -303,6 +304,79 @@ export async function runAllVerificationTests(): Promise<{
     });
     if (alreadyFull.permitted || alreadyFull.reason !== 'OPEN_RISK_LIMIT_REACHED') {
       throw new Error('The portfolio open-risk ceiling must stop another position.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Human direction revisions are separately audited and never overwrite the AI hypothesis', () => {
+    const now = new Date().toISOString();
+    const terminalPrices = Array.from({ length: 120 }, (_, index) =>
+      index < 80 ? 1.10100 + (index % 5) * 0.00001 : 1.09900 - (index % 5) * 0.00001
+    );
+    const original: TradeOpportunity = {
+      id: 'opportunity-parent-test',
+      batchId: 'opportunity-batch-test',
+      symbol: 'EUR/USD',
+      hypothesisType: 'TREND_CONTINUATION',
+      hypothesisName: 'Test trend hypothesis',
+      hypothesis: 'Test-only opportunity to exercise the human revision audit.',
+      sourceKind: 'EXPLORATORY_HEURISTIC',
+      direction: 'BUY',
+      rawHypothesisScore: 0.4,
+      activationThreshold: 0.16,
+      horizonMinutes: 10,
+      generatedAt: now,
+      snapshotAt: now,
+      staleAfter: new Date(Date.now() + 180_000).toISOString(),
+      entryTimeUtc: new Date(Date.now() + 300_000).toISOString(),
+      expiryTimeUtc: new Date(Date.now() + 900_000).toISOString(),
+      snapshotPrice: 1.10000,
+      proposedEntryPrice: 1.10000,
+      dataSource: 'imported',
+      marketDataQuality: 95,
+      datasetFingerprint: 'sha256:test',
+      featureSchemaVersion: 'causal-market-features-v1',
+      modelVersion: 'opportunity-research-test',
+      marketFeatureVector: Array.from({ length: 19 }, () => 0),
+      forecast: {
+        status: 'AVAILABLE',
+        points: [],
+        terminalPrices,
+        analogueCount: 120,
+        meanDistance: 0.12,
+        winRate: 0.6667,
+        lowerConfidenceBound: 0.59,
+        payoutBreakEvenProbability: binaryBreakEvenWinRate(80),
+        expectedValueLowerBound: 0.262,
+      },
+      audit: {
+        status: 'SHORTLISTED',
+        rankScore: 80,
+        reasons: ['Test fixture'],
+        counterEvidence: [],
+        auditedAt: now,
+      },
+      humanDecision: { status: 'PENDING', decidedAt: now },
+    };
+
+    const revisedBuy = opportunityEngine.reviseDirection(original, 'BUY');
+    if (revisedBuy.id === original.id ||
+        revisedBuy.direction !== 'BUY' ||
+        revisedBuy.humanDecision.parentOpportunityId !== original.id) {
+      throw new Error('A human revision must create a linked, separate opportunity record.');
+    }
+    if (revisedBuy.audit.status !== 'SHORTLISTED') {
+      throw new Error('A direction with sufficient conservative historical evidence should remain shortlist-eligible.');
+    }
+
+    const revisedSell = opportunityEngine.reviseDirection(original, 'SELL');
+    if (revisedSell.audit.status !== 'REJECTED' ||
+        revisedSell.forecast.lowerConfidenceBound === null ||
+        revisedSell.forecast.lowerConfidenceBound >= revisedBuy.forecast.lowerConfidenceBound!) {
+      throw new Error('The opposite direction must be independently recalculated and rejected when its evidence is weak.');
+    }
+    if (original.direction !== 'BUY' || original.audit.status !== 'SHORTLISTED' ||
+        original.humanDecision.status !== 'PENDING') {
+      throw new Error('Human revision must never mutate the original AI hypothesis.');
     }
   });
 
