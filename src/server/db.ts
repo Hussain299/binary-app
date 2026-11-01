@@ -49,6 +49,8 @@ interface DatabaseSchema {
   marketRegimes: Record<string, MarketRegimeSnapshot>;
   /** Global idempotency ledger; prevents replayed settlement events from retraining state. */
   processedOutcomeIds: string[];
+  /** Holdout time ranges already inspected by candidate searches; prevents reuse. */
+  researchHoldoutWindows: Array<{ symbol: ForexSymbol; batchId: string; startUtc: string; endUtc: string; reservedAt: string }>;
   cronState: {
     lastRun: string | null;
     nextRun: string | null;
@@ -87,6 +89,7 @@ class DatabaseService {
         if (!Array.isArray(parsed.episodicMemory)) parsed.episodicMemory = [];
         if (!parsed.marketRegimes || typeof parsed.marketRegimes !== 'object') parsed.marketRegimes = {};
         if (!Array.isArray(parsed.processedOutcomeIds)) parsed.processedOutcomeIds = [];
+        if (!Array.isArray(parsed.researchHoldoutWindows)) parsed.researchHoldoutWindows = [];
         // Historical versions wrote fabricated strategy accuracy values. Never trust them
         // without stored untouched-test evidence; quarantine all such legacy candidates.
         if (Array.isArray(parsed.synthesizedStrategies)) {
@@ -343,6 +346,54 @@ class DatabaseService {
     this.saveTimeout = setTimeout(() => {
       this.saveStateSync();
     }, 500);
+  }
+
+  /** Latest holdout end already inspected for one symbol. */
+  public getLatestResearchHoldoutEndMs(symbol: ForexSymbol): number | null {
+    const windows = this.state.researchHoldoutWindows || [];
+    const ends = windows
+      .filter(item => item.symbol === symbol && Number.isFinite(Date.parse(item.endUtc)))
+      .map(item => Date.parse(item.endUtc));
+    return ends.length ? Math.max(...ends) : null;
+  }
+
+  /**
+   * Atomically reserve an untouched chronological test interval before the
+   * search starts. Even a failed/crashed batch consumes its test window.
+   */
+  public claimResearchHoldoutWindow(
+    symbol: ForexSymbol,
+    batchId: string,
+    startMs: number,
+    endMs: number
+  ): boolean {
+    if (!batchId || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+      throw new Error('A unique batch ID and valid chronological holdout window are required.');
+    }
+    if (!Array.isArray(this.state.researchHoldoutWindows)) {
+      this.state.researchHoldoutWindows = [];
+    }
+    const overlaps = this.state.researchHoldoutWindows.some(item => {
+      if (item.symbol !== symbol) return false;
+      const previousStart = Date.parse(item.startUtc);
+      const previousEnd = Date.parse(item.endUtc);
+      return Number.isFinite(previousStart) && Number.isFinite(previousEnd) &&
+        startMs <= previousEnd && endMs >= previousStart;
+    });
+    if (overlaps) return false;
+    this.state.researchHoldoutWindows.push({
+      symbol,
+      batchId,
+      startUtc: new Date(startMs).toISOString(),
+      endUtc: new Date(endMs).toISOString(),
+      reservedAt: new Date().toISOString(),
+    });
+    if (this.state.researchHoldoutWindows.length > 2000) {
+      this.state.researchHoldoutWindows = this.state.researchHoldoutWindows.slice(-2000);
+    }
+    // A reservation must hit disk immediately, not after the normal debounce.
+    this.saveStateSync();
+    return true;
   }
 
   // Candle Storage
