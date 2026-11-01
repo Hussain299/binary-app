@@ -4,8 +4,10 @@
  * Includes gap detection, duplicate elimination, UTC normalization, and health scoring.
  */
 
-import { Candle, ForexSymbol, MarketSessionId, MarketSessionInfo, ProviderHealth } from '../types/index.js';
+import { Candle, ForexSymbol, ProviderHealth } from '../types/index.js';
 import { db } from './db.js';
+import { getForexMarketState, isForexMarketOpenAt, getSessionFromTimestamp } from './marketHours.js';
+export { getSessionFromTimestamp } from './marketHours.js';
 
 interface RawCandle {
   timestamp: number | string;
@@ -44,6 +46,21 @@ export class DataFeedEngine {
    * Fetches candles with full 3-tier fallback logic and health auditing.
    */
   public async fetchCandles(symbol: ForexSymbol, limit: number = 100): Promise<{ candles: Candle[]; source: string; qualityScore: number }> {
+    // Hard stop before contacting providers or generating continuity candles while FX is closed.
+    // Return only previously stored, non-synthetic market observations for display; these are stale
+    // context, never permission to create or settle a trade.
+    if (!isForexMarketOpenAt(Date.now())) {
+      const cachedRealCandles = db.getCandles(symbol, limit).filter(candle =>
+        ['biquote', 'dukascopy', 'yahoo', 'imported'].includes(candle.source)
+      );
+      const candles = this.validateAndDeduplicate(cachedRealCandles);
+      return {
+        candles,
+        source: 'market_closed',
+        qualityScore: candles.length ? this.calculateQualityScore(candles) : 0,
+      };
+    }
+
     const cleanSymbol = symbol.replace('/', '');
     let candles: Candle[] = [];
     let activeSource = 'none';
@@ -405,16 +422,20 @@ export class DataFeedEngine {
   public getMarketSessions() {
     const now = new Date();
     const utcHour = now.getUTCHours();
+    const market = getForexMarketState(now);
     const currentSession = getSessionFromTimestamp(now);
 
     return {
-      activeSessionId: currentSession.id,
-      activeSessionName: currentSession.name,
-      sydney: utcHour >= 22 || utcHour < 7,
-      tokyo: utcHour >= 0 && utcHour < 9,
-      london: utcHour >= 7 && utcHour < 16,
-      newYork: utcHour >= 12 && utcHour < 21,
-      overlap: utcHour >= 12 && utcHour < 16,
+      marketOpen: market.isOpen,
+      marketStatus: market.status,
+      marketMessage: market.message,
+      activeSessionId: market.isOpen ? currentSession.id : null,
+      activeSessionName: market.isOpen ? currentSession.name : 'Forex Market Closed',
+      sydney: market.isOpen && (utcHour >= 22 || utcHour < 7),
+      tokyo: market.isOpen && (utcHour >= 0 && utcHour < 9),
+      london: market.isOpen && (utcHour >= 7 && utcHour < 16),
+      newYork: market.isOpen && (utcHour >= 12 && utcHour < 21),
+      overlap: market.isOpen && (utcHour >= 12 && utcHour < 16),
       currentUtcHour: utcHour,
       currentUtcIso: now.toISOString(),
       currentIst: new Intl.DateTimeFormat('en-IN', {
@@ -424,59 +445,6 @@ export class DataFeedEngine {
         second: '2-digit',
         hour12: true,
       }).format(now).toUpperCase() + ' IST',
-    };
-  }
-}
-
-/**
- * Deterministically resolves the forex market session for any UTC timestamp.
- * 4 Recognized Institutional Sessions:
- * 1. ASIA (Tokyo/Sydney): 00:00 - 07:00 UTC (05:30 - 12:30 IST)
- * 2. LONDON: 07:00 - 12:00 UTC (12:30 - 17:30 IST)
- * 3. OVERLAP (London + New York Peak): 12:00 - 16:00 UTC (17:30 - 21:30 IST)
- * 4. NEW_YORK (Afternoon NY): 16:00 - 21:00 UTC (21:30 - 02:30 IST)
- */
-export function getSessionFromTimestamp(timestampUtc: string | Date | number): {
-  id: MarketSessionId;
-  name: string;
-  shortName: string;
-  utcRange: string;
-  istRange: string;
-} {
-  const d = new Date(timestampUtc);
-  const hour = d.getUTCHours();
-
-  if (hour >= 12 && hour < 16) {
-    return {
-      id: 'OVERLAP',
-      name: 'London / New York Overlap',
-      shortName: 'Overlap',
-      utcRange: '12:00 - 16:00 UTC',
-      istRange: '05:30 PM - 09:30 PM IST',
-    };
-  } else if (hour >= 7 && hour < 12) {
-    return {
-      id: 'LONDON',
-      name: 'London Session',
-      shortName: 'London',
-      utcRange: '07:00 - 12:00 UTC',
-      istRange: '12:30 PM - 05:30 PM IST',
-    };
-  } else if (hour >= 16 && hour < 21) {
-    return {
-      id: 'NEW_YORK',
-      name: 'New York Session',
-      shortName: 'New York',
-      utcRange: '16:00 - 21:00 UTC',
-      istRange: '09:30 PM - 02:30 AM IST',
-    };
-  } else {
-    return {
-      id: 'ASIA',
-      name: 'Asian Session',
-      shortName: 'Asia',
-      utcRange: '00:00 - 07:00 UTC',
-      istRange: '05:30 AM - 12:30 PM IST',
     };
   }
 }
