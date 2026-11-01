@@ -196,6 +196,8 @@ export interface ResearchSignal {
   whyHumansMissThis?: string;
   /** True when this is an internal forward-paper observation, not an approved actionable alert. */
   paperOnly?: boolean;
+  /** Frozen causal 19-feature context captured when this prediction was made. */
+  marketFeatureVector?: number[];
   lossAutopsy?: LossAutopsy;
 }
 
@@ -310,6 +312,9 @@ export interface StrategyPerformanceRecord {
   scoredOutcomes?: Array<{ result: 'WIN' | 'LOSS'; netReturnUnits: number; payoutPct: number }>;
   /** Recent signal IDs prevent the same outcome from being counted more than once. */
   signalIds?: string[];
+  /** Beta(1,1) posterior updated exactly once per decisive forward outcome. */
+  bayesAlpha?: number;
+  bayesBeta?: number;
   updatedAt: string;
 }
 
