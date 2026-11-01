@@ -216,6 +216,7 @@ export class AutonomousScheduler {
       // for the selected 5/10/15/20/25/30-minute entry candle.
       if (currentActive.length + createdSignals.length < 4) {
         for (const symbol of FOREX_PAIRS) {
+          if (currentActive.length + createdSignals.length >= 4) break;
           // Strict Pair Isolation: If this pair already has an active or pending signal, NEVER create another!
           if (activeSymbols.has(symbol)) {
             continue;
