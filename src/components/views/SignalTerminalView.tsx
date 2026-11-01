@@ -1790,7 +1790,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       <div className="flex items-center justify-between text-[10px] text-neutral-400 uppercase tracking-wider pb-1 border-b border-neutral-800">
                         <span className="text-cyan-400 font-bold">Mathematical Equation:</span>
                         <span className="px-1.5 py-0.2 rounded bg-purple-900/40 text-purple-300 text-[9px]">
-                          Operator: {gene.nonLinearOperator}
+                          Genome complexity: {gene.genome?.complexity ?? 'legacy'}
                         </span>
                       </div>
                       <div className="text-sm font-bold text-cyan-300 pt-1 overflow-x-auto">
