@@ -393,9 +393,7 @@ class DatabaseService {
       endUtc: new Date(endMs).toISOString(),
       reservedAt: new Date().toISOString(),
     });
-    if (this.state.researchHoldoutWindows.length > 2000) {
-      this.state.researchHoldoutWindows = this.state.researchHoldoutWindows.slice(-2000);
-    }
+    // Do not prune this ledger: every previously inspected interval must remain unusable.
     // A reservation must hit disk immediately, not after the normal debounce.
     this.saveStateSync();
     return true;
