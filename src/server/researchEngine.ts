@@ -1115,7 +1115,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     let busyUntil = -Infinity;
     const scoredOutcomes: Array<'WIN' | 'LOSS'> = [];
     const horizon = gene.optimalHorizonMinutes;
-    const triggerThreshold = Math.max(0.682, gene.genome?.activationThreshold ?? gene.operatorParameters?.threshold ?? 0.682);
+    const triggerThreshold = Math.max(0.50, Math.min(0.95, gene.genome?.activationThreshold ?? gene.operatorParameters?.threshold ?? 0.682));
     for (const row of rows) {
       if (row.entryTimeframeMinutes !== horizon) continue;
       if (row.entryTimeMs < busyUntil) continue;
@@ -1127,8 +1127,8 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
               gene, row.candle, row.previousCandle,
               data.closes, data.ema9, data.ema21, data.rsi14, row.decisionIndex
             );
-            return result.shouldTrigger && result.conviction >= 0.80
-              ? (result.direction === 'BUY' ? 1 : -1) * Math.max(triggerThreshold, 0.683)
+            return result.shouldTrigger
+              ? (result.direction === 'BUY' ? 1 : -1) * triggerThreshold
               : 0;
           })();
       if (Math.abs(activation) < triggerThreshold) continue;
@@ -1603,7 +1603,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       const features = this.buildGeneFeatureVector(candle, prevCandle, closes, ema9, ema21, rsi14, index);
       const rawScore = this.evaluateGenomeExpression(gene.genome.expression, features);
       const activationScore = Math.tanh(rawScore / 2);
-      const threshold = Math.max(0.682, gene.genome.activationThreshold);
+      const threshold = Math.max(0.50, Math.min(0.95, gene.genome.activationThreshold));
       const shouldTrigger = Math.abs(activationScore) >= threshold;
       const direction: 'BUY' | 'SELL' = activationScore >= 0 ? 'BUY' : 'SELL';
       const conviction = Number(Math.min(0.94, 0.50 + Math.abs(activationScore) * 0.44).toFixed(2));
