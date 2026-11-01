@@ -457,6 +457,16 @@ export interface AgentReview {
   score?: number; // 0 - 100
 }
 
+export interface EvolutionSubGenerationMetrics {
+  generation: number;
+  candidateCount: number;
+  qualifiedParentCount: number;
+  distinctSpecies: number;
+  bestValidationExpectedValueUnits: number;
+  bestValidationWinRate: number;
+  meanMutationRate: number;
+}
+
 export interface EvolutionGeneration {
   generation: number;
   timestamp: string;
@@ -473,6 +483,7 @@ export interface EvolutionGeneration {
   symbol?: ForexSymbol;
   bestValidationExpectedValueUnits?: number;
   holdoutPeriod?: { start: string; end: string };
+  subGenerations?: EvolutionSubGenerationMetrics[];
 }
 
 export interface AutopilotLog {
