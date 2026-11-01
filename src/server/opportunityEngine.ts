@@ -773,16 +773,35 @@ export class OpportunityEngine {
     });
     await Promise.all(workers);
 
+    // Reserve one chronological holdout window per pair for the entire opportunity
+    // family. All 600–800 hypotheses in this batch are compared within this same
+    // pre-registered family; later overlapping scans cannot reuse those outcomes.
+    const holdoutReservedPairs = db.claimOpportunityHoldoutWindows(
+      Array.from(contexts.entries()).map(([symbol, context]) => ({
+        symbol,
+        candidateKey: OPPORTUNITY_HOLDOUT_CANDIDATE_KEY,
+        batchId,
+        startUtc: context.holdoutWindowStartUtc,
+        endUtc: context.holdoutWindowEndUtc,
+      }))
+    );
+
     const opportunities: TradeOpportunity[] = [];
     const templates = buildHypotheses();
     for (const symbol of uniqueSymbols) {
       const context = contexts.get(symbol);
       if (!context) continue;
+      const holdoutReserved = holdoutReservedPairs.has(`${symbol}|${OPPORTUNITY_HOLDOUT_CANDIDATE_KEY}`);
+      const getHoldout = (
+        horizon: Horizon,
+        directionAt: (row: HistoricalFeatureRow) => HistoricalDirection
+      ) => holdoutReserved
+        ? evaluateIndependentHoldout(context, horizon, directionAt)
+        : unavailableHoldout(context);
       for (const template of templates) {
         for (const horizon of HORIZONS) {
           const scoreHypothesis = (features: number[]) => template.score(features);
-          const holdout = evaluateIndependentHoldout(
-            context,
+          const holdout = getHoldout(
             horizon,
             row => {
               const historicalScore = scoreHypothesis(row.vector);
@@ -825,8 +844,7 @@ export class OpportunityEngine {
         const signedScore = evaluation.direction === "BUY"
           ? evaluation.conviction
           : -evaluation.conviction;
-        const geneHoldout = evaluateIndependentHoldout(
-          context,
+        const geneHoldout = getHoldout(
           gene.optimalHorizonMinutes,
           row => {
             const historicalResult = researchEngine.evaluateSynthesizedGeneSignal(
