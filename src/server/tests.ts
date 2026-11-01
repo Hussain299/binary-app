@@ -96,11 +96,11 @@ export async function runAllVerificationTests(): Promise<{
       throw new Error('Saturday must report the explicit weekend-closed state.');
     }
     const winterReopen = getForexMarketState('2026-11-01T21:59:00.000Z');
-    if (!winterReopen.message.includes('Monday at 3:30 AM IST') || /UTC|New York|ET/.test(winterReopen.message)) {
+    if (!winterReopen.message.includes('Monday 3:30 AM IST') || /UTC|New York|ET/.test(winterReopen.message)) {
       throw new Error(`Weekend reopen must be displayed in IST only; received: ${winterReopen.message}`);
     }
     const summerReopen = getForexMarketState('2026-07-05T20:59:00.000Z');
-    if (!summerReopen.message.includes('Monday at 2:30 AM IST') || /UTC|New York|ET/.test(summerReopen.message)) {
+    if (!summerReopen.message.includes('Monday 2:30 AM IST') || /UTC|New York|ET/.test(summerReopen.message)) {
       throw new Error(`DST-adjusted summer reopen must be displayed in IST only; received: ${summerReopen.message}`);
     }
     const session = getReportingSessionFromTimestamp('2026-11-02T19:00:00.000Z');
