@@ -1638,7 +1638,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     const parents = [parentA, parentB]
       .filter((gene): gene is SynthesizedStrategyGene => !!gene)
       .map(gene => gene.id);
-    const identityHash = stableHash(`${searchBatchId || 'ad-hoc'}|${symbol}|${genome.signature}`).slice(0, 10).toUpperCase();
+    const identityHash = stableHash(
+      `${searchBatchId || 'ad-hoc'}|${symbol}|${genome.signature}|${horizon}|${sessionAffinity}`
+    ).slice(0, 10).toUpperCase();
     const code = `SYM_${generation}_${identityHash.slice(0, 6)}`;
     const gene: SynthesizedStrategyGene = {
       id: `synth_${symbol.replace('/', '')}_${identityHash.toLowerCase()}`,
