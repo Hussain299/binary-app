@@ -485,7 +485,8 @@ export class OpportunityEngine {
       ? "NO_TRADE"
       : rawScore >= 0 ? "BUY" : "SELL";
     const forecast = makeForecast(context, context.currentFeatures, horizon, direction);
-    const entryTimeMs = getNextCandleOpenMs(Date.now(), horizon);
+    // Keep a full three-minute decision lead before the proposed aligned entry.
+    const entryTimeMs = getNextCandleOpenMs(Date.now() + 3 * M1_MS, horizon);
     const expiryTimeMs = entryTimeMs + horizon * M1_MS;
     const scheduleValid = isForexMarketIntervalOpen(entryTimeMs, expiryTimeMs);
     const audit = auditOpportunity(
