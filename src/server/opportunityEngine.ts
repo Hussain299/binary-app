@@ -67,6 +67,7 @@ interface PairContext {
   marketDataQuality: number;
   dataSource: string;
   historicalFeatureRows: HistoricalFeatureRow[];
+  analogueCache: Map<Horizon, Analogue[]>;
   closes: number[];
   ema9: number[];
   ema21: number[];
@@ -178,35 +179,39 @@ function makeForecast(
   horizon: Horizon,
   direction: OpportunityDirection
 ): OpportunityForecast {
-  const eligible: Analogue[] = [];
-  const candles = context.candles;
-  const entryOffset = 1;
+  let selected = context.analogueCache.get(horizon);
+  if (!selected) {
+    const eligible: Analogue[] = [];
+    const candles = context.candles;
+    const entryOffset = 1;
 
-  for (const row of context.historicalFeatureRows) {
-    const index = row.index;
-    const entryIndex = index + entryOffset;
-    const exitIndex = index + horizon;
-    if (exitIndex >= candles.length) continue;
+    for (const row of context.historicalFeatureRows) {
+      const index = row.index;
+      const entryIndex = index + entryOffset;
+      const exitIndex = index + horizon;
+      if (exitIndex >= candles.length) continue;
 
-    const entryTime = candles[entryIndex].timestampMs;
-    const expiryTime = entryTime + horizon * M1_MS;
-    if (candles[exitIndex].timestampMs !== expiryTime - M1_MS) continue;
-    if (!isForexMarketIntervalOpen(entryTime, expiryTime)) continue;
+      const entryTime = candles[entryIndex].timestampMs;
+      const expiryTime = entryTime + horizon * M1_MS;
+      if (candles[exitIndex].timestampMs !== expiryTime - M1_MS) continue;
+      if (!isForexMarketIntervalOpen(entryTime, expiryTime)) continue;
 
-    const candidateDistance = distance(currentFeatures, row.vector);
-    if (Number.isFinite(candidateDistance)) eligible.push({ index, distance: candidateDistance });
-  }
+      const candidateDistance = distance(currentFeatures, row.vector);
+      if (Number.isFinite(candidateDistance)) eligible.push({ index, distance: candidateDistance });
+    }
 
-  eligible.sort((a, b) => a.distance - b.distance);
-  const selected: Analogue[] = [];
-  const separationMs = horizon * M1_MS;
-  for (const candidate of eligible) {
-    const entryTime = candles[candidate.index + entryOffset].timestampMs;
-    if (selected.some(item =>
-      Math.abs(candles[item.index + entryOffset].timestampMs - entryTime) < separationMs
-    )) continue;
-    selected.push(candidate);
-    if (selected.length >= MAX_ANALOGUES) break;
+    eligible.sort((a, b) => a.distance - b.distance);
+    selected = [];
+    const separationMs = horizon * M1_MS;
+    for (const candidate of eligible) {
+      const entryTime = candles[candidate.index + entryOffset].timestampMs;
+      if (selected.some(item =>
+        Math.abs(candles[item.index + entryOffset].timestampMs - entryTime) < separationMs
+      )) continue;
+      selected.push(candidate);
+      if (selected.length >= MAX_ANALOGUES) break;
+    }
+    context.analogueCache.set(horizon, selected);
   }
 
   const breakEven = binaryBreakEvenWinRate(PAYOUT_FLOOR);
@@ -231,11 +236,11 @@ function makeForecast(
   let wins = 0;
   let decisive = 0;
   for (const analogue of selected) {
-    const entryIndex = analogue.index + entryOffset;
-    const entryPrice = candles[entryIndex].open;
+    const entryIndex = analogue.index + 1;
+    const entryPrice = context.candles[entryIndex].open;
     const path = [context.currentPrice];
     for (let minute = 1; minute <= horizon; minute++) {
-      const historicalPrice = candles[entryIndex + minute - 1].close;
+      const historicalPrice = context.candles[entryIndex + minute - 1].close;
       path.push(context.currentPrice + (historicalPrice - entryPrice));
     }
     const terminal = path[path.length - 1];
@@ -456,6 +461,7 @@ export class OpportunityEngine {
       marketDataQuality,
       dataSource: live.source,
       historicalFeatureRows,
+      analogueCache: new Map<Horizon, Analogue[]>(),
       closes,
       ema9,
       ema21,
