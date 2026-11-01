@@ -499,7 +499,7 @@ class DatabaseService {
         s =>
           s.symbol === signal.symbol &&
           !s.ruleFamily?.startsWith('test_') &&
-          ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE', 'EXIT_PENDING'].includes(s.lifecycleState)
+          ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE'].includes(s.lifecycleState)
       );
       if (activeForPair) {
         return activeForPair;
@@ -547,6 +547,28 @@ class DatabaseService {
     return this.state.signals.filter(s => !s.ruleFamily?.startsWith('test_'));
   }
 
+  /**
+   * Contracts still occupying a live entry slot. EXIT_PENDING is deliberately
+   * excluded: its scheduled expiry has passed, so it is awaiting historical
+   * verification, not an open contract.
+   */
+  public getOpenSignals(includeTest: boolean = false): ResearchSignal[] {
+    const list = this.getSignals(includeTest);
+    return list.filter(s =>
+      ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE'].includes(s.lifecycleState)
+    );
+  }
+
+  /** Expired contracts waiting for the exact trusted expiry candle. */
+  public getSignalsAwaitingSettlement(includeTest: boolean = false): ResearchSignal[] {
+    const list = this.getSignals(includeTest);
+    return list.filter(s => s.lifecycleState === 'EXIT_PENDING');
+  }
+
+  /**
+   * All unresolved lifecycle records, including EXIT_PENDING. Use this for
+   * reconciliation and audit visibility, never for live-entry capacity.
+   */
   public getActiveSignals(includeTest: boolean = false): ResearchSignal[] {
     const list = this.getSignals(includeTest);
     return list.filter(s =>

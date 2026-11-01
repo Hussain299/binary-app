@@ -1527,6 +1527,44 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
+  await runTest('ENTRY_EXIT', 'EXIT_PENDING is reconciled but does not consume an open-entry slot', () => {
+    const signalCandle: Candle = {
+      symbol: 'EUR/USD',
+      timestamp: new Date(Date.now() - 10 * 60_000).toISOString(),
+      timestampMs: Date.now() - 10 * 60_000,
+      open: 1.0850,
+      high: 1.0860,
+      low: 1.0840,
+      close: 1.0855,
+      volume: 100,
+      source: 'test_fixture',
+    };
+    const signal = entryExitEngine.createResearchSignal({
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      signalCandle,
+      ruleFamily: `test_exit_pending_capacity_${Date.now()}`,
+      expiryMinutes: 5,
+      confidence: 0.7,
+      modelVersion: 'vTest',
+    });
+    signal.lifecycleState = 'EXIT_PENDING';
+    signal.actualEntryTimeUtc = signalCandle.timestamp;
+    signal.actualEntryPrice = signalCandle.close;
+    signal.plannedExitTimeUtc = new Date(signalCandle.timestampMs + 5 * 60_000).toISOString();
+    db.updateSignal(signal);
+
+    if (db.getOpenSignals(true).some(item => item.id === signal.id)) {
+      throw new Error('An already-expired EXIT_PENDING contract must not consume a new-entry capacity slot.');
+    }
+    if (!db.getSignalsAwaitingSettlement(true).some(item => item.id === signal.id)) {
+      throw new Error('EXIT_PENDING must remain visible in the awaiting-settlement queue.');
+    }
+    if (!db.getActiveSignals(true).some(item => item.id === signal.id)) {
+      throw new Error('EXIT_PENDING must remain available to the lifecycle reconciliation engine.');
+    }
+  });
+
   await runTest('ENTRY_EXIT', 'Ambiguous Candle Ordering Detection', () => {
     const baseTime = 1793282500000;
     const signalCandle: Candle = {
