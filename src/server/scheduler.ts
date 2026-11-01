@@ -580,84 +580,12 @@ export class AutonomousScheduler {
         }
       }
 
-      // 4. Autonomous ML Walk-Forward Experimentation (every 3rd pulse)
+      // The scheduler does not repeatedly inspect a fixed historical holdout.
+      // Only the one-time 300-candidate, validation-ranked research batch may
+      // open a pair's final test interval. Online paper outcomes continue to
+      // update posterior beliefs and episodic memory on every settled signal.
       const experimentsRun: ResearchExperiment[] = [];
-      let topExp: ResearchExperiment | null = null;
-
-      if (this.cycleCount % 3 === 0) {
-        const testPair: ForexSymbol =
-          FOREX_PAIRS[this.cycleCount % FOREX_PAIRS.length];
-        const testCandles = historicalDataStore.getCandles(testPair);
-
-        if (testCandles.length >= 10_000 && testCandles.every(c => c.source !== 'synthetic')) {
-          const rule: RuleFamily =
-            this.cycleCount % 2 === 0 ? 'momentum_5' : 'mean_reversion_20';
-          const horizon = (5 * ((this.cycleCount % 5) + 1));
-
-          try {
-            const exp = researchEngine.runWalkForwardExperiment(
-              testPair,
-              testCandles,
-              rule,
-              horizon,
-              this.currentGeneration
-            );
-            await researchEngine.generateTrinityReviews(exp);
-            experimentsRun.push(exp);
-            topExp = exp;
-
-            this.logMind(
-              'AUDITOR',
-              `Audited ${testPair} [${rule}] ${horizon}m walk-forward model. Test Acc: ${(
-                exp.metrics.testAccuracy * 100
-              ).toFixed(1)}%, Brier: ${exp.metrics.brierScore}, Verdict: ${exp.auditorVerdict}.`,
-              testPair
-            );
-          } catch (e: any) {
-            // Quiet skip
-          }
-        }
-      }
-
-      // Symbolic candidates are generated only through the dedicated 300-candidate
-      // historical search API. Do not create random unvalidated genes every live pulse
-      // or repeatedly backtest one candidate against the same imported dataset.
-
-      // 5. Generational Evolution Synthesis (every 10 pulses)
-      if (this.cycleCount % 10 === 0 && experimentsRun.length > 0) {
-        const allExps = db.getExperiments().filter(e => e.experimentType !== 'LIVE_TRADE' && e.experimentType !== 'FORWARD_OBSERVATION').slice(0, 10);
-        const accepted = allExps.filter(e => e.auditorVerdict === 'ACCEPTED').length;
-        const rejected = allExps.filter(e => e.auditorVerdict === 'REJECTED').length;
-        const bestF1 = allExps.length > 0
-          ? Math.max(...allExps.map(e => e.metrics.f1Score))
-          : 0;
-        const latestExperiment = allExps[0] || null;
-
-        const gen: EvolutionGeneration = {
-          generation: this.currentGeneration,
-          timestamp: new Date().toISOString(),
-          totalExperiments: allExps.length,
-          acceptedCount: accepted,
-          rejectedCount: rejected,
-          topExperimentId: latestExperiment?.id || null,
-          bestF1Score: bestF1,
-          summary: allExps.length > 0
-            ? `Generation ${this.currentGeneration}: ${allExps.length} historical experiments reviewed; ${accepted} accepted, ${rejected} rejected. Best recorded F1: ${bestF1.toFixed(3)}.`
-            : `Generation ${this.currentGeneration}: no eligible historical experiments were available; no performance conclusion recorded.`,
-          lessonsLearned: latestExperiment
-            ? [
-                `Latest run: ${latestExperiment.symbol} ${latestExperiment.ruleFamily}, ${latestExperiment.horizonMinutes}m; test sample n=${latestExperiment.metrics.sampleSize}.`,
-                `Out-of-sample EV ${latestExperiment.metrics.expectedValuePips.toFixed(2)} pips; PF ${latestExperiment.metrics.profitFactor.toFixed(2)} after modeled spread.`,
-              ]
-            : ['No empirical lesson recorded because no qualifying historical experiment was available.'],
-        };
-        db.addGeneration(gen);
-        this.currentGeneration++;
-        this.logMind(
-          'MIND',
-          `Autonomous research generation #${gen.generation} evolved. Best F1: ${bestF1.toFixed(3)}.`
-        );
-      }
+      const topExp: ResearchExperiment | null = null;
 
       const durationMs = Date.now() - startTime;
       db.logCronRun(
