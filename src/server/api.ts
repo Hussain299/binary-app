@@ -126,35 +126,14 @@ apiRouter.get('/scan', async (_req: Request, res: Response) => {
   }
 });
 
-// POST /api/analyze — Deep quantitative analysis for a specific pair
-apiRouter.post('/analyze', async (req: Request, res: Response) => {
-  try {
-    const rawSymbol = ((req.body.symbol as string) || 'EUR/USD').toUpperCase();
-    const symbol = FOREX_PAIRS.find(p => p.replace('/', '') === rawSymbol.replace('/', '')) || 'EUR/USD';
-    const horizon = Number(req.body.horizon) || 10;
-    const ruleFamily = (req.body.ruleFamily as RuleFamily) || 'momentum_5';
-
-    const candles = historicalDataStore.getCandles(symbol);
-    if (candles.length < 10_000) {
-      return res.status(409).json({
-        error: `Insufficient uploaded historical data for research. Import at least 10,000 one-minute candles for ${symbol}; currently stored: ${candles.length}.`,
-        symbol,
-        storedCandles: candles.length,
-        requiredCandles: 10_000,
-      });
-    }
-    const exp = researchEngine.runWalkForwardExperiment(symbol, candles, ruleFamily, horizon, 1);
-    const reviews = await researchEngine.generateTrinityReviews(exp);
-
-    res.json({
-      symbol,
-      source: 'historical-import',
-      experiment: exp,
-      reviews,
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
+// Single-rule analysis on a repeatedly reused holdout is retired.
+// Use the 300-candidate chronological research batch, which selects finalists
+// on train/validation and consumes each pair's final test period once.
+apiRouter.post('/analyze', (_req: Request, res: Response) => {
+  return res.status(410).json({
+    error: 'Single-rule repeated holdout testing is disabled to prevent test-set overfitting. Use the 300-candidate evolutionary batch; a consumed holdout cannot be reused.',
+    requiredProcess: 'POST /api/strategies/search-batch',
+  });
 });
 
 // GET /api/signals — All signals or filtered
