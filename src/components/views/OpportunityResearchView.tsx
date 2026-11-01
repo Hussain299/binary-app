@@ -66,54 +66,75 @@ const auditLabel = (opportunity: TradeOpportunity) => {
 
 function ForecastGraph({ opportunity }: { opportunity: TradeOpportunity }) {
   const points = opportunity.forecast.points;
-  if (opportunity.forecast.status !== 'AVAILABLE' || points.length < 2) {
+  const hasForecast = opportunity.forecast.status === 'AVAILABLE' && points.length >= 2;
+  const history = opportunity.recentPriceHistory || [];
+  if (!history.length) {
     return (
       <div className="flex min-h-[270px] flex-col items-center justify-center rounded-xl border border-dashed border-white/10 bg-[#0a111b] px-6 text-center">
         <AlertTriangle className="mb-3 h-7 w-7 text-amber-400" />
-        <div className="text-sm font-semibold text-white">Forecast unavailable</div>
+        <div className="text-sm font-semibold text-white">Price chart unavailable</div>
         <p className="mt-1 max-w-md text-xs leading-5 text-neutral-400">
-          The engine could not find enough independent, continuous real-market analogues. It will not invent a future path.
+          No real recent OHLC candle history was retained for this opportunity.
         </p>
       </div>
     );
   }
 
   const width = 900;
-  const height = 330;
-  const left = 64;
+  const height = 340;
+  const left = 76;
   const right = 24;
-  const top = 22;
-  const bottom = 46;
-  const allValues = points.flatMap(point => [point.q10, point.q90]);
+  const top = 24;
+  const bottom = 48;
+  const entryDelay = Math.max(
+    0,
+    (Date.parse(opportunity.entryTimeUtc) - Date.parse(opportunity.snapshotAt)) / 60_000
+  );
+  const minMinute = Math.min(-30, ...history.map(candle => candle.minuteOffset));
+  const maxMinute = entryDelay + opportunity.horizonMinutes;
+  const allValues = [
+    ...history.flatMap(candle => [candle.high, candle.low]),
+    ...(hasForecast ? points.flatMap(point => [point.q10, point.q90]) : []),
+    opportunity.proposedEntryPrice,
+  ];
   const minValue = Math.min(...allValues);
   const maxValue = Math.max(...allValues);
   const spread = Math.max(maxValue - minValue, opportunity.snapshotPrice * 0.00001);
   const min = minValue - spread * 0.08;
   const max = maxValue + spread * 0.08;
-  const x = (index: number) => left + (index / Math.max(1, points.length - 1)) * (width - left - right);
+  const xAtMinute = (minute: number) =>
+    left + ((minute - minMinute) / Math.max(1, maxMinute - minMinute)) * (width - left - right);
   const y = (value: number) => top + ((max - value) / (max - min)) * (height - top - bottom);
+  const forecastX = (minute: number) => xAtMinute(entryDelay + minute);
   const line = (field: 'q10' | 'q25' | 'median' | 'q75' | 'q90') =>
-    points.map((point, index) => (index === 0 ? 'M' : 'L') + x(index).toFixed(1) + ',' + y(point[field]).toFixed(1)).join(' ');
+    points.map((point, index) => (index === 0 ? 'M' : 'L') + forecastX(point.minute).toFixed(1) + ',' + y(point[field]).toFixed(1)).join(' ');
   const band = (lower: 'q10' | 'q25', upper: 'q90' | 'q75') => {
-    const upperPath = points.map((point, index) => (index === 0 ? 'M' : 'L') + x(index).toFixed(1) + ',' + y(point[upper]).toFixed(1)).join(' ');
+    const upperPath = points.map((point, index) => (index === 0 ? 'M' : 'L') + forecastX(point.minute).toFixed(1) + ',' + y(point[upper]).toFixed(1)).join(' ');
     const lowerPath = points.slice().reverse().map((point, reverseIndex) => {
       const index = points.length - 1 - reverseIndex;
-      return 'L' + x(index).toFixed(1) + ',' + y(point[lower]).toFixed(1);
+      return 'L' + forecastX(point.minute).toFixed(1) + ',' + y(point[lower]).toFixed(1);
     }).join(' ');
     return upperPath + ' ' + lowerPath + ' Z';
   };
+  const bodyWidth = Math.max(2, Math.min(9, ((width - left - right) / Math.max(1, maxMinute - minMinute)) * 0.58));
 
   return (
     <div className="rounded-xl border border-white/[0.07] bg-[#0a111b] p-2 sm:p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
-        <div className="text-xs font-semibold text-neutral-200">Historical analogue path distribution</div>
+        <div className="text-xs font-semibold text-neutral-200">
+          {hasForecast ? 'Recent price action + analogue forecast distribution' : 'Recent real-market price action'}
+        </div>
         <div className="flex flex-wrap items-center gap-3 text-[10px] text-neutral-400">
-          <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-sm bg-sky-400/40" />10–90%</span>
-          <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-sm bg-emerald-400/50" />25–75%</span>
-          <span className="flex items-center gap-1"><i className="h-[2px] w-3 bg-white" />Median</span>
+          <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-sm bg-emerald-400" />Bull candle</span>
+          <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-sm bg-rose-400" />Bear candle</span>
+          {hasForecast && <>
+            <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-sm bg-sky-400/40" />10–90%</span>
+            <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-sm bg-emerald-400/50" />25–75%</span>
+            <span className="flex items-center gap-1"><i className="h-[2px] w-3 bg-white" />Median</span>
+          </>}
         </div>
       </div>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Historical analogue forecast distribution" className="h-auto w-full">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Historical candles and probabilistic trade path" className="h-auto w-full">
         {[0, 1, 2, 3].map(tick => {
           const value = min + (max - min) * tick / 3;
           const yy = y(value);
@@ -124,17 +145,40 @@ function ForecastGraph({ opportunity }: { opportunity: TradeOpportunity }) {
             </g>
           );
         })}
-        <path d={band('q10', 'q90')} fill="rgba(56,189,248,0.14)" stroke="none" />
-        <path d={band('q25', 'q75')} fill="rgba(52,211,153,0.18)" stroke="none" />
-        <path d={line('median')} fill="none" stroke="#f8fafc" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-        <line x1={left} x2={width - right} y1={y(opportunity.proposedEntryPrice)} y2={y(opportunity.proposedEntryPrice)} stroke="#fbbf24" strokeDasharray="6 5" strokeWidth="1.5" />
-        <text x={width - right - 2} y={y(opportunity.proposedEntryPrice) - 7} textAnchor="end" fontSize="11" fill="#fbbf24">Indicative entry</text>
-        <text x={left} y={height - 12} fontSize="11" fill="#9ca3af">Entry</text>
-        <text x={width - right} y={height - 12} textAnchor="end" fontSize="11" fill="#9ca3af">Expiry · {opportunity.horizonMinutes}m</text>
-        <text x={width / 2} y={height - 12} textAnchor="middle" fontSize="11" fill="#6b7280">Minutes after proposed entry</text>
+        {hasForecast && <>
+          <path d={band('q10', 'q90')} fill="rgba(56,189,248,0.14)" stroke="none" />
+          <path d={band('q25', 'q75')} fill="rgba(52,211,153,0.18)" stroke="none" />
+          <path d={line('median')} fill="none" stroke="#f8fafc" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          <line x1={xAtMinute(entryDelay)} x2={xAtMinute(entryDelay)} y1={top} y2={height - bottom} stroke="#fbbf24" strokeDasharray="5 5" strokeWidth="1.6" />
+          <text x={xAtMinute(entryDelay) + 5} y={top + 13} fontSize="11" fill="#fbbf24">Scheduled entry</text>
+          <line x1={xAtMinute(0)} x2={xAtMinute(0)} y1={top} y2={height - bottom} stroke="rgba(255,255,255,0.4)" strokeDasharray="3 5" />
+          <text x={xAtMinute(0) + 5} y={top + 13} fontSize="11" fill="#d1d5db">Now</text>
+        </>}
+        {history.map((candle, index) => {
+          const xx = xAtMinute(candle.minuteOffset);
+          const bullish = candle.close >= candle.open;
+          const candleColor = bullish ? '#34d399' : '#fb7185';
+          const bodyTop = Math.min(y(candle.open), y(candle.close));
+          const bodyHeight = Math.max(1.5, Math.abs(y(candle.open) - y(candle.close)));
+          return (
+            <g key={index}>
+              <line x1={xx} x2={xx} y1={y(candle.high)} y2={y(candle.low)} stroke={candleColor} strokeWidth="1.4" />
+              <rect x={xx - bodyWidth / 2} y={bodyTop} width={bodyWidth} height={bodyHeight} rx="0.8" fill={candleColor} />
+            </g>
+          );
+        })}
+        <line x1={left} x2={width - right} y1={y(opportunity.proposedEntryPrice)} y2={y(opportunity.proposedEntryPrice)} stroke="#fbbf24" strokeDasharray="3 5" strokeWidth="1" opacity="0.55" />
+        <text x={left} y={height - 14} fontSize="11" fill="#9ca3af">−30m</text>
+        <text x={xAtMinute(0)} y={height - 14} textAnchor="middle" fontSize="11" fill="#d1d5db">Snapshot</text>
+        {hasForecast && <>
+          <text x={xAtMinute(entryDelay)} y={height - 14} textAnchor="middle" fontSize="11" fill="#fbbf24">Entry</text>
+          <text x={width - right} y={height - 14} textAnchor="end" fontSize="11" fill="#9ca3af">Expiry</text>
+        </>}
       </svg>
       <p className="px-2 pb-1 text-[10px] leading-4 text-neutral-500">
-        Bands show the 10th–90th and 25th–75th percentiles of selected historical analogue paths. This is not a guaranteed target or a forward-calibrated probability.
+        {hasForecast
+          ? 'Candles are observed real-market OHLC. Forecast is conditional on an entry near the current reference price; price movement before the scheduled entry is intentionally not forecast. Percentile bands are historical analogues, not a calibrated guarantee.'
+          : 'Observed candles only. No forecast is drawn because the historical evidence gate was not met.'}
       </p>
     </div>
   );
@@ -429,7 +473,7 @@ export const OpportunityResearchView: React.FC = () => {
                     <span className="text-neutral-500">Proposed entry</span><span className="text-right text-neutral-200">{formatIST(selected.entryTimeUtc)}</span>
                     <span className="text-neutral-500">Expiry</span><span className="text-right text-neutral-200">{formatIST(selected.expiryTimeUtc)}</span>
                     <span className="text-neutral-500">Snapshot price</span><span className="text-right font-mono text-neutral-200">{formatPrice(selected.snapshotPrice, selected.symbol)}</span>
-                    <span className="text-neutral-500">Indicative entry</span><span className="text-right font-mono text-neutral-200">{formatPrice(selected.proposedEntryPrice, selected.symbol)}</span>
+                    <span className="text-neutral-500">Indicative reference (not a quote)</span><span className="text-right font-mono text-neutral-200">{formatPrice(selected.proposedEntryPrice, selected.symbol)}</span>
                     <span className="text-neutral-500">Data quality</span><span className="text-right text-neutral-200">{selected.marketDataQuality.toFixed(1)} / 100</span>
                     <span className="text-neutral-500">Data source</span><span className="text-right text-neutral-200">{selected.dataSource}</span>
                     <span className="text-neutral-500">Analogue distance</span><span className="text-right text-neutral-200">{selected.forecast.meanDistance?.toFixed(3) ?? '—'}</span>
