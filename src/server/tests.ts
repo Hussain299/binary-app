@@ -4,7 +4,7 @@
  * Research Trinity Audits, and System State.
  */
 
-import { Candle, ForexSymbol, ResearchSignal, SynthesizedStrategyGene, VerificationTestResult } from '../types/index.js';
+import { Candle, ForexSymbol, LossAutopsy, ResearchSignal, SynthesizedStrategyGene, VerificationTestResult } from '../types/index.js';
 import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
@@ -31,6 +31,13 @@ import {
 } from './evolutionEngine.js';
 import { findEligibleStartTimeframes, getNextCandleOpenMs } from './tradingClock.js';
 import { getForexMarketState, getReportingSessionFromTimestamp, isForexMarketIntervalOpen, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
+import {
+  createSeededRandom,
+  deriveResearchSeed,
+  fingerprintCandles,
+  stableHash,
+} from './researchReproducibility.js';
+import { sanitizeLossAutopsy, OBSERVATION_ONLY_LESSONS } from './researchGovernance.js';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -76,6 +83,110 @@ export async function runAllVerificationTests(): Promise<{
       });
     }
   };
+
+  await runTest('RESEARCH', 'Seeded evolutionary search is deterministic and dataset-bound', () => {
+    const seed = 'reproducibility-test-seed';
+    const first = createSeededRandom(seed);
+    const second = createSeededRandom(seed);
+    const sequenceA = Array.from({ length: 32 }, () => first());
+    const sequenceB = Array.from({ length: 32 }, () => second());
+    if (JSON.stringify(sequenceA) !== JSON.stringify(sequenceB)) {
+      throw new Error('Identical seeds must produce identical random streams.');
+    }
+    if (sequenceA.some(value => value < 0 || value >= 1)) {
+      throw new Error('Seeded random values must remain in [0, 1).');
+    }
+    const other = Array.from({ length: 32 }, () => createSeededRandom('different-seed')());
+    if (JSON.stringify(sequenceA) === JSON.stringify(other)) {
+      throw new Error('Different seeds should not produce the same random stream.');
+    }
+
+    const candles = makeM1TestCandles('EUR/USD', 120);
+    const fingerprintA = fingerprintCandles(candles);
+    const fingerprintB = fingerprintCandles(candles.map(candle => ({ ...candle })));
+    if (fingerprintA !== fingerprintB) {
+      throw new Error('Cloned identical candle streams must have identical fingerprints.');
+    }
+    const changed = candles.map((candle, index) =>
+      index === 60 ? { ...candle, close: candle.close + 0.00001 } : candle
+    );
+    if (fingerprintA === fingerprintCandles(changed)) {
+      throw new Error('A changed market price must change the dataset fingerprint.');
+    }
+    const derivedA = deriveResearchSeed('batch-1', 'EUR/USD', fingerprintA);
+    const derivedB = deriveResearchSeed('batch-1', 'EUR/USD', fingerprintA);
+    const derivedDifferentData = deriveResearchSeed('batch-1', 'EUR/USD', fingerprintCandles(changed));
+    if (derivedA !== derivedB || derivedA === derivedDifferentData) {
+      throw new Error('Research seeds must be stable for an exact run and change with its dataset.');
+    }
+    if (stableHash('signalforge') !== stableHash('signalforge')) {
+      throw new Error('Stable hashes must be repeatable.');
+    }
+
+    const candidateA = researchEngine.synthesizeInfiniteNovelStrategy(
+      candles, 'EUR/USD', 7, [], 'repeatable-batch',
+      false, createSeededRandom(derivedA),
+      { researchSeed: derivedA, datasetFingerprint: fingerprintA }
+    );
+    const candidateB = researchEngine.synthesizeInfiniteNovelStrategy(
+      candles, 'EUR/USD', 7, [], 'repeatable-batch',
+      false, createSeededRandom(derivedA),
+      { researchSeed: derivedA, datasetFingerprint: fingerprintA }
+    );
+    if (
+      candidateA.genome?.signature !== candidateB.genome?.signature ||
+      candidateA.optimalHorizonMinutes !== candidateB.optimalHorizonMinutes ||
+      candidateA.sessionAffinity !== candidateB.sessionAffinity ||
+      candidateA.id !== candidateB.id
+    ) {
+      throw new Error('The same search seed must reproduce the same genome, traits, and candidate identity.');
+    }
+    if (candidateA.researchSeed !== derivedA ||
+        candidateA.datasetFingerprint !== fingerprintA ||
+        candidateA.featureSchemaVersion !== 'causal-market-features-v1') {
+      throw new Error('Generated candidates must carry their reproduction manifest.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Loss forensics never promotes heuristic causes into facts', () => {
+    const legacy: LossAutopsy = {
+      id: 'autopsy_legacy-test',
+      signalId: 'legacy-test',
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      strategyName: 'Legacy heuristic strategy',
+      entryPrice: 1.1,
+      exitPrice: 1.099,
+      marketSession: 'London',
+      rootCause: 'SPREAD_EXPANSION_SLIPPAGE',
+      rootCauseExplanation: 'Old heuristic asserted spread expansion caused the loss.',
+      lessonsLearned: ['Reject all trades during this session.'],
+      antidoteStrategyGeneId: 'fake-antidote',
+      antidoteStrategyName: 'Unverified antidote',
+      antidoteFormula: 'invented_formula(x)',
+      antidoteOperator: 'tanh_polynomial',
+      timestamp: '2026-01-01T00:00:00.000Z',
+    };
+    const safe = sanitizeLossAutopsy(legacy);
+    if (safe.rootCause !== 'OBSERVED_ADVERSE_SETTLEMENT' ||
+        safe.evidenceStatus !== 'OBSERVATION_ONLY') {
+      throw new Error('A legacy heuristic cause must be downgraded to an observation.');
+    }
+    if (!safe.legacyUnverifiedExplanation?.includes('spread expansion caused the loss')) {
+      throw new Error('The old explanation should be retained only as explicitly unverified audit history.');
+    }
+    if (safe.antidoteStrategyGeneId || safe.antidoteStrategyName || safe.antidoteFormula || safe.antidoteOperator) {
+      throw new Error('Unverified antidote artifacts must not remain active.');
+    }
+    if (JSON.stringify(safe.lessonsLearned) !== JSON.stringify(OBSERVATION_ONLY_LESSONS)) {
+      throw new Error('An individual loss must not be converted into validated lessons.');
+    }
+    const repeated = sanitizeLossAutopsy(safe);
+    if (repeated.legacyUnverifiedExplanation !== safe.legacyUnverifiedExplanation ||
+        JSON.stringify(repeated.lessonsLearned) !== JSON.stringify(safe.lessonsLearned)) {
+      throw new Error('Loss-evidence sanitization must be idempotent across restarts.');
+    }
+  });
 
   await runTest('MARKET_HOURS', 'Spot FX weekend closure follows New York time and DST', () => {
     const cases: Array<[string, boolean]> = [
