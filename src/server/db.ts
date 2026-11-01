@@ -906,8 +906,10 @@ class DatabaseService {
 
   public getStrategyBayesianPosterior(strategyId: string): BetaPosterior & { mean: number; observations: number } {
     const record = this.state.strategyPerformance?.[strategyId];
-    const wins = record?.binaryWins ?? record?.wins ?? 0;
-    const losses = record?.binaryLosses ?? record?.losses ?? 0;
+    // Only explicit binary WIN/LOSS counters may seed this posterior.
+    // Legacy pip-era wins/losses are intentionally excluded.
+    const wins = record?.binaryWins ?? 0;
+    const losses = record?.binaryLosses ?? 0;
     const alpha = Number.isFinite(record?.bayesAlpha) && (record?.bayesAlpha ?? 0) > 0
       ? record!.bayesAlpha! : 1 + wins;
     const beta = Number.isFinite(record?.bayesBeta) && (record?.bayesBeta ?? 0) > 0
@@ -918,7 +920,7 @@ class DatabaseService {
   public getStrategyBayesianUcbScore(strategyId: string): number {
     const posterior = this.getStrategyBayesianPosterior(strategyId);
     const totalObserved = Object.values(this.state.strategyPerformance || {}).reduce(
-      (sum, item) => sum + (item.binaryWins ?? item.wins ?? 0) + (item.binaryLosses ?? item.losses ?? 0), 0
+      (sum, item) => sum + (item.binaryWins ?? 0) + (item.binaryLosses ?? 0), 0
     );
     return bayesianUcbScore(posterior, totalObserved);
   }
