@@ -1022,7 +1022,8 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
   }
 
   private prepareGeneResearchData(candles: Candle[], previousHoldoutEndMs: number | null = null): PreparedGeneResearchData {
-    const MIN_HISTORY = 30_000;
+    // 60k M1 bars provide enough chronological test opportunities even for a 30m horizon.
+    const MIN_HISTORY = 60_000;
     if (candles.length < MIN_HISTORY) {
       throw new Error(`Need at least ${MIN_HISTORY.toLocaleString()} real one-minute candles to support the 300-trade test gate; received ${candles.length.toLocaleString()}.`);
     }
@@ -1355,10 +1356,19 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     if (!db.claimResearchHoldoutWindow(symbol, searchBatchId, data.testStartMs, holdoutEndMs)) {
       throw new Error('This chronological test period overlaps a holdout window already inspected for this pair. Import at least 30,000 newer M1 candles to create a genuinely new test period.');
     }
-    const trainRows = data.rows.filter(row => row.candle.timestampMs < data.trainEndMs);
+    // A setup is assigned to a partition only when its entire entry-to-expiry
+    // interval is contained there. No outcome may read a candle from the next split.
+    const trainRows = data.rows.filter(row =>
+      outcomeFitsResearchWindow(
+        row.entryTimeMs, row.entryTimeframeMinutes,
+        data.candles[60]?.timestampMs ?? -Infinity, data.trainEndMs
+      )
+    );
     const validationRows = data.rows.filter(row =>
-      row.candle.timestampMs >= data.validationStartMs &&
-      row.candle.timestampMs < data.validationEndMs
+      outcomeFitsResearchWindow(
+        row.entryTimeMs, row.entryTimeframeMinutes,
+        data.validationStartMs, data.validationEndMs
+      )
     );
 
     // Initial parents come only from discovery train/validation records and
