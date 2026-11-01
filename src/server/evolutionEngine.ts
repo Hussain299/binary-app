@@ -94,6 +94,48 @@ export function genomeSpeciesKey(genome?: StrategyGenome): string {
   return style + ":" + (features.slice(0, 4).join(",") || "constant");
 }
 
+export interface HistoricalApprovalEvidence {
+  sampleCount: number;
+  testScoredSampleSize: number;
+  trainScoredSampleSize: number;
+  validationScoredSampleSize: number;
+  trainWinRate: number;
+  validationWinRate: number;
+  testWinRate: number;
+  testBlockWinRates?: number[];
+  binaryPayoutPct: number;
+  expectedValueUnits: number;
+  profitFactor: number;
+  confidenceInterval95: [number, number];
+}
+
+/** Payout-aware historical paper eligibility; this is not broker execution approval. */
+export function hasSufficientHistoricalApprovalEvidence(
+  metrics?: HistoricalApprovalEvidence,
+  accuracyStatus?: string,
+  sampleCount = 0
+): boolean {
+  if (!metrics || accuracyStatus !== 'BACKTESTED') return false;
+  const breakEven = binaryBreakEvenWinRate(metrics.binaryPayoutPct);
+  return sampleCount >= 300 &&
+    metrics.testScoredSampleSize >= 300 &&
+    metrics.trainScoredSampleSize >= 150 &&
+    metrics.validationScoredSampleSize >= 150 &&
+    metrics.binaryPayoutPct >= 80 &&
+    Number.isFinite(metrics.trainWinRate) && metrics.trainWinRate > breakEven &&
+    Number.isFinite(metrics.validationWinRate) && metrics.validationWinRate > breakEven &&
+    Number.isFinite(metrics.testWinRate) && metrics.testWinRate > breakEven &&
+    Array.isArray(metrics.testBlockWinRates) &&
+    metrics.testBlockWinRates.length === 3 &&
+    metrics.testBlockWinRates.every(rate => Number.isFinite(rate) && rate > breakEven) &&
+    Number.isFinite(metrics.expectedValueUnits) && metrics.expectedValueUnits > 0 &&
+    Number.isFinite(metrics.profitFactor) && metrics.profitFactor >= 1.10 &&
+    Array.isArray(metrics.confidenceInterval95) &&
+    metrics.confidenceInterval95.length === 2 &&
+    Number.isFinite(metrics.confidenceInterval95[0]) &&
+    metrics.confidenceInterval95[0] > breakEven;
+}
+
 const MIN_FORWARD_PARENT_SAMPLE = 100;
 
 /** Binary break-even probability at the worst payout observed in the paper sample. */
@@ -201,7 +243,7 @@ export function selectEvolutionParents<T extends EvolutionParentCandidate>(
           !Number.isFinite(metrics.validationExpectedValueUnits) ||
           metrics.validationExpectedValueUnits <= 0 ||
           !Number.isFinite(metrics.validationProfitFactor) ||
-          metrics.validationProfitFactor < 1.15 ||
+          metrics.validationProfitFactor < 1.05 ||
           !Number.isFinite(metrics.minimumPayoutPct) ||
           (metrics.minimumPayoutPct ?? 0) < 80) return false;
       const breakEven = binaryBreakEvenWinRate(metrics.minimumPayoutPct ?? 0);
