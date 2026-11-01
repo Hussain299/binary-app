@@ -23,6 +23,7 @@ import {
   inferGenomeStyle,
   isStrategyRegimeCompatible,
 } from './evolutionEngine.js';
+import { findEligibleStartTimeframes } from './tradingClock.js';
 
 export class AutonomousScheduler {
   private isRunningCycle = false;
@@ -199,7 +200,7 @@ export class AutonomousScheduler {
         }
       }
 
-      // 3. Autonomous Setup Discovery: Strictly 3-Minute Advance Signals on 5M Candle Openings
+      // 3. Autonomous Setup Discovery: exact 3-minute advance on 5–30m entry candles
       // HUMAN STRICT RULE: Signals must ONLY be generated strictly within the 3-minute advance window!
       // A 5-minute advance signal is dangerous to accuracy because the setup candle has barely formed.
       // At 3 minutes advance (:32, :37, :42, etc.), 2 full minutes of candle volume and price discovery
@@ -210,37 +211,24 @@ export class AutonomousScheduler {
       const activeSession = getSessionFromTimestamp(new Date());
 
       const nowMs = Date.now();
-      const FIVE_MIN_MS = 5 * 60 * 1000;
-      const THREE_MIN_MS = 3 * 60 * 1000;
-      const current5mOpenMs = Math.floor(nowMs / FIVE_MIN_MS) * FIVE_MIN_MS;
-      const next5mCandleOpenMs = current5mOpenMs + FIVE_MIN_MS;
-      const msUntilNextOpen = next5mCandleOpenMs - nowMs;
 
-      // Only generate within the strict 3-minute advance window (between 180s and 15s before candle open)
-      const isWithin3MinAdvanceWindow = msUntilNextOpen <= THREE_MIN_MS && msUntilNextOpen >= 15 * 1000;
-
-      if (!isWithin3MinAdvanceWindow && currentActive.length < 4) {
-        const secondsUntil3m = Math.max(0, Math.round((msUntilNextOpen - THREE_MIN_MS) / 1000));
-        if (this.cycleCount % 3 === 0) {
-          this.logMind(
-            'MIND',
-            `⏳ [STRICT 3M ADVANCE GUARD ACTIVE]: 5m advance signal generation blocked for accuracy safety. Setup candle is maturing. 3-minute advance signal window opens in ${secondsUntil3m}s.`
-          );
-        }
-      }
-
-      // Emit new setups strictly within the 3-minute advance window when capacity permits
-      if (isWithin3MinAdvanceWindow && currentActive.length < 4) {
+      // Signals are emitted only from a fully closed M1 bar at T-3 minutes
+      // for the selected 5/10/15/20/25/30-minute entry candle.
+      if (currentActive.length + createdSignals.length < 4) {
         for (const symbol of FOREX_PAIRS) {
           // Strict Pair Isolation: If this pair already has an active or pending signal, NEVER create another!
           if (activeSymbols.has(symbol)) {
             continue;
           }
 
-          const candles = candlesMap[symbol];
-          if (!candles || candles.length < 35) continue;
+          const candles = (candlesMap[symbol] || []).filter(candle =>
+            candle.source !== 'synthetic' && candle.timestampMs + 60_000 <= nowMs
+          );
+          if (candles.length < 35) continue;
 
           const c = candles[candles.length - 1];
+          const eligibleSchedules = findEligibleStartTimeframes(nowMs, c.timestampMs + 60_000);
+          if (eligibleSchedules.length === 0) continue;
           const prev = candles[candles.length - 2];
           const range = Math.max(0.00008, c.high - c.low);
           const body = Math.abs(c.close - c.open);
@@ -283,6 +271,17 @@ export class AutonomousScheduler {
             Number(b.status === 'PROMOTED_ACTIVE') - Number(a.status === 'PROMOTED_ACTIVE') ||
             db.getStrategyBayesianUcbScore(b.id) - db.getStrategyBayesianUcbScore(a.id)
           );
+          const eligibleTimeframeSet = new Set(eligibleSchedules.map(item => item.timeframeMinutes));
+          const eligibleGene = promotedGenes.find(gene =>
+            (!gene.symbol || gene.symbol === symbol) &&
+            (gene.sessionAffinity === 'ALL' || gene.sessionAffinity === activeSession.id) &&
+            eligibleTimeframeSet.has(gene.optimalHorizonMinutes)
+          );
+          const selectedEntryTimeframe = eligibleGene?.optimalHorizonMinutes ?? eligibleSchedules[0].timeframeMinutes;
+          const selectedSchedule = eligibleSchedules.find(item =>
+            item.timeframeMinutes === selectedEntryTimeframe
+          );
+          if (!selectedSchedule) continue;
           let novelGeneCandidate: {
             gene: typeof promotedGenes[0];
             direction: 'BUY' | 'SELL';
@@ -291,6 +290,8 @@ export class AutonomousScheduler {
           } | null = null;
 
           for (const gene of promotedGenes) {
+            // The train/test horizon and the live entry candle must be identical.
+            if (gene.optimalHorizonMinutes !== selectedEntryTimeframe) continue;
             // Forward verification must use the same pair whose historical data
             // established the candidate's edge; never cross-apply a single-pair model.
             if (gene.symbol && gene.symbol !== symbol) continue;
@@ -356,6 +357,9 @@ export class AutonomousScheduler {
               signalCandle: c,
               ruleFamily: 'volatility_squeeze',
               expiryMinutes: gene.optimalHorizonMinutes,
+              entryTimeframeMinutes: gene.optimalHorizonMinutes,
+              candleOpenTimeUtc: new Date(selectedSchedule.entryTimeMs).toISOString(),
+              candleCloseTimeUtc: new Date(selectedSchedule.entryTimeMs + gene.optimalHorizonMinutes * 60_000).toISOString(),
               confidence: novelGeneCandidate.conviction,
               modelVersion: `v3.1-evolutionary-genome`,
               strategyName: gene.name,
@@ -382,7 +386,7 @@ export class AutonomousScheduler {
 
             this.logMind(
               'SCIENTIST',
-              `🧬 [EVOLVED SYMBOLIC STRATEGY SIGNAL]: ${symbol} ${signal.direction} [${gene.name} · Dynamic Expiry: ${gene.optimalHorizonMinutes}m · Formula: ${gene.mathematicalFormula} · ${gene.verifiedAccuracy}% historical test WR (n=${gene.sampleCount}). ${gene.status === 'PAPER_TRADING' ? 'PAPER TRADING' : 'FORWARD APPROVED'}. Enters strictly at 5M Candle Open (${signal.candleOpenTimeIst}).`,
+              `🧬 [EVOLVED SYMBOLIC STRATEGY SIGNAL]: ${symbol} ${signal.direction} [${gene.name} · Dynamic Expiry: ${gene.optimalHorizonMinutes}m · Formula: ${gene.mathematicalFormula} · ${gene.verifiedAccuracy}% historical test WR (n=${gene.sampleCount}). ${gene.status === 'PAPER_TRADING' ? 'PAPER TRADING' : 'FORWARD APPROVED'}. Enters strictly at ${gene.optimalHorizonMinutes}M Candle Open (${signal.candleOpenTimeIst}).`,
               symbol,
               signal.id
             );
@@ -466,7 +470,7 @@ export class AutonomousScheduler {
 
           if (candidate) {
             // Dynamically assign optimal expiry across 5m, 10m, 15m, 20m, 25m, 30m
-            let dynamicExpiry: 5 | 10 | 15 | 20 | 25 | 30 = 15;
+            const dynamicExpiry: 5 | 10 | 15 | 20 | 25 | 30 = selectedEntryTimeframe;
             let ruleFamily = 'mean_reversion_20';
             let strategyName = '';
 
@@ -477,32 +481,26 @@ export class AutonomousScheduler {
 
             if (hasMomentum && !hasMeanRev && bodyRatio > 0.60) {
               // 5 Min: High-velocity momentum surge (Single candle expansion)
-              dynamicExpiry = 5;
               ruleFamily = 'momentum_5';
               strategyName = `Stacked: 5-Min Momentum + ${hasWick ? 'Wick Rejection' : 'Volume Expansion'}`;
             } else if (hasWick && (hasMomentum || hasRsi)) {
               // 10 Min: Liquidity Wick Sweep + 2-Candle Retest
-              dynamicExpiry = 10;
               ruleFamily = 'wick_reversal';
               strategyName = `Stacked: 10-Min Liquidity Wick + ${hasRsi ? 'RSI Reversal' : 'Trend Retest'}`;
             } else if (hasMeanRev && hasRsi) {
               // 15 Min: Statistical Mean Reversion + RSI Extreme Pullback
-              dynamicExpiry = 15;
               ruleFamily = 'mean_reversion_20';
               strategyName = 'Stacked: 15-Min Mean Reversion + RSI Divergence';
             } else if (hasMomentum && candidate.confluence.some(item => item.includes('20-Bar'))) {
               // 20 Min: Volatility Range Breakout (4-candle expansion)
-              dynamicExpiry = 20;
               ruleFamily = 'range_breakout';
               strategyName = 'Stacked: 20-Min Volatility Range Breakout';
             } else if (hasMeanRev && hasWick) {
               // 25 Min: Structural Swing Reversal (5-candle channel bounce)
-              dynamicExpiry = 25;
               ruleFamily = 'volatility_squeeze';
               strategyName = 'Stacked: 25-Min Structural Swing Reversal';
             } else {
               // 30 Min: Macro Session Trend Continuation (6-candle session flow)
-              dynamicExpiry = 30;
               ruleFamily = 'order_flow_imbalance';
               strategyName = `Stacked: 30-Min ${activeSession.shortName} Macro Trend Flow`;
             }
@@ -552,6 +550,9 @@ export class AutonomousScheduler {
               signalCandle: c,
               ruleFamily,
               expiryMinutes: dynamicExpiry,
+              entryTimeframeMinutes: selectedEntryTimeframe,
+              candleOpenTimeUtc: new Date(selectedSchedule.entryTimeMs).toISOString(),
+              candleCloseTimeUtc: new Date(selectedSchedule.entryTimeMs + dynamicExpiry * 60_000).toISOString(),
               confidence,
               modelVersion: `v2.5-stacked-rules`,
               strategyName,
@@ -561,7 +562,7 @@ export class AutonomousScheduler {
               isStackedStrategy: true,
               paperOnly: true,
               marketFeatureVector,
-              notes: `[PAPER ONLY — NOT APPROVED FOR ACTIONABLE TRADING] Confluence: [${candidate.confluence.join(' · ')}]. Dynamic ${dynamicExpiry}m expiry strictly on 5M candle open (${activeSession.name}).`,
+              notes: `[PAPER ONLY — NOT APPROVED FOR ACTIONABLE TRADING] Confluence: [${candidate.confluence.join(' · ')}]. Dynamic ${dynamicExpiry}m entry candle and expiry strictly aligned (${activeSession.name}).`,
             });
 
             createdSignals.push(signal);
@@ -569,7 +570,7 @@ export class AutonomousScheduler {
 
             this.logMind(
               'SCIENTIST',
-              `3-Min Advance Stacked Signal: ${symbol} ${candidate.direction} [${strategyName} · Dynamic Expiry: ${dynamicExpiry}m · Confluence: ${candidate.confluenceScore} Models]. Enters strictly at 5M Candle Open (${signal.candleOpenTimeIst}).`,
+              `3-Min Advance Stacked Signal: ${symbol} ${candidate.direction} [${strategyName} · Entry Candle: ${selectedEntryTimeframe}m · Expiry: ${dynamicExpiry}m · Confluence: ${candidate.confluenceScore} Models]. Enters strictly at ${selectedEntryTimeframe}M Candle Open (${signal.candleOpenTimeIst}).`,
               symbol,
               signal.id
             );
