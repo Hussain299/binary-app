@@ -359,6 +359,10 @@ class DatabaseService {
     return ends.length ? Math.max(...ends) : null;
   }
 
+  public getResearchHoldoutWindow(batchId: string) {
+    return (this.state.researchHoldoutWindows || []).find(item => item.batchId === batchId) || null;
+  }
+
   /**
    * Atomically reserve an untouched chronological test interval before the
    * search starts. Even a failed/crashed batch consumes its test window.
