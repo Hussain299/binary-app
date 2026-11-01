@@ -21,6 +21,7 @@ import { historicalDataStore } from './historicalData.js';
 import {
   classifyMarketRegime,
   inferGenomeStyle,
+  inferGenomeRuleFamily,
   isStrategyRegimeCompatible,
 } from './evolutionEngine.js';
 import { findEligibleStartTimeframes } from './tradingClock.js';
@@ -301,7 +302,7 @@ export class AutonomousScheduler {
               const memoryAssessment = db.assessEpisodicMemory({
                 symbol,
                 direction: evalResult.direction,
-                ruleFamily: 'volatility_squeeze',
+                ruleFamily: inferGenomeRuleFamily(gene.genome?.expression),
                 featureVector: marketFeatureVector,
                 predictionTimeUtc: new Date().toISOString(),
               });
@@ -344,9 +345,9 @@ export class AutonomousScheduler {
               strategyWinRate: gene.verifiedAccuracy,
               strategyHistoricalSampleSize: gene.sampleCount,
               strategyEvidenceStatus: gene.accuracyStatus,
-              confluenceStrategies: [gene.name, ...gene.parents, `${gene.nonLinearOperator} Activation`],
-              confluenceScore: gene.parents.length + 1,
-              isStackedStrategy: true,
+              confluenceStrategies: [...gene.parents, `${gene.nonLinearOperator} Activation`],
+              confluenceScore: 0,
+              isStackedStrategy: false,
               isNovelAiSynthesized: true,
               synthesizedGeneId: gene.id,
               mathematicalFormula: gene.mathematicalFormula,
