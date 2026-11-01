@@ -200,11 +200,8 @@ export class AutonomousScheduler {
         }
       }
 
-      // 3. Autonomous Setup Discovery: exact 3-minute advance on 5–30m entry candles
-      // HUMAN STRICT RULE: Signals must ONLY be generated strictly within the 3-minute advance window!
-      // A 5-minute advance signal is dangerous to accuracy because the setup candle has barely formed.
-      // At 3 minutes advance (:32, :37, :42, etc.), 2 full minutes of candle volume and price discovery
-      // have settled, providing maximum mathematical conviction.
+      // 3. Evolved-genome paper discovery only. The shared trading clock and
+      // signal factory enforce exactly T-3m and matching 5–30m entry/expiry.
       const createdSignals: any[] = [];
       const currentActive = db.getActiveSignals();
       const activeSymbols = new Set(currentActive.map(s => s.symbol));
@@ -231,14 +228,6 @@ export class AutonomousScheduler {
           const eligibleSchedules = findEligibleStartTimeframes(nowMs, c.timestampMs + 60_000);
           if (eligibleSchedules.length === 0) continue;
           const prev = candles[candles.length - 2];
-          const range = Math.max(0.00008, c.high - c.low);
-          const body = Math.abs(c.close - c.open);
-          const bodyRatio = body / range;
-          const upperWick = c.high - Math.max(c.open, c.close);
-          const lowerWick = Math.min(c.open, c.close) - c.low;
-          const isJpy = symbol.includes('JPY');
-          const pipScale = isJpy ? 0.01 : 0.0001;
-
           // Technical indicators
           const closes = candles.map(k => k.close);
           const ema9 = researchEngine.calculateEMA(closes, 9);
@@ -249,19 +238,6 @@ export class AutonomousScheduler {
           );
           const regimeAssessment = classifyMarketRegime(candles, activeSession.id);
           db.updateMarketRegime(symbol, activeSession.id, regimeAssessment);
-
-          const lastEma9 = ema9[ema9.length - 1];
-          const lastEma21 = ema21[ema21.length - 1];
-          const prevEma9 = ema9[ema9.length - 2] || lastEma9;
-          const prevEma21 = ema21[ema21.length - 2] || lastEma21;
-          const lastRsi = rsi14[rsi14.length - 1] || 50;
-
-          // 20-period Moving Average and Extremes
-          const recent20 = candles.slice(-20);
-          const sma20 = recent20.reduce((acc, k) => acc + k.close, 0) / 20;
-          const deviationPips = (c.close - sma20) / pipScale;
-          const high20 = Math.max(...candles.slice(-20, -1).map(k => k.high));
-          const low20 = Math.min(...candles.slice(-20, -1).map(k => k.low));
 
           // -------------------------------------------------------------
           // Evaluate evolved symbolic candidates using their stored executable genomes.
@@ -375,11 +351,11 @@ export class AutonomousScheduler {
               synthesizedGeneId: gene.id,
               mathematicalFormula: gene.mathematicalFormula,
               whyHumansMissThis: gene.whyHumansMissThis,
-              paperOnly: gene.status !== 'PROMOTED_ACTIVE',
+              paperOnly: true,
               marketFeatureVector,
               notes: gene.status !== 'PROMOTED_ACTIVE'
-                ? `[PAPER ONLY — NOT APPROVED FOR ACTIONABLE TRADING] Forward validation sample. ${gene.mathematicalFormula}`
-                : `[APPROVED AFTER 300 HISTORICAL + 300 FORWARD OUTCOMES]: ${gene.mathematicalFormula} | Edge: ${gene.whyHumansMissThis}`,
+                ? `[PAPER ONLY] Historical candidate has not completed forward approval. ${gene.mathematicalFormula}`
+                : `[PAPER ONLY — FORWARD EVIDENCE GATE PASSED; NO BROKER EXECUTION] ${gene.mathematicalFormula} | ${gene.whyHumansMissThis}`,
             });
 
             createdSignals.push(signal);
@@ -394,189 +370,9 @@ export class AutonomousScheduler {
             break; // Single high-conviction signal per pulse
           }
 
-          // -------------------------------------------------------------
-          // Multi-Strategy Stacking: Detect Bullish vs Bearish Confluence
-          // Stack technical confluences to form a research signal. Historical and live
-          // outcome performance are measured separately; confluence count is not a win rate.
-          // -------------------------------------------------------------
-          const buyConfluences: string[] = [];
-          const sellConfluences: string[] = [];
+          // No hand-written fallback is permitted. If no evolved, historically
+          // qualified genome triggers, the system abstains for this pair/window.
 
-          // 1. Momentum / EMA Alignment
-          if (lastEma9 > lastEma21 && (c.close > c.open || lastEma9 - lastEma21 > prevEma9 - prevEma21)) {
-            buyConfluences.push('EMA 9/21 Trend Breakout');
-          }
-          if (lastEma9 < lastEma21 && (c.close < c.open || lastEma21 - lastEma9 > prevEma21 - prevEma9)) {
-            sellConfluences.push('EMA 9/21 Trend Breakdown');
-          }
-
-          // 2. Liquidity Wick Rejection
-          if (lowerWick / range > 0.42) {
-            buyConfluences.push(`Liquidity Wick Sweep (${((lowerWick / range) * 100).toFixed(0)}%)`);
-          }
-          if (upperWick / range > 0.42) {
-            sellConfluences.push(`Liquidity Wick Sweep (${((upperWick / range) * 100).toFixed(0)}%)`);
-          }
-
-          // 3. Statistical Mean Reversion
-          if (deviationPips < -5.5) {
-            buyConfluences.push(`Mean Reversion (-${Math.abs(deviationPips).toFixed(1)} Pips)`);
-          }
-          if (deviationPips > 5.5) {
-            sellConfluences.push(`Mean Reversion (+${deviationPips.toFixed(1)} Pips)`);
-          }
-
-          // 4. RSI Extremes
-          if (lastRsi < 36) {
-            buyConfluences.push(`RSI Oversold (${lastRsi})`);
-          }
-          if (lastRsi > 64) {
-            sellConfluences.push(`RSI Overbought (${lastRsi})`);
-          }
-
-          // 5. Volatility Breakout
-          if (c.close >= high20 || (bodyRatio > 0.60 && c.close > c.open)) {
-            buyConfluences.push('20-Bar High Expansion');
-          }
-          if (c.close <= low20 || (bodyRatio > 0.60 && c.close < c.open)) {
-            sellConfluences.push('20-Bar Low Expansion');
-          }
-
-          // 6. Session Alignment
-          if (activeSession.id === 'OVERLAP' || activeSession.id === 'LONDON') {
-            if (buyConfluences.length >= 1) buyConfluences.push(`${activeSession.shortName} Volume Flow`);
-            if (sellConfluences.length >= 1) sellConfluences.push(`${activeSession.shortName} Volume Flow`);
-          }
-
-          // Select candidate setup ONLY IF Confluence Score >= 2 (Strict Stacking Requirement)
-          let candidate: {
-            direction: 'BUY' | 'SELL';
-            confluence: string[];
-            confluenceScore: number;
-          } | null = null;
-
-          if (buyConfluences.length >= 2 && buyConfluences.length > sellConfluences.length) {
-            candidate = {
-              direction: 'BUY',
-              confluence: buyConfluences,
-              confluenceScore: buyConfluences.length,
-            };
-          } else if (sellConfluences.length >= 2 && sellConfluences.length > buyConfluences.length) {
-            candidate = {
-              direction: 'SELL',
-              confluence: sellConfluences,
-              confluenceScore: sellConfluences.length,
-            };
-          }
-
-          if (candidate) {
-            // The chosen N-minute horizon is also the starting entry-candle timeframe.
-            const dynamicExpiry: 5 | 10 | 15 | 20 | 25 | 30 = selectedEntryTimeframe;
-            let ruleFamily = 'mean_reversion_20';
-            let strategyName = '';
-
-            const hasMomentum = candidate.confluence.some(item => item.includes('Trend') || item.includes('Expansion'));
-            const hasWick = candidate.confluence.some(item => item.includes('Wick'));
-            const hasMeanRev = candidate.confluence.some(item => item.includes('Mean Reversion'));
-            const hasRsi = candidate.confluence.some(item => item.includes('RSI'));
-
-            if (hasMomentum && !hasMeanRev && bodyRatio > 0.60) {
-              // 5 Min: High-velocity momentum surge (Single candle expansion)
-              ruleFamily = 'momentum_5';
-              strategyName = `Stacked: 5-Min Momentum + ${hasWick ? 'Wick Rejection' : 'Volume Expansion'}`;
-            } else if (hasWick && (hasMomentum || hasRsi)) {
-              // 10 Min: Liquidity Wick Sweep + 2-Candle Retest
-              ruleFamily = 'wick_reversal';
-              strategyName = `Stacked: 10-Min Liquidity Wick + ${hasRsi ? 'RSI Reversal' : 'Trend Retest'}`;
-            } else if (hasMeanRev && hasRsi) {
-              // 15 Min: Statistical Mean Reversion + RSI Extreme Pullback
-              ruleFamily = 'mean_reversion_20';
-              strategyName = 'Stacked: 15-Min Mean Reversion + RSI Divergence';
-            } else if (hasMomentum && candidate.confluence.some(item => item.includes('20-Bar'))) {
-              // 20 Min: Volatility Range Breakout (4-candle expansion)
-              ruleFamily = 'range_breakout';
-              strategyName = 'Stacked: 20-Min Volatility Range Breakout';
-            } else if (hasMeanRev && hasWick) {
-              // 25 Min: Structural Swing Reversal (5-candle channel bounce)
-              ruleFamily = 'volatility_squeeze';
-              strategyName = 'Stacked: 25-Min Structural Swing Reversal';
-            } else {
-              // 30 Min: Macro Session Trend Continuation (6-candle session flow)
-              ruleFamily = 'order_flow_imbalance';
-              strategyName = `Stacked: 30-Min ${activeSession.shortName} Macro Trend Flow`;
-            }
-
-            // Deterministic signal-strength score from rule confluence; not a calibrated probability.
-            const confidence = Number(
-              Math.min(0.92, 0.77 + (candidate.confluenceScore - 2) * 0.05).toFixed(2)
-            );
-
-            const candidateStyle = (
-              ruleFamily.includes('mean_reversion') ||
-              ruleFamily.includes('wick_reversal') ||
-              strategyName.toLowerCase().includes('swing reversal')
-            ) ? 'MEAN_REVERSION' : 'TREND';
-            const candidateRegimeGate = isStrategyRegimeCompatible(candidateStyle, regimeAssessment.regime);
-            if (!candidateRegimeGate.allowed) {
-              this.logMind(
-                'AUDITOR',
-                '[REGIME GATE] Suppressed ' + ruleFamily + ' setup for ' + symbol + ': ' +
-                  candidateRegimeGate.reason + ' Regime=' + regimeAssessment.regime + '.',
-                symbol
-              );
-              continue;
-            }
-            const candidateMemory = db.assessEpisodicMemory({
-              symbol,
-              direction: candidate.direction,
-              ruleFamily,
-              featureVector: marketFeatureVector,
-              predictionTimeUtc: new Date().toISOString(),
-            });
-            if (candidateMemory.veto) {
-              this.logMind(
-                'AUDITOR',
-                '[EPISODIC MEMORY VETO] ' + symbol + ' ' + candidate.direction +
-                  ' ' + ruleFamily + ' suppressed by ' + candidateMemory.neighborsFound +
-                  ' earlier similar outcomes; weighted EV=' +
-                  candidateMemory.weightedExpectedReturnUnits?.toFixed(3) + ' stake units.',
-                symbol
-              );
-              continue;
-            }
-
-            const signal = entryExitEngine.createResearchSignal({
-              symbol,
-              direction: candidate.direction,
-              signalCandle: c,
-              ruleFamily,
-              expiryMinutes: dynamicExpiry,
-              entryTimeframeMinutes: selectedEntryTimeframe,
-              candleOpenTimeUtc: new Date(selectedSchedule.entryTimeMs).toISOString(),
-              candleCloseTimeUtc: new Date(selectedSchedule.entryTimeMs + dynamicExpiry * 60_000).toISOString(),
-              confidence,
-              modelVersion: `v2.5-stacked-rules`,
-              strategyName,
-              strategyId: `stacked:${ruleFamily}:${dynamicExpiry}`,
-              confluenceStrategies: candidate.confluence,
-              confluenceScore: candidate.confluenceScore,
-              isStackedStrategy: true,
-              paperOnly: true,
-              marketFeatureVector,
-              notes: `[PAPER ONLY — NOT APPROVED FOR ACTIONABLE TRADING] Confluence: [${candidate.confluence.join(' · ')}]. Dynamic ${dynamicExpiry}m entry candle and expiry strictly aligned (${activeSession.name}).`,
-            });
-
-            createdSignals.push(signal);
-            activeSymbols.add(symbol);
-
-            this.logMind(
-              'SCIENTIST',
-              `3-Min Advance Stacked Signal: ${symbol} ${candidate.direction} [${strategyName} · Entry Candle: ${selectedEntryTimeframe}m · Expiry: ${dynamicExpiry}m · Confluence: ${candidate.confluenceScore} Models]. Enters strictly at ${selectedEntryTimeframe}M Candle Open (${signal.candleOpenTimeIst}).`,
-              symbol,
-              signal.id
-            );
-            break; // Single high-conviction setup per pulse to prevent burst clutter
-          }
         }
       }
 
