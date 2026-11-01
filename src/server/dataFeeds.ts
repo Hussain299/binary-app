@@ -7,7 +7,7 @@
 import { Candle, ForexSymbol, ProviderHealth } from '../types/index.js';
 import { db } from './db.js';
 import { getForexMarketState, isForexMarketOpenAt, getSessionFromTimestamp } from './marketHours.js';
-export { getSessionFromTimestamp } from './marketHours.js';
+export { getSessionFromTimestamp };
 
 interface RawCandle {
   timestamp: number | string;
