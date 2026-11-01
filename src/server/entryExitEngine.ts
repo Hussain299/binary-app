@@ -256,6 +256,7 @@ export class EntryExitEngine {
       confidence: params.confidence,
       calibrationStatus: probabilityCalibration.status,
       calibratedProbability: probabilityCalibration.probability ?? undefined,
+      calibratedProbabilityLowerBound: probabilityCalibration.lowerConfidenceProbability ?? undefined,
       calibrationSampleSize: probabilityCalibration.sampleSize,
       calibrationBrierScore: probabilityCalibration.brierScore ?? undefined,
       lifecycleState: 'WAITING_FOR_ENTRY',
