@@ -644,7 +644,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           >
             <Globe className="w-3.5 h-3.5 text-emerald-400" />
             <span className="hidden sm:inline">Sessions</span>
-            <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-[10px] text-emerald-400 font-mono font-bold">
+            <span
+              title={sessionMarketTime?.marketMessage || 'Current FX session'}
+              className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold ${sessionMarketTime?.marketOpen === false ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/20 text-emerald-400'}`}
+            >
               {sessionMarketTime?.marketOpen === false ? 'Market Closed' : sessionData.find(s => s.isActive)?.shortName || 'Live'}
             </span>
           </button>
@@ -1589,7 +1592,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </div>
 
             <p className="text-xs text-neutral-300 leading-relaxed">
-              Closed paper outcomes are grouped by the session recorded at entry. This is a descriptive breakdown; it does not prove that a session causes better performance or that the model optimizes separately by session:
+              All settled forward-paper outcomes are grouped by their actual entry time, not the earlier prediction time. The five exclusive session windows use New York local time; UTC and IST labels adjust for daylight saving. This is descriptive evidence, not proof that a session causes better performance:
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
