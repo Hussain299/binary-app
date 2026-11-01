@@ -651,6 +651,9 @@ export async function runAllVerificationTests(): Promise<{
         throw new Error('Entry boundary calculation disagrees with eligibility output.');
       }
     }
+    if (findEligibleStartTimeframes(decisionClose + 25_000, decisionClose).length !== 0) {
+      throw new Error('A signal processed after the strict 25-second decision-processing window must be rejected.');
+    }
     if (findEligibleStartTimeframes(now + 60_000, decisionClose + 60_000).length !== 0) {
       throw new Error('A late signal must not be mislabeled as a three-minute advance signal.');
     }
