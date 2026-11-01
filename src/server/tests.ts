@@ -39,6 +39,11 @@ import {
 } from './researchReproducibility.js';
 import { sanitizeLossAutopsy, OBSERVATION_ONLY_LESSONS } from './researchGovernance.js';
 import { calibratePredictionScore } from './predictionCalibration.js';
+import {
+  assessPaperCapitalRisk,
+  CONSERVATIVE_PAPER_RISK_POLICY,
+  payoutBreakEvenProbability,
+} from './capitalRisk.js';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -199,6 +204,105 @@ export async function runAllVerificationTests(): Promise<{
     }
     if (!rejectedInvalidScore) {
       throw new Error('Out-of-range raw scores must be rejected rather than silently calibrated.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Paper capital governor prioritizes survival over trade frequency', () => {
+    const base = {
+      currentEquity: 100,
+      peakEquity: 100,
+      dayStartingEquity: 100,
+      openPositions: [],
+      candidate: {
+        symbol: 'EUR/USD',
+        direction: 'BUY' as const,
+        payoutPct: 80,
+        winProbabilityLowerBound: 0.65,
+        calibrationSampleSize: 200,
+      },
+    };
+
+    const safe = assessPaperCapitalRisk(base);
+    if (!safe.permitted || safe.reason !== 'ALLOCATED') {
+      throw new Error('A sufficiently evidenced positive conservative edge should receive a tiny paper allocation.');
+    }
+    if (safe.suggestedStakeFraction > CONSERVATIVE_PAPER_RISK_POLICY.maximumStakeFractionPerTrade ||
+        safe.suggestedStakeFraction > 0.0025) {
+      throw new Error('Paper stake suggestion exceeded the strict per-contract capital cap.');
+    }
+    if (safe.projectedTotalOpenStakeFraction > CONSERVATIVE_PAPER_RISK_POLICY.maximumTotalOpenStakeFraction) {
+      throw new Error('Paper portfolio risk exceeded its total open-stake ceiling.');
+    }
+    if (safe.conservativeWinProbability !== 0.65 ||
+        safe.breakEvenWinProbability !== Number(payoutBreakEvenProbability(80).toFixed(4))) {
+      throw new Error('Risk sizing must report the conservative probability and payout-adjusted break-even rate.');
+    }
+
+    const noEdge = assessPaperCapitalRisk({
+      ...base,
+      candidate: { ...base.candidate, winProbabilityLowerBound: 0.54 },
+    });
+    if (noEdge.permitted || noEdge.suggestedStakeFraction !== 0 || noEdge.reason !== 'NO_CONSERVATIVE_EDGE') {
+      throw new Error('A conservative probability below payout break-even must produce zero stake.');
+    }
+
+    const immature = assessPaperCapitalRisk({
+      ...base,
+      candidate: { ...base.candidate, calibrationSampleSize: 99 },
+    });
+    if (immature.permitted || immature.suggestedStakeFraction !== 0 ||
+        immature.reason !== 'INSUFFICIENT_CALIBRATION_EVIDENCE') {
+      throw new Error('Insufficient calibrated history must abstain rather than guess.');
+    }
+
+    const badPayout = assessPaperCapitalRisk({
+      ...base,
+      candidate: { ...base.candidate, payoutPct: 79 },
+    });
+    if (badPayout.permitted || badPayout.reason !== 'PAYOUT_BELOW_FLOOR') {
+      throw new Error('The capital governor must not relax the payout floor to chase returns.');
+    }
+
+    const drawdownStop = assessPaperCapitalRisk({
+      ...base,
+      currentEquity: 94,
+      peakEquity: 100,
+    });
+    if (drawdownStop.permitted || drawdownStop.reason !== 'DRAWDOWN_LIMIT_REACHED') {
+      throw new Error('A five-percent peak-to-equity drawdown must stop new paper allocations.');
+    }
+
+    const dailyStop = assessPaperCapitalRisk({
+      ...base,
+      currentEquity: 98,
+      dayStartingEquity: 100,
+    });
+    if (dailyStop.permitted || dailyStop.reason !== 'DAILY_LOSS_LIMIT_REACHED') {
+      throw new Error('The daily loss stop must prevent additional paper allocations.');
+    }
+
+    const correlated = assessPaperCapitalRisk({
+      ...base,
+      openPositions: [
+        { symbol: 'EUR/USD', direction: 'BUY', stakeFraction: 0.0025 },
+        { symbol: 'GBP/USD', direction: 'BUY', stakeFraction: 0.0025 },
+      ],
+      candidate: { ...base.candidate, symbol: 'AUD/USD' },
+    });
+    if (correlated.permitted || correlated.reason !== 'CURRENCY_CONCENTRATION_LIMIT_REACHED') {
+      throw new Error('Highly correlated USD exposure must be rejected even when individual strategies look attractive.');
+    }
+
+    const alreadyFull = assessPaperCapitalRisk({
+      ...base,
+      openPositions: [
+        { symbol: 'EUR/USD', direction: 'BUY', stakeFraction: 0.0025 },
+        { symbol: 'GBP/JPY', direction: 'BUY', stakeFraction: 0.0025 },
+        { symbol: 'AUD/CAD', direction: 'BUY', stakeFraction: 0.0025 },
+      ],
+    });
+    if (alreadyFull.permitted || alreadyFull.reason !== 'OPEN_RISK_LIMIT_REACHED') {
+      throw new Error('The portfolio open-risk ceiling must stop another position.');
     }
   });
 
