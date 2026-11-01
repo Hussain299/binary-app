@@ -309,6 +309,15 @@ export async function runAllVerificationTests(): Promise<{
 
   await runTest('RESEARCH', 'Human direction revisions are separately audited and never overwrite the AI hypothesis', () => {
     const now = new Date().toISOString();
+    let validEntryMs = Date.now() + 5 * 60_000;
+    let scheduleSearchAttempts = 0;
+    while (!isForexMarketIntervalOpen(validEntryMs, validEntryMs + 10 * 60_000) && scheduleSearchAttempts < 250) {
+      validEntryMs += 60_000;
+      scheduleSearchAttempts++;
+    }
+    if (scheduleSearchAttempts >= 250) {
+      throw new Error('Test could not locate a future open-FX entry interval.');
+    }
     const terminalPrices = Array.from({ length: 120 }, (_, index) =>
       index < 80 ? 1.10100 + (index % 5) * 0.00001 : 1.09900 - (index % 5) * 0.00001
     );
@@ -327,8 +336,8 @@ export async function runAllVerificationTests(): Promise<{
       generatedAt: now,
       snapshotAt: now,
       staleAfter: new Date(Date.now() + 180_000).toISOString(),
-      entryTimeUtc: new Date(Date.now() + 300_000).toISOString(),
-      expiryTimeUtc: new Date(Date.now() + 900_000).toISOString(),
+      entryTimeUtc: new Date(validEntryMs).toISOString(),
+      expiryTimeUtc: new Date(validEntryMs + 10 * 60_000).toISOString(),
       snapshotPrice: 1.10000,
       proposedEntryPrice: 1.10000,
       dataSource: 'imported',
@@ -337,6 +346,7 @@ export async function runAllVerificationTests(): Promise<{
       featureSchemaVersion: 'causal-market-features-v1',
       modelVersion: 'opportunity-research-test',
       marketFeatureVector: Array.from({ length: 19 }, () => 0),
+      recentPriceHistory: [],
       forecast: {
         status: 'AVAILABLE',
         points: [],
