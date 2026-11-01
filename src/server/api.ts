@@ -240,7 +240,8 @@ apiRouter.get('/strategies/performance', (_req: Request, res: Response) => {
 
 // GET /api/evolution/state — measured learning state from persistent backend records.
 apiRouter.get('/evolution/state', (_req: Request, res: Response) => {
-  const performance = db.getStrategyPerformance();
+  const evolvedStrategyIds = new Set(db.getSynthesizedStrategies().map(gene => gene.id));
+  const performance = db.getStrategyPerformance().filter(record => evolvedStrategyIds.has(record.strategyId));
   const strategies = performance.map(record => {
     const posterior = db.getStrategyBayesianPosterior(record.strategyId);
     return {
