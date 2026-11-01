@@ -42,10 +42,10 @@ export const SystemHealthView: React.FC = () => {
         <div>
           <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
             <ShieldAlert className="w-4 h-4 text-emerald-400" />
-            <span>System Telemetry & Provider Health</span>
+            <span>Data health</span>
           </h3>
           <p className="text-xs text-neutral-400 font-mono mt-1">
-            Real-time infrastructure monitor, data feed health checks, and autonomous cron job executions.
+            Provider observations, storage and scheduled research status.
           </p>
         </div>
 
@@ -55,7 +55,7 @@ export const SystemHealthView: React.FC = () => {
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono bg-neutral-900 border border-neutral-800 text-neutral-300 hover:text-white rounded transition-colors"
         >
           <RotateCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-emerald-400' : ''}`} />
-          <span>Refresh Health</span>
+          <span>Refresh</span>
         </button>
       </div>
 
