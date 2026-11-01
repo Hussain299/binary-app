@@ -239,7 +239,7 @@ export default function App() {
           onClick={() => {
             setActiveTab('strategy');
             setIsMobileMenuOpen(false);
-          }
+          }}
           className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 transition-colors ${
             activeTab === 'strategy' ? 'text-amber-400 font-bold' : 'text-neutral-400 hover:text-neutral-200'
           }`}
