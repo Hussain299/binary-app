@@ -316,6 +316,7 @@ export class EntryExitEngine {
       signal.netReturnUnits = null;
       signal.actualExitTimeUtc = null;
       signal.actualExitPrice = null;
+      signal.lifecycleHistory = Array.isArray(signal.lifecycleHistory) ? signal.lifecycleHistory : [];
       signal.lifecycleHistory.push({
         timestamp: new Date().toISOString(),
         fromState: previousState,
