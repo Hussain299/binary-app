@@ -528,8 +528,8 @@ class DatabaseService {
   }
 
   /**
-   * Computes observed forward-outcome breakdown across all 4 market sessions
-   * (Asia, London, Overlap, New York).
+   * Computes settled forward-paper outcomes across five exclusive, DST-aware
+   * sessions: Asia, London, overlap, New York and late New York.
    */
   public getSessionAccuracyBreakdown(): MarketSessionInfo[] {
     const now = new Date();
