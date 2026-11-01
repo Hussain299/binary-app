@@ -523,7 +523,7 @@ export interface SystemHealthState {
 }
 
 export interface VerificationTestResult {
-  category: 'DATA' | 'ML' | 'ENTRY_EXIT' | 'RESEARCH' | 'SYSTEM';
+  category: 'DATA' | 'ML' | 'ENTRY_EXIT' | 'RESEARCH' | 'SYSTEM' | 'MARKET_HOURS';
   name: string;
   passed: boolean;
   durationMs: number;
