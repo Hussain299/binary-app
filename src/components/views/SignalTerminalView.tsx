@@ -1217,7 +1217,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <div className="space-y-3">
               {synthesizedStrategies.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-neutral-700 p-5 text-center text-xs text-neutral-400">
-                  No strategy candidates have been generated. Import at least 30,000 genuine one-minute candles for a pair, then run the 300-candidate evolutionary research batch.
+                  No strategy candidates have been generated. Import at least 60,000 genuine one-minute candles for a pair, then run the 300-candidate evolutionary research batch.
                 </div>
               ) : (
                 [...synthesizedStrategies]
@@ -1692,7 +1692,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-4 space-y-3">
               <div>
                 <h4 className="text-sm font-bold text-white">Import externally sourced historical candles</h4>
-                <p className="text-[11px] text-neutral-400 mt-1">Upload 1-minute CSV or JSON candles. Candidate validation requires at least 30,000 structurally valid M1 rows. Synthetic fallback candles are rejected. The app checks OHLC and timestamps but cannot independently authenticate an uploaded file's provider or contents; import only genuine broker/provider exports.</p>
+                <p className="text-[11px] text-neutral-400 mt-1">Upload 1-minute CSV or JSON candles. Candidate validation requires at least 60,000 structurally valid M1 rows to support the full 5m–30m horizon range. Synthetic fallback candles are rejected. The app checks OHLC and timestamps but cannot independently authenticate an uploaded file's provider or contents; import only genuine broker/provider exports.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <select
