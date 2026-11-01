@@ -3,6 +3,8 @@ import type {
   MarketSessionId,
   StrategyExpressionNode,
   StrategyFeatureName,
+  StrategyGenome,
+  StrategyDiscoveryMetrics,
 } from "../types/index.js";
 
 export type StrategyStyle = "TREND" | "MEAN_REVERSION" | "HYBRID" | "UNKNOWN";
@@ -25,6 +27,47 @@ export interface MarketRegimeSnapshot extends RegimeAssessment {
   symbol: string;
   session: MarketSessionId;
   assessedAt: string;
+}
+
+export interface EvolutionParentCandidate {
+  genome?: StrategyGenome;
+  discoveryMetrics?: StrategyDiscoveryMetrics;
+}
+
+/**
+ * Parent selection is restricted to frozen train/validation evidence.
+ * Holdout metrics are deliberately not part of this function's type or ranking.
+ */
+export function selectEvolutionParents<T extends EvolutionParentCandidate>(
+  candidates: T[],
+  limit = 30
+): T[] {
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error("Evolution parent limit must be a positive integer.");
+  }
+  return candidates
+    .filter(candidate => {
+      const metrics = candidate.discoveryMetrics;
+      return !!candidate.genome &&
+        !!metrics &&
+        metrics.trainScoredTrades >= 150 &&
+        metrics.validationScoredTrades >= 150 &&
+        Number.isFinite(metrics.validationWinRate) &&
+        metrics.validationWinRate >= 0.70 &&
+        Number.isFinite(metrics.validationExpectedValueUnits) &&
+        metrics.validationExpectedValueUnits > 0 &&
+        Number.isFinite(metrics.validationProfitFactor) &&
+        metrics.validationProfitFactor >= 1.15 &&
+        Number.isFinite(metrics.minimumPayoutPct) &&
+        (metrics.minimumPayoutPct ?? 0) >= 80;
+    })
+    .sort((a, b) =>
+      (b.discoveryMetrics!.validationExpectedValueUnits - a.discoveryMetrics!.validationExpectedValueUnits) ||
+      (b.discoveryMetrics!.validationWinRate - a.discoveryMetrics!.validationWinRate) ||
+      (b.discoveryMetrics!.validationProfitFactor - a.discoveryMetrics!.validationProfitFactor) ||
+      (a.genome!.complexity - b.genome!.complexity)
+    )
+    .slice(0, limit);
 }
 
 export interface BetaPosterior {
