@@ -683,15 +683,30 @@ export class OpportunityEngine {
     const lower = decisive >= MIN_ANALOGUES_FOR_SHORTLIST ? wilson(wins, decisive) : null;
     const breakEven = opportunity.forecast.payoutBreakEvenProbability;
     const expectedValue = lower === null ? null : lower * (PAYOUT_FLOOR / 100) - (1 - lower);
+    const entryMs = Date.parse(opportunity.entryTimeUtc);
+    const expiryMs = Date.parse(opportunity.expiryTimeUtc);
+    const scheduleValid = Number.isFinite(entryMs) &&
+      Number.isFinite(expiryMs) &&
+      isForexMarketIntervalOpen(entryMs, expiryMs);
+    const dataAndSimilarityGate = opportunity.marketDataQuality >= 70 &&
+      (opportunity.forecast.meanDistance ?? Infinity) <= 0.45 &&
+      scheduleValid;
+    const activationGate = Math.abs(opportunity.rawHypothesisScore) >= opportunity.activationThreshold;
     const counterEvidence = [
       "Human direction override: this is a revised hypothesis, not the original model recommendation.",
     ];
-    const reasons = lower !== null && lower > breakEven
-      ? ["Human-modified direction clears the historical analogue lower-bound check; it still requires paper-forward validation."]
-      : ["The human-modified direction does not clear the payout-adjusted conservative lower-bound check."];
+    const reasons = lower === null
+      ? ["Fewer than 100 decisive historical analogue outcomes remain after excluding ties."]
+      : !dataAndSimilarityGate
+        ? ["The revised hypothesis failed the original data-quality, analogue-similarity or market-hours gate."]
+        : !activationGate
+          ? ["The original hypothesis activation score did not clear its threshold; a direction override cannot manufacture a setup."]
+          : lower > breakEven
+            ? ["Human-modified direction clears the historical analogue lower-bound check; it still requires paper-forward validation."]
+            : ["The human-modified direction does not clear the payout-adjusted conservative lower-bound check."];
     const status: OpportunityAudit["status"] = lower === null
       ? "INSUFFICIENT_EVIDENCE"
-      : lower > breakEven
+      : dataAndSimilarityGate && activationGate && lower > breakEven
         ? "SHORTLISTED"
         : "REJECTED";
     const revisedAt = new Date().toISOString();
@@ -708,6 +723,7 @@ export class OpportunityEngine {
         : -Math.abs(opportunity.rawHypothesisScore),
       forecast: {
         ...opportunity.forecast,
+        analogueCount: decisive,
         winRate: winRate === null ? null : Number(winRate.toFixed(4)),
         lowerConfidenceBound: lower === null ? null : Number(lower.toFixed(4)),
         expectedValueLowerBound: expectedValue === null ? null : Number(expectedValue.toFixed(4)),
