@@ -9,6 +9,7 @@ export type TradingTimeframeMinutes = typeof TRADING_TIMEFRAMES_MINUTES[number];
 export const M1_CANDLE_MS = 60_000;
 export const ADVANCE_NOTICE_MINUTES = 3;
 export const ADVANCE_NOTICE_MS = ADVANCE_NOTICE_MINUTES * M1_CANDLE_MS;
+export const MAX_DECISION_PROCESSING_DELAY_MS = 25_000;
 export const CLOCK_ALIGNMENT_TOLERANCE_MS = 5_000;
 
 export interface EligibleEntryTimeframe {
@@ -45,7 +46,7 @@ export function findEligibleStartTimeframes(
     const decisionTimeMs = entryTimeMs - ADVANCE_NOTICE_MS;
     const decisionIsCurrent =
       nowMs >= decisionTimeMs &&
-      nowMs < decisionTimeMs + M1_CANDLE_MS;
+      nowMs < decisionTimeMs + MAX_DECISION_PROCESSING_DELAY_MS;
     const closedBarMatches =
       Math.abs(latestClosedM1CloseTimeMs - decisionTimeMs) <= CLOCK_ALIGNMENT_TOLERANCE_MS;
     if (decisionIsCurrent && closedBarMatches) {
