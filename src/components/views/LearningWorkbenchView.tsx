@@ -106,7 +106,7 @@ export const LearningWorkbenchView: React.FC = () => {
   const p=board?.executionProfile;
   const executionStatus=!p?'Loading':p.assetAvailability==='UNAVAILABLE'?'Asset unavailable':p.brokerAcceptance==='REJECTED'?'Rejected scenario':p.latencyMs!==null&&p.latencyMs!==0?'Latency not replayable':p.spreadPips===null||p.slippagePips===null||p.latencyMs===null||p.assetAvailability!=='AVAILABLE'||p.brokerAcceptance!=='ACCEPTED'?'Reference only':'Scenario configured';
 
-  return <div className="sf-opportunity-view flex h-full min-h-0 flex-col overflow-hidden bg-transparent text-neutral-100">
+  return <div className="sf-opportunity-view flex min-w-0 flex-col bg-transparent text-neutral-100">
     <header className="sf-opportunity-hero shrink-0 border-b border-white/[.07] px-4 py-5 sm:px-6">
       <div className="flex flex-wrap items-start justify-between gap-4"><div className="max-w-3xl">
         <div className="sf-opportunity-kicker flex items-center gap-2"><BrainCircuit className="h-4 w-4"/> Research intelligence · forward evidence</div>
@@ -120,7 +120,7 @@ export const LearningWorkbenchView: React.FC = () => {
       <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-neutral-500"><span>Service {board?'connected':'connecting'}</span><span>Updated {ist(board?.generatedAt)}</span><span>Refreshes every 30 seconds while open</span><span>No broker connection</span></div>
       {(message||error)&&<div role="status" aria-live="polite" className={'sf-inline-notice mt-3 rounded-lg border px-3 py-2 text-[11px] '+(error?'border-rose-400/20 bg-rose-400/[.06] text-rose-200':'border-emerald-400/15 bg-emerald-400/[.05] text-emerald-100')}>{error||message}</div>}
     </header>
-    <main className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5">
+    <main className="p-3 sm:p-5">
       {loading&&!board?<div className="flex min-h-[360px] flex-col items-center justify-center text-neutral-500"><RefreshCw className="h-6 w-6 animate-spin text-emerald-300"/><p className="mt-3 text-xs">Loading research evidence…</p></div>
       :!board?<Panel><AlertTriangle className="mx-auto h-7 w-7 text-amber-300"/><p className="mt-3 text-center text-sm text-white">Learning service unavailable</p><button onClick={()=>void load()} className="sf-primary-button mx-auto mt-4">Try again</button></Panel>
       :<div className="mx-auto max-w-[1600px] space-y-4">

@@ -323,7 +323,7 @@ export const OpportunityResearchView: React.FC = () => {
   };
 
   return (
-    <div className="sf-opportunity-view flex h-full min-h-0 flex-col overflow-hidden bg-transparent text-neutral-100">
+    <div className="sf-opportunity-view flex min-w-0 flex-col bg-transparent text-neutral-100">
       <div className="sf-opportunity-hero shrink-0 border-b border-white/[0.07] px-4 py-4 sm:px-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -365,7 +365,7 @@ export const OpportunityResearchView: React.FC = () => {
         )}
       </div>
 
-      <div className="sf-lab-layout flex min-h-0 flex-1 flex-col overflow-hidden p-3 lg:flex-row">
+      <div className="sf-lab-layout flex flex-col p-3 lg:flex-row">
         <section className="sf-lab-panel sf-lab-pool flex min-h-[210px] flex-col lg:w-[350px] lg:shrink-0">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.07] px-3 py-3">
             <div className="flex items-center gap-2 text-xs font-semibold text-white">
@@ -394,7 +394,7 @@ export const OpportunityResearchView: React.FC = () => {
               {FOREX_PAIRS.map(symbol => <option key={symbol} value={symbol}>{symbol}</option>)}
             </select>
           </div>
-          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
+          <div className="space-y-1 p-2">
             {visible.map(item => (
               <button
                 key={item.id}
@@ -431,7 +431,7 @@ export const OpportunityResearchView: React.FC = () => {
           </div>
         </section>
 
-        <section className="sf-lab-panel sf-lab-detail min-h-0 min-w-0 flex-1 overflow-y-auto">
+        <section className="sf-lab-panel sf-lab-detail min-w-0 flex-1">
           {selected ? (
             <div className="space-y-4 p-3 sm:p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
