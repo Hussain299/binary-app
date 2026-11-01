@@ -200,7 +200,7 @@ export function classifyMarketRegime(history: OpportunityHistoricalCandle[]): Ma
     method: 'OHLC_DIAGNOSTIC_V1',
     sampleSize: valid.length,
     directionalEfficiency: Number(directionalEfficiency.toFixed(4)),
-    relativeVolatility: Number(relativeVolatility.toFixed(4)),
+    relativeVolatility: relativeVolatility === null ? null : Number(relativeVolatility.toFixed(4)),
   };
 }
 
