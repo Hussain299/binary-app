@@ -8,10 +8,14 @@ interface PerformanceAnalyticsViewProps {
 }
 
 export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> = ({ experiments, signals }) => {
-  const completed = signals.filter(signal =>
+  const allCompleted = signals.filter(signal =>
     signal.lifecycleState === 'CLOSED' &&
     ['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult)
   );
+  const completed = allCompleted.filter(signal =>
+    signal.isNovelAiSynthesized === true && !!signal.synthesizedGeneId
+  );
+  const archivedRuleBasedCount = allCompleted.length - completed.length;
   const scored = completed.filter(signal =>
     signal.outcomeResult === 'WIN' || signal.outcomeResult === 'LOSS'
   );
@@ -34,7 +38,7 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
           <span>Performance Analytics & Evidence</span>
         </h3>
         <p className="text-xs text-neutral-400 font-mono mt-1">
-          Forward-paper outcomes use payout-adjusted binary contract returns. Historical exploratory tests are archived separately and are not current approval evidence.
+          Evolved-genome forward-paper outcomes only, using payout-adjusted binary contract returns. Legacy rule-based observations are excluded.
         </p>
       </div>
 
@@ -100,9 +104,13 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
             </div>
           </div>
         ) : (
-          <p className="text-xs text-neutral-400">No completed forward-paper contracts have been recorded yet. No performance rate is inferred from unclosed predictions.</p>
+          <p className="text-xs text-neutral-400">No completed evolved-genome forward-paper contracts have been recorded yet. No performance rate is inferred from unclosed predictions.</p>
         )}
       </div>
+
+      <p className="text-[10px] text-neutral-500">
+        Archived legacy rule-based paper outcomes excluded from the metrics above: {archivedRuleBasedCount}.
+      </p>
 
       <div className="rounded-xl border border-amber-900/60 bg-amber-950/20 p-4 flex gap-3 text-xs text-neutral-300">
         <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
