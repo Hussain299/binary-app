@@ -211,6 +211,44 @@ apiRouter.get('/strategies/performance', (_req: Request, res: Response) => {
   res.json({ strategies: db.getStrategyPerformance() });
 });
 
+// GET /api/evolution/state — measured learning state from persistent backend records.
+apiRouter.get('/evolution/state', (_req: Request, res: Response) => {
+  const performance = db.getStrategyPerformance();
+  const strategies = performance.map(record => {
+    const posterior = db.getStrategyBayesianPosterior(record.strategyId);
+    return {
+      strategyId: record.strategyId,
+      alpha: posterior.alpha,
+      beta: posterior.beta,
+      posteriorWinRate: posterior.mean,
+      decisiveOutcomes: posterior.observations,
+      bayesianUcbScore: db.getStrategyBayesianUcbScore(record.strategyId),
+      wins: record.binaryWins ?? record.wins,
+      losses: record.binaryLosses ?? record.losses,
+      scratches: record.binaryPushes ?? record.scratches,
+      netReturnUnits: record.netReturnUnits ?? 0,
+      updatedAt: record.updatedAt,
+    };
+  });
+  res.json({
+    timestamp: new Date().toISOString(),
+    learning: {
+      posterior: 'Beta-Bernoulli',
+      selection: 'Bayesian upper-confidence score',
+      decisiveUpdates: strategies.reduce((sum, item) => sum + item.decisiveOutcomes, 0),
+      strategyCount: strategies.length,
+    },
+    episodicMemory: {
+      storedTrades: db.getEpisodicMemoryCount(),
+      featureDimensions: 19,
+      nearestNeighbors: 10,
+      futureOutcomesExcluded: true,
+    },
+    regimes: db.getMarketRegimes(),
+    strategies,
+  });
+});
+
 // Validate one generated candidate against its pair's uploaded historical candles.
 apiRouter.post('/strategies/validate', (req: Request, res: Response) => {
   try {
