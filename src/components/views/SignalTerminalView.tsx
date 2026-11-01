@@ -1157,7 +1157,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   5. Strategy Candidate Generation and Validation
                 </span>
                 <p>
-                  The candidate generator samples operator families and coefficients and stores the exact executable parameters with each formula. Candidate generation alone provides no evidence of an edge; candidates must pass the untouched historical test and subsequent forward observation before promotion.
+                  The search evolves executable symbolic expression trees over causal market features. Validated parents, strategy diversity and sufficiently large forward-paper samples steer mutation and reproduction. Candidate generation creates no accuracy claim; only pre-registered historical finalists and independent forward-paper outcomes can qualify a strategy.
                 </p>
               </div>
 
