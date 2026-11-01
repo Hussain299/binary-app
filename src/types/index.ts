@@ -467,6 +467,11 @@ export interface EvolutionGeneration {
   bestF1Score: number;
   summary: string;
   lessonsLearned: string[];
+  /** Present only for real 300-candidate symbolic search batches. */
+  researchBatchId?: string;
+  symbol?: ForexSymbol;
+  bestValidationExpectedValueUnits?: number;
+  holdoutPeriod?: { start: string; end: string };
 }
 
 export interface AutopilotLog {
