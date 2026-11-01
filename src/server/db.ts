@@ -226,6 +226,7 @@ class DatabaseService {
       episodicMemory: [],
       marketRegimes: {},
       processedOutcomeIds: [],
+      researchHoldoutWindows: [],
       cronState: {
         lastRun: null,
         nextRun: null,
