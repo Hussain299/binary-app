@@ -436,14 +436,14 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
             >
               <div className="flex flex-wrap items-center justify-between pb-3 border-b border-neutral-800">
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-bold text-white">{gen.researchBatchId ? 'Evolution Batch' : 'Legacy Research'} #{gen.generation}</span>
+                  <span className="text-sm font-bold text-white">{gen.status === 'FAILED' ? 'Failed Evolution Batch' : gen.researchBatchId ? 'Evolution Batch' : 'Legacy Research'} #{gen.generation}</span>
                   {gen.symbol && <span className="text-neutral-400">· {gen.symbol}</span>}
                   <span className="text-neutral-500">·</span>
                   <span className="text-neutral-400">{gen.timestamp.substring(0, 19).replace('T', ' ')} UTC</span>
                 </div>
 
                 <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-1.5 text-emerald-400">
+                  <div className={`flex items-center gap-1.5 ${gen.status === 'FAILED' ? 'text-neutral-500' : 'text-emerald-400'}`}>
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     <span>{gen.acceptedCount} {gen.researchBatchId ? 'Historical Passes' : 'Legacy Accepted'}</span>
                   </div>
