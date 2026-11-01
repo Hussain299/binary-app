@@ -874,18 +874,11 @@ export class OpportunityEngine {
       throw new Error("The manual entry reference must be within three recent average M1 ranges of the original snapshot price.");
     }
 
-    // Shift the analogue path only to render a bounded manual entry scenario.
-    // This transformed path is not an independent historical holdout observation.
+    // Keep historical terminal paths unchanged. A manual entry revision changes
+    // the strike/entry reference, not the market's forecast distribution.
     const priceShift = requestedEntryPrice - opportunity.proposedEntryPrice;
-    const terminalPrices = opportunity.forecast.terminalPrices.map(price => price + priceShift);
-    const shiftedPoints = opportunity.forecast.points.map(point => ({
-      ...point,
-      q10: point.q10 + priceShift,
-      q25: point.q25 + priceShift,
-      median: point.median + priceShift,
-      q75: point.q75 + priceShift,
-      q90: point.q90 + priceShift,
-    }));
+    const terminalPrices = opportunity.forecast.terminalPrices;
+    const revisedForecastPoints = opportunity.forecast.points;
     const wins = terminalPrices.filter(price =>
       direction === "BUY" ? price > requestedEntryPrice : price < requestedEntryPrice
     ).length;
@@ -978,7 +971,7 @@ export class OpportunityEngine {
         : -Math.abs(opportunity.rawHypothesisScore),
       forecast: {
         ...opportunity.forecast,
-        points: shiftedPoints,
+        points: revisedForecastPoints,
         terminalPrices,
         analogueCount: decisive,
         winRate: winRate === null ? null : Number(winRate.toFixed(4)),
