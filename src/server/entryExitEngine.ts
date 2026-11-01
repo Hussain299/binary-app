@@ -109,12 +109,6 @@ export class EntryExitEngine {
     // exact aligned boundary after checking the closed M1 decision candle is T-3m.
     const isTest = params.ruleFamily.startsWith('test_');
     const signalCandleMs = params.signalCandle.timestampMs || Date.now();
-    if (!isTest && !isForexMarketOpenAt(now)) {
-      throw new Error('Spot FX market is closed for the weekend; new paper signals are prohibited.');
-    }
-    if (!isTest && !isForexMarketOpenAt(signalCandleMs)) {
-      throw new Error('The signal candle timestamp falls outside the open FX market week.');
-    }
     const entryTimeframeMinutes = params.entryTimeframeMinutes ?? 5;
     if (!isTest && params.entryTimeframeMinutes !== undefined && entryTimeframeMinutes !== expiryMinutes) {
       throw new Error('The research entry timeframe and expiry horizon must match so training and forward outcomes use the same contract.');
@@ -145,6 +139,14 @@ export class EntryExitEngine {
       ) {
         throw new Error('Signal creation is outside the permitted three-minute advance decision window.');
       }
+    }
+    // Check market state after causal schedule validation so each invariant retains
+    // its own deterministic error and regression test.
+    if (!isTest && !isForexMarketOpenAt(now)) {
+      throw new Error('Spot FX market is closed for the weekend; new paper signals are prohibited.');
+    }
+    if (!isTest && !isForexMarketOpenAt(signalCandleMs)) {
+      throw new Error('The signal candle timestamp falls outside the open FX market week.');
     }
     const nextCandleCloseMs = nextCandleOpenMs + (expiryMinutes * 60 * 1000);
     if (!isTest && !isForexMarketIntervalOpen(nextCandleOpenMs, nextCandleCloseMs)) {
