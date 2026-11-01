@@ -148,7 +148,38 @@ function compareParentFitness(a: EvolutionParentCandidate, b: EvolutionParentCan
 }
 
 /**
+ * One-sided Wilson lower confidence bound for a binomial win rate.
+ * The wins argument may be fractional when reconstructed from a stored rate.
+ */
+export function wilsonLowerBound(wins: number, sampleSize: number, z = 1.96): number {
+  if (!Number.isFinite(wins) || !Number.isFinite(sampleSize) ||
+      !Number.isFinite(z) || sampleSize <= 0 || z <= 0) return 0;
+  const n = sampleSize;
+  const p = Math.max(0, Math.min(1, wins / n));
+  const z2 = z * z;
+  const denominator = 1 + z2 / n;
+  const center = p + z2 / (2 * n);
+  const margin = z * Math.sqrt((p * (1 - p) / n) + z2 / (4 * n * n));
+  return Math.max(0, Math.min(1, (center - margin) / denominator));
+}
+
+/** True only when the entire trade outcome is contained inside one time partition. */
+export function outcomeFitsResearchWindow(
+  entryTimeMs: number,
+  horizonMinutes: number,
+  windowStartMs: number,
+  windowEndMs: number
+): boolean {
+  if (![entryTimeMs, horizonMinutes, windowStartMs, windowEndMs].every(Number.isFinite) ||
+      horizonMinutes <= 0 || windowEndMs <= windowStartMs) return false;
+  const exitTimeMs = entryTimeMs + horizonMinutes * 60_000;
+  return entryTimeMs >= windowStartMs && exitTimeMs <= windowEndMs;
+}
+
+/**
  * Select validation-qualified parents while preserving distinct symbolic species.
+ * Selection is payout-aware: the validation lower confidence bound must clear
+ * the binary-contract break-even rate, and expectancy/profit factor must be positive.
  * Mature forward paper evidence can disqualify a once-promising parent, or
  * gradually influence its fitness. Historical holdout metrics are not accepted.
  */
@@ -167,13 +198,18 @@ export function selectEvolutionParents<T extends EvolutionParentCandidate>(
           metrics.trainScoredTrades < 150 ||
           metrics.validationScoredTrades < 150 ||
           !Number.isFinite(metrics.validationWinRate) ||
-          metrics.validationWinRate < 0.70 ||
           !Number.isFinite(metrics.validationExpectedValueUnits) ||
           metrics.validationExpectedValueUnits <= 0 ||
           !Number.isFinite(metrics.validationProfitFactor) ||
           metrics.validationProfitFactor < 1.15 ||
           !Number.isFinite(metrics.minimumPayoutPct) ||
           (metrics.minimumPayoutPct ?? 0) < 80) return false;
+      const breakEven = binaryBreakEvenWinRate(metrics.minimumPayoutPct ?? 0);
+      const validationLowerBound = wilsonLowerBound(
+        metrics.validationWinRate * metrics.validationScoredTrades,
+        metrics.validationScoredTrades
+      );
+      if (validationLowerBound <= breakEven) return false;
 
       // A mature negative/uncertain live-paper record removes this genome
       // from reproduction; a small noisy record does not.
