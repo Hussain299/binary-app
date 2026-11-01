@@ -35,15 +35,9 @@ export const ResearchAgentsView: React.FC<ResearchAgentsViewProps> = ({ reviews 
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-neutral-950">
-      {/* Subheader Toolbar */}
-      <div className="h-12 border-b border-neutral-800 px-6 flex items-center justify-between shrink-0 bg-neutral-900/30">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 text-xs text-neutral-400 font-mono">
-            <span className="text-white font-semibold">RESEARCH TRINITY</span>
-            <span>·</span>
-            <span>ROLE-SEPARATED DELIBERATION AUDIT LOG</span>
-          </div>
-        </div>
+      {/* Compact filter toolbar */}
+      <div className="min-h-12 border-b border-white/[0.07] px-4 py-2 sm:px-5 flex flex-wrap items-center justify-between gap-3 shrink-0 bg-[#0b1018]">
+        <div className="text-sm font-semibold text-white">Research agents</div>
 
         {/* Filter */}
         <div className="flex items-center bg-neutral-900 p-0.5 rounded border border-neutral-800 text-xs font-mono">
@@ -53,7 +47,7 @@ export const ResearchAgentsView: React.FC<ResearchAgentsViewProps> = ({ reviews 
               selectedRole === 'ALL' ? 'bg-neutral-800 text-white' : 'text-neutral-400'
             }`}
           >
-            All Roles ({reviews.length})
+            All ({reviews.length})
           </button>
           <button
             onClick={() => setSelectedRole('SCIENTIST')}
@@ -83,7 +77,7 @@ export const ResearchAgentsView: React.FC<ResearchAgentsViewProps> = ({ reviews 
       </div>
 
       {/* Reviews Stream */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3">
         {filtered.length === 0 ? (
           <div className="h-64 flex flex-col items-center justify-center text-center text-neutral-500 font-mono text-xs">
             <Users className="w-8 h-8 text-neutral-600 mb-2" />
@@ -94,7 +88,7 @@ export const ResearchAgentsView: React.FC<ResearchAgentsViewProps> = ({ reviews 
           filtered.map(rev => (
             <div
               key={rev.id}
-              className="bg-neutral-900/60 border border-neutral-800 rounded p-5 font-mono text-xs space-y-3"
+              className="bg-neutral-900/60 border border-neutral-800 rounded-xl p-4 font-mono text-xs space-y-3"
             >
               <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
                 <div className="flex items-center gap-2">
