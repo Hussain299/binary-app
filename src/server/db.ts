@@ -20,6 +20,7 @@ import {
   SynthesizedStrategyGene,
   LossAutopsy,
   StrategyPerformanceRecord,
+  TradeOpportunity,
 } from '../types/index.js';
 import { sanitizeLossAutopsy } from './researchGovernance.js';
 import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.js';
@@ -45,6 +46,8 @@ interface DatabaseSchema {
   generations: EvolutionGeneration[];
   autopilotLogs: AutopilotLog[];
   synthesizedStrategies: SynthesizedStrategyGene[];
+  /** Persisted pre-trade hypotheses, forecasts and human decision records. */
+  opportunities: TradeOpportunity[];
   lossAutopsies: LossAutopsy[];
   strategyPerformance: Record<string, StrategyPerformanceRecord>;
   /** Durable, prediction-time market contexts for settled WIN/LOSS observations. */
@@ -88,6 +91,7 @@ class DatabaseService {
         const parsed = JSON.parse(raw);
         if (!parsed.autopilotLogs) parsed.autopilotLogs = [];
         if (!Array.isArray(parsed.synthesizedStrategies)) parsed.synthesizedStrategies = [];
+        if (!Array.isArray(parsed.opportunities)) parsed.opportunities = [];
         if (!Array.isArray(parsed.lossAutopsies)) parsed.lossAutopsies = [];
         // Quarantine every legacy autopsy, including orphaned records outside the
         // retained signal window, before exposing any forensic history.
@@ -212,6 +216,7 @@ class DatabaseService {
       generations: [],
       autopilotLogs: [],
       synthesizedStrategies: [],
+      opportunities: [],
       lossAutopsies: [],
       strategyPerformance: {},
       episodicMemory: [],
@@ -323,6 +328,36 @@ class DatabaseService {
       count += this.state.candles[key].length;
     }
     return count;
+  }
+
+  // Pre-trade opportunity research
+  public storeOpportunities(opportunities: TradeOpportunity[]): void {
+    if (!Array.isArray(this.state.opportunities)) this.state.opportunities = [];
+    if (!opportunities.length) return;
+    const batchId = opportunities[0].batchId;
+    const existing = this.state.opportunities.filter(item => item.batchId !== batchId);
+    this.state.opportunities = [
+      ...opportunities,
+      ...existing,
+    ].slice(0, 3000);
+    this.scheduleSave();
+  }
+
+  public getOpportunities(limit = 1000): TradeOpportunity[] {
+    return (this.state.opportunities || []).slice(0, Math.max(1, Math.min(3000, limit)));
+  }
+
+  public getOpportunityById(id: string): TradeOpportunity | undefined {
+    return (this.state.opportunities || []).find(item => item.id === id);
+  }
+
+  public updateOpportunity(opportunity: TradeOpportunity): boolean {
+    if (!Array.isArray(this.state.opportunities)) this.state.opportunities = [];
+    const index = this.state.opportunities.findIndex(item => item.id === opportunity.id);
+    if (index < 0) return false;
+    this.state.opportunities[index] = opportunity;
+    this.scheduleSave();
+    return true;
   }
 
   // Provider Health
