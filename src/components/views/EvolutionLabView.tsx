@@ -79,7 +79,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
           counts[pair.symbol] = pair.count;
         });
         setHistoryCounts(counts);
-        const readyPair = FOREX_PAIRS.find(pair => (counts[pair] || 0) >= 30_000);
+        const readyPair = FOREX_PAIRS.find(pair => (counts[pair] || 0) >= 60_000);
         if (readyPair) setSearchPair(readyPair);
       })
       .catch(() => setSearchError('Could not read historical-data status.'));
@@ -98,8 +98,8 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
       }
 
       const lines = (await file.text()).replace(/^\uFEFF/, '').trim().split(/\r?\n/);
-      if (lines.length < 30_001) {
-        throw new Error(`The file has only ${Math.max(0, lines.length - 1).toLocaleString()} data rows; at least 30,000 M1 rows are required.`);
+      if (lines.length < 60_001) {
+        throw new Error(`The file has only ${Math.max(0, lines.length - 1).toLocaleString()} data rows; at least 60,000 genuine M1 rows are required.`);
       }
       const headers = lines[0].split(',').map(value => value.trim().toLowerCase().replaceAll('"', ''));
       const index = (name: string) => headers.indexOf(name);
@@ -307,9 +307,9 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
         </div>
         {historyImportStatus && <p className="text-[11px] text-emerald-300">{historyImportStatus}</p>}
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-neutral-400">
-          <span>Imported history: <strong className="text-white">{selectedHistoryCount.toLocaleString()} / 30,000 M1 candles</strong></span>
-          <span>Historic gate: <strong className="text-white">300 scored test trades · 70% validation and test WR</strong></span>
-          <span>Final gate: <strong className="text-white">300 forward paper outcomes · 70% rolling WR</strong></span>
+          <span>Imported history: <strong className="text-white">{selectedHistoryCount.toLocaleString()} / 60,000 M1 candles</strong></span>
+          <span>Historic gate: <strong className="text-white">150 train + 150 validation + 300 test trades · payout break-even and corrected 99% confidence</strong></span>
+          <span>Final gate: <strong className="text-white">300 scored forward outcomes · payout break-even and 95% confidence</strong></span>
         </div>
 
         {searchError && (
@@ -337,7 +337,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
                 <div className="text-xl font-bold text-amber-300">{searchBatch.insufficientSample}</div>
               </div>
               <div className="rounded-lg bg-neutral-950 border border-neutral-800 p-3">
-                <div className="text-[10px] text-neutral-500">Failed 70% / EV gates</div>
+                <div className="text-[10px] text-neutral-500">Failed payout / confidence gates</div>
                 <div className="text-xl font-bold text-rose-300">{searchBatch.rejected}</div>
               </div>
               <div className="rounded-lg bg-neutral-950 border border-neutral-800 p-3">
