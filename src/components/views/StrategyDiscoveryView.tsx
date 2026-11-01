@@ -55,7 +55,7 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
   const selected = ranked.find(gene => gene.id === selectedId) || ranked[0] || null;
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-y-auto bg-neutral-950 p-4 sm:p-6 space-y-6">
+    <div className="sf-page">
       <div className="rounded-2xl border border-neutral-800 bg-neutral-900/70 p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
