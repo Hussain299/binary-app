@@ -22,6 +22,14 @@ import { db } from './db.js';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
 import { binaryBreakEvenWinRate, calculateAdaptiveMutationRate, outcomeFitsResearchWindow, selectEvolutionParents, wilsonLowerBound } from './evolutionEngine.js';
 import { ADVANCE_NOTICE_MS, M1_CANDLE_MS, getNextCandleOpenMs, TradingTimeframeMinutes } from './tradingClock.js';
+import {
+  createSeededRandom,
+  deriveResearchSeed,
+  FEATURE_SCHEMA_VERSION,
+  fingerprintCandles,
+  RESEARCH_ENGINE_VERSION,
+  stableHash,
+} from './researchReproducibility.js';
 
 type StrategyHorizon = 5 | 10 | 15 | 20 | 25 | 30;
 type GeneFeatureVector = Record<StrategyFeatureName, number>;
@@ -914,100 +922,104 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     return 1 + this.countExpressionNodes(node.left) + this.countExpressionNodes(node.right);
   }
 
-  private randomGenomeExpression(depth: number): StrategyExpressionNode {
+  private randomGenomeExpression(
+    depth: number,
+    random: () => number = Math.random
+  ): StrategyExpressionNode {
     const unary = ['tanh', 'abs', 'signed_power', 'log_abs', 'sin', 'cos', 'sqrt_abs', 'negate'] as const;
     const binary = ['add', 'subtract', 'multiply', 'protected_divide', 'max', 'min', 'hypot', 'atan2'] as const;
-    if (depth <= 0 || Math.random() < 0.28) {
-      if (Math.random() < 0.08) return { kind: 'constant', value: Number((Math.random() * 1.2 - 0.6).toFixed(3)) };
-      return { kind: 'feature', feature: this.genomeFeatures[Math.floor(Math.random() * this.genomeFeatures.length)] };
+    if (depth <= 0 || random() < 0.28) {
+      if (random() < 0.08) return { kind: 'constant', value: Number((random() * 1.2 - 0.6).toFixed(3)) };
+      return { kind: 'feature', feature: this.genomeFeatures[Math.floor(random() * this.genomeFeatures.length)] };
     }
-    if (Math.random() < 0.34) {
+    if (random() < 0.34) {
       return {
         kind: 'unary',
-        operator: unary[Math.floor(Math.random() * unary.length)],
-        exponent: Number((0.7 + Math.random() * 1.3).toFixed(2)),
-        input: this.randomGenomeExpression(depth - 1),
+        operator: unary[Math.floor(random() * unary.length)],
+        exponent: Number((0.7 + random() * 1.3).toFixed(2)),
+        input: this.randomGenomeExpression(depth - 1, random),
       };
     }
     return {
       kind: 'binary',
-      operator: binary[Math.floor(Math.random() * binary.length)],
-      left: this.randomGenomeExpression(depth - 1),
-      right: this.randomGenomeExpression(depth - 1),
+      operator: binary[Math.floor(random() * binary.length)],
+      left: this.randomGenomeExpression(depth - 1, random),
+      right: this.randomGenomeExpression(depth - 1, random),
     };
   }
 
   private mutateGenomeExpression(
     node: StrategyExpressionNode,
     depth = 2,
-    requestedMutationRate = 0.20
+    requestedMutationRate = 0.20,
+    random: () => number = Math.random
   ): StrategyExpressionNode {
     const mutationRate = Math.max(0.05, Math.min(0.45, requestedMutationRate));
     const replaceSubtreeRate = mutationRate * 0.30;
     if (depth <= 0) {
-      return Math.random() < mutationRate
-        ? this.randomGenomeExpression(2)
+      return random() < mutationRate
+        ? this.randomGenomeExpression(2, random)
         : node;
     }
-    if (Math.random() < replaceSubtreeRate) {
-      return this.randomGenomeExpression(2);
+    if (random() < replaceSubtreeRate) {
+      return this.randomGenomeExpression(2, random);
     }
     if (node.kind === 'feature') {
-      if (Math.random() < mutationRate) {
+      if (random() < mutationRate) {
         const alternatives = this.genomeFeatures.filter(feature => feature !== node.feature);
         return {
           kind: 'feature',
-          feature: alternatives[Math.floor(Math.random() * alternatives.length)] || node.feature,
+          feature: alternatives[Math.floor(random() * alternatives.length)] || node.feature,
         };
       }
-      if (Math.random() < mutationRate * 0.35) {
+      if (random() < mutationRate * 0.35) {
         return {
           kind: 'unary',
           operator: 'signed_power',
-          exponent: Number((0.7 + Math.random() * 1.4).toFixed(2)),
+          exponent: Number((0.7 + random() * 1.4).toFixed(2)),
           input: node,
         };
       }
       return node;
     }
     if (node.kind === 'constant') {
-      if (Math.random() >= mutationRate) return node;
+      if (random() >= mutationRate) return node;
       return {
         kind: 'constant',
-        value: Number(Math.max(-2, Math.min(2, node.value + (Math.random() - 0.5) * 0.8)).toFixed(3)),
+        value: Number(Math.max(-2, Math.min(2, node.value + (random() - 0.5) * 0.8)).toFixed(3)),
       };
     }
     if (node.kind === 'unary') {
       const operators = ['tanh', 'abs', 'signed_power', 'log_abs', 'sin', 'cos', 'sqrt_abs', 'negate'] as const;
-      const operator = Math.random() < mutationRate
-        ? (operators.filter(item => item !== node.operator)[Math.floor(Math.random() * (operators.length - 1))] || node.operator)
+      const operator = random() < mutationRate
+        ? (operators.filter(item => item !== node.operator)[Math.floor(random() * (operators.length - 1))] || node.operator)
         : node.operator;
-      const exponent = Math.random() < mutationRate
-        ? Number((0.7 + Math.random() * 1.4).toFixed(2))
+      const exponent = random() < mutationRate
+        ? Number((0.7 + random() * 1.4).toFixed(2))
         : node.exponent;
       return {
         ...node,
         operator,
         exponent,
-        input: this.mutateGenomeExpression(node.input, depth - 1, mutationRate),
+        input: this.mutateGenomeExpression(node.input, depth - 1, mutationRate, random),
       };
     }
 
     const operators = ['add', 'subtract', 'multiply', 'protected_divide', 'max', 'min', 'hypot', 'atan2'] as const;
-    const operator = Math.random() < mutationRate
-      ? (operators.filter(item => item !== node.operator)[Math.floor(Math.random() * (operators.length - 1))] || node.operator)
+    const operator = random() < mutationRate
+      ? (operators.filter(item => item !== node.operator)[Math.floor(random() * (operators.length - 1))] || node.operator)
       : node.operator;
-    const mutateBoth = Math.random() < mutationRate * 0.25;
-    const mutateLeft = mutateBoth || Math.random() < 0.5;
+    const mutateBoth = random() < mutationRate * 0.25;
+    const mutateLeft = mutateBoth || random() < 0.5;
     const mutateRight = mutateBoth || !mutateLeft;
     return {
       ...node,
       operator,
       left: mutateLeft
-        ? this.mutateGenomeExpression(node.left, depth - 1, mutationRate)
+        ? this.mutateGenomeExpression(node.left, depth - 1, mutationRate, random)
         : node.left,
       right: mutateRight
-        ? this.mutateGenomeExpression(node.right, depth - 1, mutationRate)
+        ? this.mutateGenomeExpression(node.right, depth - 1, mutationRate, random)
         : node.right,
     };
   }
@@ -1351,6 +1363,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
   ): Promise<SynthesizedStrategyGene[]> {
     const previousHoldoutEndMs = db.getLatestResearchHoldoutEndMs(symbol);
     const data = this.prepareGeneResearchData(candles, previousHoldoutEndMs);
+    const datasetFingerprint = fingerprintCandles(data.candles);
+    const researchSeed = deriveResearchSeed(searchBatchId, symbol, datasetFingerprint);
+    const random = createSeededRandom(researchSeed);
     const holdoutEndMs = data.candles[data.candles.length - 1].timestampMs + M1_CANDLE_MS;
     const breakEvenRate = binaryBreakEvenWinRate(data.payoutPct);
     if (!db.claimResearchHoldoutWindow(symbol, searchBatchId, data.testStartMs, holdoutEndMs)) {
@@ -1414,12 +1429,16 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
 
       const generation = baseGeneration + Math.floor(i / POPULATION_SIZE);
       let gene = this.synthesizeInfiniteNovelStrategy(
-        candles, symbol, generation, currentParentPool, searchBatchId, false
+        candles, symbol, generation, currentParentPool, searchBatchId, false,
+          random,
+          { researchSeed, datasetFingerprint }
       );
       let attempts = 0;
       while (signatures.has(gene.genome?.signature || '') && attempts < 20) {
         gene = this.synthesizeInfiniteNovelStrategy(
-          candles, symbol, generation, currentParentPool, searchBatchId, false
+          candles, symbol, generation, currentParentPool, searchBatchId, false,
+          random,
+          { researchSeed, datasetFingerprint }
         );
         attempts++;
       }
@@ -1540,7 +1559,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     generation: number,
     parentPool?: SynthesizedStrategyGene[],
     searchBatchId?: string,
-    persistImmediately = true
+    persistImmediately = true,
+    random: () => number = Math.random,
+    reproducibility?: { researchSeed: string; datasetFingerprint: string }
   ): SynthesizedStrategyGene {
     const eligibleParents = selectEvolutionParents(
       parentPool || db.getSynthesizedStrategies(),
@@ -1548,48 +1569,49 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     );
     const mutationRate = calculateAdaptiveMutationRate(eligibleParents);
     const parentA = eligibleParents.length
-      ? eligibleParents[Math.floor(Math.random() * eligibleParents.length)]
+      ? eligibleParents[Math.floor(random() * eligibleParents.length)]
       : undefined;
     const remainingParents = eligibleParents.filter(gene => gene.id !== parentA?.id);
     const parentB = remainingParents.length
-      ? remainingParents[Math.floor(Math.random() * remainingParents.length)]
+      ? remainingParents[Math.floor(random() * remainingParents.length)]
       : undefined;
 
     let expression: StrategyExpressionNode;
-    if (parentA?.genome && parentB?.genome && Math.random() < 0.58) {
+    if (parentA?.genome && parentB?.genome && random() < 0.58) {
       const binary = ['add', 'subtract', 'multiply', 'protected_divide', 'max', 'min', 'hypot', 'atan2'] as const;
       expression = {
         kind: 'binary',
-        operator: binary[Math.floor(Math.random() * binary.length)],
+        operator: binary[Math.floor(random() * binary.length)],
         left: JSON.parse(JSON.stringify(parentA.genome.expression)) as StrategyExpressionNode,
         right: JSON.parse(JSON.stringify(parentB.genome.expression)) as StrategyExpressionNode,
       };
-      expression = this.mutateGenomeExpression(expression, 2, mutationRate);
+      expression = this.mutateGenomeExpression(expression, 2, mutationRate, random);
     } else if (parentA?.genome) {
       expression = this.mutateGenomeExpression(
         JSON.parse(JSON.stringify(parentA.genome.expression)) as StrategyExpressionNode,
         3,
-        mutationRate
+        mutationRate,
+        random
       );
     } else {
-      expression = this.randomGenomeExpression(3);
+      expression = this.randomGenomeExpression(3, random);
     }
 
     let complexity = this.countExpressionNodes(expression);
     while (complexity > 24) {
-      expression = this.randomGenomeExpression(2);
+      expression = this.randomGenomeExpression(2, random);
       complexity = this.countExpressionNodes(expression);
     }
     // Strategy traits inherit from a randomly selected parent. Mutation pressure
     // can alter them, so the population evolves horizon/session selection as well
     // as the symbolic expression tree.
     const traitParent = parentA && parentB
-      ? (Math.random() < 0.5 ? parentA : parentB)
+      ? (random() < 0.5 ? parentA : parentB)
       : (parentA || parentB);
-    const inheritedThreshold = traitParent?.genome?.activationThreshold ?? (0.64 + Math.random() * 0.20);
+    const inheritedThreshold = traitParent?.genome?.activationThreshold ?? (0.64 + random() * 0.20);
     const activationThreshold = Number(Math.max(
       0.64,
-      Math.min(0.84, inheritedThreshold + (Math.random() - 0.5) * mutationRate * 0.30)
+      Math.min(0.84, inheritedThreshold + (random() - 0.5) * mutationRate * 0.30)
     ).toFixed(3));
     const signature = JSON.stringify({ expression, activationThreshold });
     const genome: StrategyGenome = {
@@ -1606,19 +1628,20 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     const selectedHorizon: StrategyHorizon[] = [5, 10, 15, 20, 25, 30];
     const sessions: Array<MarketSessionId | 'ALL'> = ['ASIA', 'LONDON', 'OVERLAP', 'NEW_YORK', 'ALL'];
     const horizon = traitParent?.optimalHorizonMinutes &&
-      Math.random() >= mutationRate
+      random() >= mutationRate
       ? traitParent.optimalHorizonMinutes
-      : selectedHorizon[Math.floor(Math.random() * selectedHorizon.length)];
+      : selectedHorizon[Math.floor(random() * selectedHorizon.length)];
     const sessionAffinity = traitParent?.sessionAffinity &&
-      Math.random() >= mutationRate
+      random() >= mutationRate
       ? traitParent.sessionAffinity
-      : sessions[Math.floor(Math.random() * sessions.length)];
+      : sessions[Math.floor(random() * sessions.length)];
     const parents = [parentA, parentB]
       .filter((gene): gene is SynthesizedStrategyGene => !!gene)
       .map(gene => gene.id);
-    const code = `SYM_${generation}_${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const identityHash = stableHash(`${searchBatchId || 'ad-hoc'}|${symbol}|${genome.signature}`).slice(0, 10).toUpperCase();
+    const code = `SYM_${generation}_${identityHash.slice(0, 6)}`;
     const gene: SynthesizedStrategyGene = {
-      id: `synth_${symbol.replace('/', '')}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      id: `synth_${symbol.replace('/', '')}_${identityHash.toLowerCase()}`,
       name: `Symbolic Gen ${generation} · ${featuresUsed.slice(0, 3).join(' / ') || 'Nonlinear Feature Mix'}`,
       code,
       generation,
@@ -1627,6 +1650,10 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       mutationRate,
       genome,
       searchBatchId,
+      researchSeed: reproducibility?.researchSeed,
+      datasetFingerprint: reproducibility?.datasetFingerprint,
+      featureSchemaVersion: reproducibility ? FEATURE_SCHEMA_VERSION : undefined,
+      researchEngineVersion: reproducibility ? RESEARCH_ENGINE_VERSION : undefined,
       symbol,
       optimalHorizonMinutes: horizon,
       sessionAffinity,
