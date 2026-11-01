@@ -155,7 +155,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Navigation Sidebar (Desktop persistent, mobile collapsible drawer) */}
         <Sidebar
           activeTab={activeTab}
@@ -168,8 +168,8 @@ export default function App() {
         />
 
         {/* Dynamic View Viewport */}
-        <main className="app-main min-w-0 flex h-full flex-1 flex-col overflow-hidden bg-transparent">
-          <div key={activeTab} className="sf-view-stage">
+        <main className="app-main min-w-0 min-h-0 flex h-full flex-1 flex-col overflow-hidden bg-transparent">
+          <div key={activeTab} className={`sf-view-stage ${activeTab === 'terminal' ? 'sf-view-stage--scroll' : ''}`}>
           {activeTab === 'terminal' && (
             <DailyAuditView
               signals={signals}
