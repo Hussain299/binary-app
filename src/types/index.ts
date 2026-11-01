@@ -63,7 +63,8 @@ export interface MarketSessionInfo {
   wins: number;
   losses: number;
   scratches: number;
-  netPips: number;
+  /** Aggregate payout-adjusted binary contract return, measured in stake units. */
+  netReturnUnits: number;
   bestStrategy: string;
 }
 
