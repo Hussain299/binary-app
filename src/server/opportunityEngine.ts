@@ -67,6 +67,9 @@ interface PairContext {
   marketDataQuality: number;
   dataSource: string;
   historicalFeatureRows: HistoricalFeatureRow[];
+  /** The older partition is used for graph analogues; later candles are sealed for hypothesis audit. */
+  trainEndIndex: number;
+  holdoutStartIndex: number;
   analogueCache: Map<Horizon, Analogue[]>;
   closes: number[];
   ema9: number[];
@@ -78,6 +81,19 @@ interface Analogue {
   index: number;
   distance: number;
 }
+
+interface HoldoutMetrics {
+  sampleSize: number;
+  wins: number;
+  losses: number;
+  scratches: number;
+  winRate: number | null;
+  lowerConfidenceBound: number | null;
+  expectedValueLowerBound: number | null;
+}
+
+type HistoricalDirection = "BUY" | "SELL" | null;
+
 
 interface HypothesisDefinition {
   type: OpportunityHypothesisType;
@@ -173,6 +189,73 @@ function wilson(wins: number, sampleSize: number): number {
   return wilsonLowerBound(wins, sampleSize);
 }
 
+/**
+ * Test a fixed hypothesis on a strictly later chronological segment.
+ * A 30-minute embargo separates the analogue archive from the holdout.
+ * The 3.8 z-score is a conservative one-sided multiple-comparison adjustment
+ * for up to 600 pair/family/horizon opportunities in a full batch.
+ */
+function evaluateIndependentHoldout(
+  context: PairContext,
+  horizon: Horizon,
+  directionAt: (row: HistoricalFeatureRow) => HistoricalDirection
+): HoldoutMetrics {
+  let wins = 0;
+  let losses = 0;
+  let scratches = 0;
+  let busyUntilMs = -Infinity;
+  const candles = context.candles;
+
+  for (const row of context.historicalFeatureRows) {
+    if (row.index < context.holdoutStartIndex) continue;
+    const direction = directionAt(row);
+    if (!direction) continue;
+
+    const entryIndex = row.index + 1;
+    const exitIndex = row.index + horizon;
+    if (entryIndex >= candles.length || exitIndex >= candles.length) continue;
+    const entryTimeMs = candles[entryIndex].timestampMs;
+    const expiryTimeMs = entryTimeMs + horizon * M1_MS;
+    if (entryTimeMs < busyUntilMs) continue;
+    if (candles[exitIndex].timestampMs !== expiryTimeMs - M1_MS) continue;
+    if (!isForexMarketIntervalOpen(entryTimeMs, expiryTimeMs)) continue;
+
+    const entryPrice = candles[entryIndex].open;
+    const exitPrice = candles[exitIndex].close;
+    busyUntilMs = expiryTimeMs;
+
+    if (Math.abs(exitPrice - entryPrice) <= 1e-12) {
+      scratches++;
+      continue;
+    }
+    if (
+      (direction === "BUY" && exitPrice > entryPrice) ||
+      (direction === "SELL" && exitPrice < entryPrice)
+    ) wins++;
+    else losses++;
+  }
+
+  const sampleSize = wins + losses;
+  const winRate = sampleSize ? wins / sampleSize : null;
+  // Do not claim a positive edge from an immature sample.
+  const lowerBound = sampleSize >= MIN_ANALOGUES_FOR_SHORTLIST
+    ? wilsonLowerBound(wins, sampleSize, 3.8)
+    : null;
+  const expectedValue = lowerBound === null
+    ? null
+    : (lowerBound * (PAYOUT_FLOOR / 100)) - (1 - lowerBound);
+
+  return {
+    sampleSize,
+    wins,
+    losses,
+    scratches,
+    winRate: winRate === null ? null : Number(winRate.toFixed(4)),
+    lowerConfidenceBound: lowerBound === null ? null : Number(lowerBound.toFixed(4)),
+    expectedValueLowerBound: expectedValue === null ? null : Number(expectedValue.toFixed(4)),
+  };
+}
+
 function makeForecast(
   context: PairContext,
   currentFeatures: number[],
@@ -187,6 +270,9 @@ function makeForecast(
 
     for (const row of context.historicalFeatureRows) {
       const index = row.index;
+      // Graph analogues are restricted to the older archive partition.
+      // Their full outcome interval must end before the sealed holdout begins.
+      if (index + horizon >= context.trainEndIndex) continue;
       const entryIndex = index + entryOffset;
       const exitIndex = index + horizon;
       if (exitIndex >= candles.length) continue;
@@ -452,6 +538,10 @@ export class OpportunityEngine {
     }
 
     const marketDataQuality = computeMarketDataQuality(candles, live.qualityScore);
+    // The final 30% is a later chronological evaluation window. A 30-minute
+    // embargo prevents any training analogue's forward outcome entering it.
+    const trainEndIndex = Math.floor(candles.length * 0.70);
+    const holdoutStartIndex = trainEndIndex + MAX_HORIZON + 1;
     const snapshotMs = latest.timestampMs + M1_MS;
     return {
       symbol,
@@ -466,6 +556,8 @@ export class OpportunityEngine {
       marketDataQuality,
       dataSource: live.source,
       historicalFeatureRows,
+      trainEndIndex,
+      holdoutStartIndex,
       analogueCache: new Map<Horizon, Analogue[]>(),
       closes,
       ema9,
