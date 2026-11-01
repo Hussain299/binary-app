@@ -169,14 +169,14 @@ export class AutonomousScheduler {
                 symbol: sig.symbol,
               } as Candle);
 
-              const { autopsy, antidoteGene } = researchEngine.conductForensicLossAutopsy(sig, lastCandle);
+              const autopsy = researchEngine.recordLossObservation(sig, lastCandle);
               sig.lossAutopsy = autopsy;
               db.addLossAutopsy(autopsy);
               db.updateSignal(sig);
 
               this.logMind(
                 'AUDITOR',
-                `🔬 [FORENSIC LOSS AUTOPSY & SELF-CORRECTION]: Investigated loss on ${sig.symbol} (${sig.direction}). Root Cause: ${autopsy.rootCause}. Lesson: ${autopsy.lessonsLearned[0]}. Autonomously Evolved Antidote: ${antidoteGene.name} (${antidoteGene.mathematicalFormula}) [UNVALIDATED — not eligible for live strategy promotion].`,
+                `[LOSS OBSERVATION RECORDED]: ${sig.symbol} ${sig.direction} settled as LOSS. No causal explanation or strategy was invented. The outcome was added to the genome's forward ledger, Bayesian posterior and episodic memory.`,
                 sig.symbol,
                 sig.id
               );
