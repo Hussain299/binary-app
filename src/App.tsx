@@ -12,7 +12,7 @@ import { EntryExitMonitorView } from './components/views/EntryExitMonitorView.ts
 import { PerformanceAnalyticsView } from './components/views/PerformanceAnalyticsView.tsx';
 import { SystemHealthView } from './components/views/SystemHealthView.tsx';
 import { ConfigurationView } from './components/views/ConfigurationView.tsx';
-import { Compass, LineChart, Brain, Menu, Zap, Bell, Lightbulb } from 'lucide-react';
+import { LineChart, Menu, Zap, Lightbulb } from 'lucide-react';
 import { soundNotificationService } from './utils/notifications.ts';
 import { NotificationBanner } from './components/NotificationBanner.tsx';
 import {
@@ -36,7 +36,6 @@ export default function App() {
   const [activeNotification, setActiveNotification] = useState<AppNotification | null>(null);
   const notifiedIdsRef = React.useRef<Set<string>>(new Set());
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isRunningCycle, setIsRunningCycle] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
 
   const fetchAllData = async () => {
@@ -103,17 +102,12 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleRunCycle = async () => {
-    setIsRunningCycle(true);
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
     try {
-      const res = await fetch('/api/evolution/run', { method: 'POST' });
-      if (res.ok) {
-        await fetchAllData();
-      }
-    } catch (err) {
-      console.error('Failed to run research cycle:', err);
+      await fetchAllData();
     } finally {
-      setIsRunningCycle(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -137,13 +131,14 @@ export default function App() {
   };
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   const activeSignalsCount = signals.filter(s =>
     ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE'].includes(s.lifecycleState)
   ).length;
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-neutral-950 text-neutral-100 antialiased select-none font-sans relative">
+    <div className="app-shell flex h-[100dvh] w-full min-w-0 flex-col overflow-hidden bg-[#080d14] text-neutral-100 antialiased font-sans relative">
       {/* Real-time In-App Signal Alert Banner */}
       <NotificationBanner
         notification={activeNotification}
@@ -155,9 +150,7 @@ export default function App() {
 
       {/* Top Header with Hamburger Toggle */}
       <Header
-        onRunCycle={handleRunCycle}
-        isRunningCycle={isRunningCycle}
-        onRefresh={fetchAllData}
+        onRefresh={handleRefresh}
         isRefreshing={isRefreshing}
         activeSignalsCount={activeSignalsCount}
         onToggleSidebar={() => setIsMobileMenuOpen(prev => !prev)}
@@ -173,11 +166,13 @@ export default function App() {
           activeSignalsCount={activeSignalsCount}
           totalExperiments={experiments.length}
           isOpen={isMobileMenuOpen}
+          isCollapsed={isSidebarCollapsed}
+          onToggleCollapse={() => setIsSidebarCollapsed(prev => !prev)}
           onClose={() => setIsMobileMenuOpen(false)}
         />
 
         {/* Dynamic View Viewport */}
-        <main className="flex-1 flex flex-col h-full overflow-hidden bg-neutral-950">
+        <main className="app-main min-w-0 flex-1 flex flex-col h-full overflow-hidden bg-transparent">
           {activeTab === 'terminal' && (
             <SignalTerminalView
               signals={signals}
@@ -198,11 +193,7 @@ export default function App() {
           )}
           {activeTab === 'history' && <ExperimentHistoryView experiments={experiments} />}
           {activeTab === 'evolution' && (
-            <EvolutionLabView
-              generations={generations}
-              onTriggerGeneration={handleRunCycle}
-              isRunning={isRunningCycle}
-            />
+            <EvolutionLabView generations={generations} />
           )}
           {activeTab === 'agents' && <ResearchAgentsView reviews={reviews} />}
           {activeTab === 'monitor' && <EntryExitMonitorView signals={signals} />}
@@ -215,7 +206,7 @@ export default function App() {
       </div>
 
       {/* Mobile Bottom Navigation Bar (Super Clean & Intuitive) */}
-      <nav className="lg:hidden h-14 border-t border-neutral-800 bg-neutral-950/95 backdrop-blur px-2 flex items-center justify-around shrink-0 z-20">
+      <nav className="app-bottom-nav lg:hidden h-14 border-t border-white/[0.07] bg-[#0b1018]/95 backdrop-blur px-2 flex items-center justify-around shrink-0 z-20">
         <button
           onClick={() => {
             setActiveTab('terminal');
@@ -226,7 +217,7 @@ export default function App() {
           }`}
         >
           <Zap className="w-4 h-4" />
-          <span className="text-[10px]">5M Signals</span>
+          <span className="text-[10px]">Signals</span>
         </button>
 
         <button
@@ -252,7 +243,7 @@ export default function App() {
           }`}
         >
           <LineChart className="w-4 h-4" />
-          <span className="text-[10px]">Charts</span>
+          <span className="text-[10px]">Markets</span>
         </button>
 
         <button
