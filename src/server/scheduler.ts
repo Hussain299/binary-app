@@ -152,7 +152,7 @@ export class AutonomousScheduler {
             const tradeExp = db.recordForwardObservation(sig);
             db.recordStrategyOutcome(sig);
 
-            // AGI Autonomous Forensic Loss Investigation & Self-Correction Engine
+            // Closed-trade forensic diagnosis; generated antidotes remain unvalidated.
             // Every loss counts: investigate causal root-cause and evolve antidote strategy
             if (sig.outcomeResult === 'LOSS') {
               const lastCandle = candlesMap[sig.symbol]?.[candlesMap[sig.symbol].length - 1] || ({
@@ -275,7 +275,7 @@ export class AutonomousScheduler {
           const low20 = Math.min(...candles.slice(-20, -1).map(k => k.low));
 
           // -------------------------------------------------------------
-          // NOVEL NON-HUMAN AI STRATEGY GENESIS CHECK
+          // Evaluate evolved symbolic candidates using their stored executable genomes.
           // Checks if an evolved, multi-dimensional quantitative formula
           // with non-linear polynomial operators triggers on this candle
           // -------------------------------------------------------------
@@ -357,7 +357,7 @@ export class AutonomousScheduler {
               ruleFamily: 'volatility_squeeze',
               expiryMinutes: gene.optimalHorizonMinutes,
               confidence: novelGeneCandidate.conviction,
-              modelVersion: `v3.0-novel-ai-genesis`,
+              modelVersion: `v3.1-evolutionary-genome`,
               strategyName: gene.name,
               strategyId: gene.id,
               strategyWinRate: gene.verifiedAccuracy,
@@ -382,7 +382,7 @@ export class AutonomousScheduler {
 
             this.logMind(
               'SCIENTIST',
-              `🧬 [NOVEL AI STRATEGY TRIGGERED]: ${symbol} ${signal.direction} [${gene.name} · Dynamic Expiry: ${gene.optimalHorizonMinutes}m · Formula: ${gene.mathematicalFormula} · ${gene.verifiedAccuracy}% historical test WR (n=${gene.sampleCount}). ${gene.status === 'PAPER_TRADING' ? 'PAPER TRADING' : 'FORWARD APPROVED'}. Enters strictly at 5M Candle Open (${signal.candleOpenTimeIst}).`,
+              `🧬 [EVOLVED SYMBOLIC STRATEGY SIGNAL]: ${symbol} ${signal.direction} [${gene.name} · Dynamic Expiry: ${gene.optimalHorizonMinutes}m · Formula: ${gene.mathematicalFormula} · ${gene.verifiedAccuracy}% historical test WR (n=${gene.sampleCount}). ${gene.status === 'PAPER_TRADING' ? 'PAPER TRADING' : 'FORWARD APPROVED'}. Enters strictly at 5M Candle Open (${signal.candleOpenTimeIst}).`,
               symbol,
               signal.id
             );
@@ -553,7 +553,7 @@ export class AutonomousScheduler {
               ruleFamily,
               expiryMinutes: dynamicExpiry,
               confidence,
-              modelVersion: `v2.5-stacked-agi`,
+              modelVersion: `v2.5-stacked-rules`,
               strategyName,
               strategyId: `stacked:${ruleFamily}:${dynamicExpiry}`,
               confluenceStrategies: candidate.confluence,
