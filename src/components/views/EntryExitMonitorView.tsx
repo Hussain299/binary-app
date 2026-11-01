@@ -18,10 +18,10 @@ export const EntryExitMonitorView: React.FC<EntryExitMonitorViewProps> = ({ sign
       <div className="pb-4 border-b border-neutral-800">
         <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
           <Target className="w-4 h-4 text-emerald-400" />
-          <span>Causal Entry & Exit Execution Monitor</span>
+          <span>Entry & exit</span>
         </h3>
         <p className="text-xs text-neutral-400 font-mono mt-1">
-          Inspection of temporal decoupling between prediction time, causal trigger breach, actual entry fill, and dynamically offset exit times.
+          Review the exact prediction, entry trigger and scheduled expiry for each paper signal.
         </p>
       </div>
 
@@ -47,7 +47,7 @@ export const EntryExitMonitorView: React.FC<EntryExitMonitorViewProps> = ({ sign
           {/* Temporal Lifecycle Stepper */}
           <div className="bg-neutral-900/60 border border-neutral-800 rounded p-5 space-y-4">
             <h4 className="text-sm font-semibold text-white">
-              Deterministic Causal State Transition Architecture
+              Signal timeline
             </h4>
 
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
