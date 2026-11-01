@@ -259,6 +259,7 @@ export class AutonomousScheduler {
             c, prev, closes, ema9, ema21, rsi14, closes.length - 1
           );
           const regimeAssessment = classifyMarketRegime(candles, activeSession.id);
+          db.updateMarketRegime(symbol, activeSession.id, regimeAssessment);
 
           const lastEma9 = ema9[ema9.length - 1];
           const lastEma21 = ema21[ema21.length - 1];
