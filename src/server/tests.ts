@@ -19,6 +19,8 @@ import {
   isStrategyRegimeCompatible,
   updateBetaPosterior,
   EpisodicTradeMemory,
+  calculateAdaptiveMutationRate,
+  genomeSpeciesKey,
 } from './evolutionEngine.js';
 import { findEligibleStartTimeframes, getNextCandleOpenMs } from './tradingClock.js';
 
@@ -102,6 +104,51 @@ export async function runAllVerificationTests(): Promise<{
     }
     if (!(bayesianUcbScore(afterLoss, 2) > 0 && bayesianUcbScore(afterLoss, 2) <= 2)) {
       throw new Error('Bayesian UCB score must be finite and bounded for a valid posterior.');
+    }
+  });
+
+  await runTest('ML', 'Evolution preserves species and adapts mutation to population diversity', () => {
+    const metrics = {
+      trainScoredTrades: 180,
+      validationScoredTrades: 180,
+      trainWinRate: 0.74,
+      validationWinRate: 0.74,
+      validationExpectedValueUnits: 0.12,
+      validationProfitFactor: 1.35,
+      minimumPayoutPct: 80,
+    };
+    const features = [
+      'return_1', 'return_3', 'return_5', 'return_13',
+      'ema_spread', 'directional_efficiency', 'range_expansion',
+    ] as const;
+    const makeParent = (id: string, feature: typeof features[number]) => ({
+      id,
+      genome: {
+        version: 1 as const,
+        expression: { kind: 'feature' as const, feature },
+        activationThreshold: 0.70,
+        signature: id,
+        complexity: 1,
+      },
+      discoveryMetrics: { ...metrics },
+    });
+    const homogeneous = Array.from({ length: 4 }, (_, index) => makeParent('same-' + index, 'return_1'));
+    const diverse = features.slice(0, 4).map((feature, index) => makeParent('diverse-' + index, feature));
+    const homogeneousRate = calculateAdaptiveMutationRate(homogeneous);
+    const diverseRate = calculateAdaptiveMutationRate(diverse);
+    if (!(homogeneousRate > diverseRate)) {
+      throw new Error(`Low-diversity populations must receive stronger mutation pressure (same=${homogeneousRate}, diverse=${diverseRate}).`);
+    }
+    if (homogeneousRate < 0.12 || homogeneousRate > 0.36 || diverseRate < 0.12 || diverseRate > 0.36) {
+      throw new Error('Adaptive mutation pressure must remain inside its safe configured bounds.');
+    }
+    const selected = selectEvolutionParents([
+      ...homogeneous.slice(0, 2),
+      ...diverse,
+    ], 4);
+    const species = new Set(selected.map(parent => genomeSpeciesKey(parent.genome)));
+    if (species.size < 3) {
+      throw new Error('Parent selection must protect distinct validated symbolic species before filling by fitness.');
     }
   });
 
