@@ -6,8 +6,7 @@
 
 import { Candle, ForexSymbol, ProviderHealth } from '../types/index.js';
 import { db } from './db.js';
-import { getForexMarketState, isForexMarketOpenAt, getSessionFromTimestamp } from './marketHours.js';
-export { getSessionFromTimestamp };
+import { getForexMarketState, isForexMarketOpenAt, getReportingSessionFromTimestamp } from './marketHours.js';
 
 interface RawCandle {
   timestamp: number | string;
@@ -423,7 +422,7 @@ export class DataFeedEngine {
     const now = new Date();
     const utcHour = now.getUTCHours();
     const market = getForexMarketState(now);
-    const currentSession = getSessionFromTimestamp(now);
+    const currentSession = getReportingSessionFromTimestamp(now);
 
     return {
       marketOpen: market.isOpen,
@@ -447,6 +446,59 @@ export class DataFeedEngine {
       }).format(now).toUpperCase() + ' IST',
     };
   }
+}
+
+
+/**
+ * Legacy trading/session-affinity classifier.
+ *
+ * Keep these original UTC buckets stable for strategy eligibility and regime
+ * features. Five-session reporting uses getReportingSessionFromTimestamp()
+ * separately and must never silently change a strategy's activation window.
+ */
+export function getSessionFromTimestamp(timestampUtc: string | Date | number): {
+  id: 'ASIA' | 'LONDON' | 'OVERLAP' | 'NEW_YORK';
+  name: string;
+  shortName: string;
+  utcRange: string;
+  istRange: string;
+} {
+  const d = new Date(timestampUtc);
+  if (!Number.isFinite(d.getTime())) throw new Error('Invalid timestamp supplied for trading session classification.');
+  const hour = d.getUTCHours();
+
+  if (hour >= 12 && hour < 16) {
+    return {
+      id: 'OVERLAP',
+      name: 'London / New York Overlap',
+      shortName: 'Overlap',
+      utcRange: '12:00 - 16:00 UTC',
+      istRange: '05:30 PM - 09:30 PM IST',
+    };
+  } else if (hour >= 7 && hour < 12) {
+    return {
+      id: 'LONDON',
+      name: 'London Session',
+      shortName: 'London',
+      utcRange: '07:00 - 12:00 UTC',
+      istRange: '12:30 PM - 05:30 PM IST',
+    };
+  } else if (hour >= 16 && hour < 21) {
+    return {
+      id: 'NEW_YORK',
+      name: 'New York Session',
+      shortName: 'New York',
+      utcRange: '16:00 - 21:00 UTC',
+      istRange: '09:30 PM - 02:30 AM IST',
+    };
+  }
+  return {
+    id: 'ASIA',
+    name: 'Asian Session',
+    shortName: 'Asia',
+    utcRange: '00:00 - 07:00 UTC',
+    istRange: '05:30 AM - 12:30 PM IST',
+  };
 }
 
 export const dataFeedEngine = new DataFeedEngine();
