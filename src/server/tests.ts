@@ -138,6 +138,11 @@ export async function runAllVerificationTests(): Promise<{
         throw new Error(`${timestamp}: expected ${expected}, received ${actual}.`);
       }
     }
+    const summerOverlap = getSessionFromTimestamp('2026-07-06T12:00:00.000Z');
+    const winterOverlap = getSessionFromTimestamp('2026-11-02T13:00:00.000Z');
+    if (summerOverlap.utcRange !== '12:00–16:00 UTC' || winterOverlap.utcRange !== '13:00–17:00 UTC') {
+      throw new Error('Session UTC labels must follow the New York DST offset rather than a fixed UTC schedule.');
+    }
   });
 
   await runTest('DATA', 'Binary payout settlement (win, loss, push and payout floor)', () => {
