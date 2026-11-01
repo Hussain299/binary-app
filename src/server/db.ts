@@ -21,7 +21,7 @@ import {
   LossAutopsy,
   StrategyPerformanceRecord,
 } from '../types/index.js';
-import { getMarketSessionDefinitions, getSessionFromTimestamp, isForexMarketOpenAt } from './marketHours.js';
+import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
 import {
   assessNearestNeighbors,
   EpisodicTradeMemory,
@@ -540,14 +540,19 @@ class DatabaseService {
     const closedSignals = this.getSignals().filter(signal =>
       !signal.ruleFamily?.startsWith('test_') &&
       signal.lifecycleState === 'CLOSED' &&
-      ['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult)
+      ['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult) &&
+      isForexSignalScheduleValid(
+        Date.parse(signal.predictionTimeUtc),
+        Date.parse(signal.actualEntryTimeUtc || signal.candleOpenTimeUtc || signal.entryWindowStartUtc),
+        Date.parse(signal.plannedExitTimeUtc || signal.candleCloseTimeUtc || signal.entryWindowEndUtc)
+      )
     );
     const sessions = getMarketSessionDefinitions(now);
 
     return sessions.map(sess => {
       const sessSignals = closedSignals.filter(signal => {
         const entryTime = signal.actualEntryTimeUtc || signal.predictionTimeUtc;
-        return getSessionFromTimestamp(entryTime).id === sess.id;
+        return getReportingSessionFromTimestamp(entryTime).id === sess.id;
       });
       const wins = sessSignals.filter(signal => signal.outcomeResult === 'WIN').length;
       const losses = sessSignals.filter(signal => signal.outcomeResult === 'LOSS').length;
