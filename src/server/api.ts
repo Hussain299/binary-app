@@ -5,7 +5,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { FOREX_PAIRS, ForexSymbol, RuleFamily } from '../types/index.js';
+import { EvolutionGeneration, FOREX_PAIRS, ForexSymbol, RuleFamily } from '../types/index.js';
 import { dataFeedEngine } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
@@ -270,7 +270,15 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
     }
 
     const jobId = `strategy_search_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-    const latestGeneration = db.getGenerations()[0]?.generation || 7;
+    const latestCandidateGeneration = db.getSynthesizedStrategies().reduce(
+      (maximum, gene) => Math.max(maximum, gene.generation || 0),
+      7
+    );
+    const latestGeneration = Math.max(
+      db.getGenerations()[0]?.generation || 7,
+      latestCandidateGeneration
+    );
+    const batchGeneration = latestGeneration + 1;
     const job: StrategySearchJob = {
       jobId,
       symbol,
@@ -290,7 +298,7 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
       symbol,
       candles,
       jobId,
-      latestGeneration + 1,
+      batchGeneration,
       progress => {
         job.completed = progress.completed;
         job.passedHistorical = progress.passedHistorical;
@@ -327,6 +335,38 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
           minimumPayoutPct: gene.discoveryMetrics?.minimumPayoutPct ?? gene.backtestMetrics?.binaryPayoutPct ?? 0,
           reason: gene.validationFailureReason,
         }));
+
+      const bestValidation = results
+        .filter(gene => gene.discoveryMetrics)
+        .sort((a, b) =>
+          (b.discoveryMetrics!.validationExpectedValueUnits - a.discoveryMetrics!.validationExpectedValueUnits) ||
+          (b.discoveryMetrics!.validationWinRate - a.discoveryMetrics!.validationWinRate)
+        )[0];
+      const consumedHoldout = db.getResearchHoldoutWindow(jobId);
+      const historicallyPassed = results.filter(gene => gene.status === 'PAPER_TRADING').length;
+      const historicallyRejected = results.filter(gene => gene.status === 'REJECTED').length;
+      const batchRecord: EvolutionGeneration = {
+        generation: batchGeneration,
+        timestamp: job.finishedAt!,
+        totalExperiments: results.length,
+        acceptedCount: historicallyPassed,
+        rejectedCount: historicallyRejected,
+        topExperimentId: null,
+        bestF1Score: 0,
+        summary: `Symbolic evolution batch ${jobId} completed for ${symbol}: ${results.length} candidates generated, ${historicallyPassed} passed the historical gates, ${historicallyRejected} rejected and ${results.length - historicallyPassed - historicallyRejected} lacked sufficient evidence. Historical pass is not forward approval.`,
+        lessonsLearned: [
+          `Candidate search used train/validation ranking; ${job.replicationFinalists} preselected finalists were opened on the one-time holdout.`,
+          bestValidation
+            ? `Best discovery validation EV: ${bestValidation.discoveryMetrics!.validationExpectedValueUnits.toFixed(4)} stake units per trade at ${(bestValidation.discoveryMetrics!.validationWinRate * 100).toFixed(1)}% WR.`
+            : 'No candidate produced a qualifying discovery record.',
+          `Forward-paper approval remains separate and requires the full independent 300-outcome gate.`,
+        ],
+        researchBatchId: jobId,
+        symbol,
+        bestValidationExpectedValueUnits: bestValidation?.discoveryMetrics?.validationExpectedValueUnits ?? 0,
+        holdoutPeriod: consumedHoldout ? { start: consumedHoldout.startUtc, end: consumedHoldout.endUtc } : undefined,
+      };
+      db.addGeneration(batchRecord);
     }).catch(error => {
       job.status = 'FAILED';
       job.finishedAt = new Date().toISOString();
