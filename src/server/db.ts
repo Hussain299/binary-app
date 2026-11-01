@@ -590,7 +590,7 @@ class DatabaseService {
       const scoredTrades = wins + losses;
       const hasMeasuredData = scoredTrades > 0;
       const winRate = hasMeasuredData ? Number(((wins / scoredTrades) * 100).toFixed(1)) : 0;
-      const netPips = Number(sessSignals.reduce((acc, s) => acc + (s.netReturnPips || 0), 0).toFixed(1));
+      const netReturnUnits = Number(sessSignals.reduce((acc, signal) => acc + (signal.netReturnUnits ?? 0), 0).toFixed(3));
 
       const stratMap: Record<string, { wins: number; losses: number }> = {};
       for (const signal of sessSignals) {
@@ -625,7 +625,7 @@ class DatabaseService {
         wins,
         losses,
         scratches,
-        netPips,
+        netReturnUnits,
         bestStrategy,
       };
     });
