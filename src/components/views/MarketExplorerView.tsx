@@ -181,6 +181,13 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
 
   return (
     <div className="sf-page">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/[0.07] pb-3">
+        <div>
+          <h3 className="text-lg font-semibold tracking-tight text-white">Markets</h3>
+          <p className="mt-1 text-xs text-neutral-500">M1 price snapshots and measured data-feed health.</p>
+        </div>
+        <span className="text-[10px] text-neutral-500">Market data · not execution prices</span>
+      </div>
       {/* Pair Selector & Feed Health Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-neutral-800">
         <div className="flex items-center gap-3">
