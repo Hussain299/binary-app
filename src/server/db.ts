@@ -22,6 +22,7 @@ import {
   StrategyPerformanceRecord,
 } from '../types/index.js';
 import { sanitizeLossAutopsy } from './researchGovernance.js';
+import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.js';
 import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
 import {
   assessNearestNeighbors,
@@ -759,7 +760,12 @@ class DatabaseService {
       existing.binaryWins += 1;
       existing.wins += 1;
       existing.positiveReturnUnits = Number((existing.positiveReturnUnits + Math.max(0, netUnits)).toFixed(4));
-      existing.scoredOutcomes.push({ result: 'WIN', netReturnUnits: netUnits, payoutPct });
+      existing.scoredOutcomes.push({
+        result: 'WIN',
+        netReturnUnits: netUnits,
+        payoutPct,
+        rawScore: Number.isFinite(signal.confidence) ? signal.confidence : undefined,
+      });
     } else if (signal.outcomeResult === 'LOSS') {
       const posterior = updateBetaPosterior(
         { alpha: existing.bayesAlpha!, beta: existing.bayesBeta! }, 'LOSS'
@@ -769,7 +775,12 @@ class DatabaseService {
       existing.binaryLosses += 1;
       existing.losses += 1;
       existing.negativeReturnUnits = Number((existing.negativeReturnUnits + Math.abs(Math.min(0, netUnits))).toFixed(4));
-      existing.scoredOutcomes.push({ result: 'LOSS', netReturnUnits: netUnits, payoutPct });
+      existing.scoredOutcomes.push({
+        result: 'LOSS',
+        netReturnUnits: netUnits,
+        payoutPct,
+        rawScore: Number.isFinite(signal.confidence) ? signal.confidence : undefined,
+      });
     } else {
       existing.binaryPushes += 1;
       existing.scratches += 1;
@@ -869,6 +880,21 @@ class DatabaseService {
       (sum, item) => sum + (item.binaryWins ?? 0) + (item.binaryLosses ?? 0), 0
     );
     return bayesianUcbScore(posterior, totalObserved);
+  }
+
+  /**
+   * Calibrate a raw strategy score using only earlier settled observations.
+   * Legacy outcomes without stored raw scores are deliberately excluded.
+   */
+  public calibratePredictionScore(strategyId: string, rawScore: number) {
+    const observations = this.state.strategyPerformance?.[strategyId]?.scoredOutcomes || [];
+    return fitPredictionCalibration(
+      rawScore,
+      observations.map(item => ({
+        rawScore: item.rawScore ?? Number.NaN,
+        outcome: item.result,
+      }))
+    );
   }
 
   public assessEpisodicMemory(query: {
