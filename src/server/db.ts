@@ -6,7 +6,6 @@
 import fs from 'fs';
 import path from 'path';
 import {
-import { sanitizeLossAutopsy } from './researchGovernance.js';
   Candle,
   ForexSymbol,
   MarketSessionId,
@@ -22,6 +21,7 @@ import { sanitizeLossAutopsy } from './researchGovernance.js';
   LossAutopsy,
   StrategyPerformanceRecord,
 } from '../types/index.js';
+import { sanitizeLossAutopsy } from './researchGovernance.js';
 import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
 import {
   assessNearestNeighbors,
