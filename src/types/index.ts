@@ -215,11 +215,17 @@ export interface LossAutopsy {
   mathematicalFormula?: string;
   entryPrice: number;
   exitPrice: number;
-  grossReturnPips: number;
-  netReturnPips: number;
-  spreadPips: number;
+  /** Legacy forex diagnostics, absent for payout-settled binary contracts. */
+  grossReturnPips?: number;
+  netReturnPips?: number;
+  spreadPips?: number;
+  /** Actual binary return, if the signal was settled under the binary model. */
+  netReturnUnits?: number;
   marketSession: string;
+  strategyGeneId?: string;
+  /** OBSERVED_ADVERSE_SETTLEMENT is an outcome label, not a causal explanation. */
   rootCause:
+    | 'OBSERVED_ADVERSE_SETTLEMENT'
     | 'SPREAD_EXPANSION_SLIPPAGE'
     | 'MICRO_WICK_FALSE_ABSORPTION'
     | 'MOMENTUM_EXHAUSTION_DIVERGENCE'
@@ -227,10 +233,11 @@ export interface LossAutopsy {
     | 'NON_LINEAR_OPERATOR_OVERFITTING';
   rootCauseExplanation: string;
   lessonsLearned: string[];
-  antidoteStrategyGeneId: string;
-  antidoteStrategyName: string;
-  antidoteFormula: string;
-  antidoteOperator: string;
+  /** Deprecated legacy fields; new observations never fabricate antidote genomes. */
+  antidoteStrategyGeneId?: string;
+  antidoteStrategyName?: string;
+  antidoteFormula?: string;
+  antidoteOperator?: string;
   timestamp: string;
 }
 
