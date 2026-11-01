@@ -24,6 +24,9 @@ import {
   hasSufficientForwardParentEvidence,
   hasSufficientHistoricalApprovalEvidence,
   evolutionaryParentFitness,
+  binaryBreakEvenWinRate,
+  wilsonLowerBound,
+  outcomeFitsResearchWindow,
   doesResearchHoldoutOverlap,
 } from './evolutionEngine.js';
 import { findEligibleStartTimeframes, getNextCandleOpenMs } from './tradingClock.js';
@@ -108,6 +111,65 @@ export async function runAllVerificationTests(): Promise<{
     }
     if (!(bayesianUcbScore(afterLoss, 2) > 0 && bayesianUcbScore(afterLoss, 2) <= 2)) {
       throw new Error('Bayesian UCB score must be finite and bounded for a valid posterior.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Payout-aware confidence gates replace arbitrary accuracy targets', () => {
+    const breakEven = binaryBreakEvenWinRate(80);
+    if (Math.abs(breakEven - (1 / 1.8)) > 1e-10) {
+      throw new Error('The 80% payout break-even rate must be exactly 1/1.8.');
+    }
+    const validationLower = wilsonLowerBound(150, 200);
+    const adjustedTestLower = wilsonLowerBound(300, 400, 2.576);
+    if (validationLower <= breakEven || adjustedTestLower <= breakEven) {
+      throw new Error('Strong positive evidence must clear the payout-aware confidence bounds.');
+    }
+    const metrics = {
+      sampleCount: 400,
+      testScoredSampleSize: 400,
+      trainScoredSampleSize: 200,
+      validationScoredSampleSize: 200,
+      trainWinRate: 0.72,
+      validationWinRate: 0.75,
+      testWinRate: 0.75,
+      testBlockWinRates: [0.72, 0.74, 0.75],
+      binaryPayoutPct: 80,
+      expectedValueUnits: 0.35,
+      profitFactor: 1.35,
+      confidenceInterval95: [0.68, 0.81] as [number, number],
+      multipleTestingLowerBound: adjustedTestLower,
+    };
+    if (!hasSufficientHistoricalApprovalEvidence(metrics, 'BACKTESTED', 400)) {
+      throw new Error('A fully evidenced, payout-positive sample should pass the historical eligibility gate.');
+    }
+    if (hasSufficientHistoricalApprovalEvidence({
+      ...metrics,
+      multipleTestingLowerBound: breakEven,
+    }, 'BACKTESTED', 400)) {
+      throw new Error('A strategy that fails the multiple-comparison-adjusted holdout bound must not qualify.');
+    }
+    if (hasSufficientHistoricalApprovalEvidence({
+      ...metrics,
+      expectedValueUnits: -0.01,
+    }, 'BACKTESTED', 400)) {
+      throw new Error('Positive accuracy without positive payout-adjusted expectancy must not qualify.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Trade outcomes cannot cross chronological partition boundaries', () => {
+    const start = Date.parse('2026-01-01T00:00:00.000Z');
+    const end = start + 10 * 60_000;
+    if (!outcomeFitsResearchWindow(start + 2 * 60_000, 5, start, end)) {
+      throw new Error('An outcome fully contained in a partition must be retained.');
+    }
+    if (outcomeFitsResearchWindow(start + 7 * 60_000, 5, start, end)) {
+      throw new Error('A trade whose expiry crosses the partition end must be purged.');
+    }
+    if (outcomeFitsResearchWindow(start - 1, 5, start, end)) {
+      throw new Error('A trade whose entry precedes the partition must be purged.');
+    }
+    if (!outcomeFitsResearchWindow(start + 5 * 60_000, 5, start, end)) {
+      throw new Error('An outcome expiring exactly at the exclusive partition boundary is valid.');
     }
   });
 
