@@ -6,6 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import {
+import { sanitizeLossAutopsy } from './researchGovernance.js';
   Candle,
   ForexSymbol,
   MarketSessionId,
@@ -148,71 +149,40 @@ class DatabaseService {
             if (s.ruleFamily?.startsWith('test_')) return false;
             return true;
           });
-          // Backfill forensic autopsy on historical losses if missing
-          for (const s of parsed.signals) {
-            if (s.outcomeResult === 'LOSS' && !s.lossAutopsy) {
-              const spread = s.estimatedSpreadPips || 1.5;
-              const gross = s.grossReturnPips || -1.2;
-              const net = s.netReturnPips || -2.7;
-              const rootCause: LossAutopsy['rootCause'] = Math.abs(gross) <= spread * 1.2
-                ? 'SPREAD_EXPANSION_SLIPPAGE'
-                : (s.expiryMinutes || 5) >= 15
-                ? 'SESSION_BOUNDARY_LIQUIDITY_VACUUM'
-                : 'MICRO_WICK_FALSE_ABSORPTION';
-
-              const lessons = rootCause === 'SPREAD_EXPANSION_SLIPPAGE'
-                ? [
-                    'Enforce strict Dynamic Spread Gate: Reject signals when spread exceeds 25% of expected ATR move.',
-                    'Prioritize high-liquidity overlap sessions where spreads compress to sub-pip levels.',
-                    'Buffer entry trigger by minimum +0.5 pips to overcome execution friction.',
-                  ]
-                : rootCause === 'SESSION_BOUNDARY_LIQUIDITY_VACUUM'
-                ? [
-                    `Dynamically compress expiry duration to 5m/10m when trading near sub-session handovers.`,
-                    'Evaluate session turnover timer: reject >15m expiries within 30 minutes of session transitions.',
-                    'Align time-horizon directly to ATR velocity curves.',
-                  ]
-                : [
-                    'Increase polynomial wick exponent threshold to demand deeper liquidity absorption confirmation.',
-                    'Incorporate tick volume delta verification: require volume expansion on the rejection wick.',
-                    'Require second-derivative RSI confirmation before fading structural swing highs.',
-                  ];
-
-              const antidoteName = `Antidote-${s.symbol}: Adaptive Damping + ${rootCause.replace(/_/g, ' ')}`;
-              const antidoteFormula = rootCause === 'SPREAD_EXPANSION_SLIPPAGE'
-                ? `f(x) = (Δ_TickEntropy / √(1 + ${spread.toFixed(1)}·Spread)) · cos(π·WickRatio) + 1.15·OrderFlow_Z`
-                : rootCause === 'SESSION_BOUNDARY_LIQUIDITY_VACUUM'
-                ? `f(x) = σ(2.80·EMA_Curvature × Vol_Elasticity) - 0.55·ln(1 + ATR_harmonic)`
-                : `f(x) = tanh(1.85·Z_Entropy) + 0.92·(LowerWickRatio)^2.30 - 0.45·Δ_20SMA`;
-
-              const autopsy: LossAutopsy = {
-                id: `autopsy_${s.id}`,
-                signalId: s.id,
-                symbol: s.symbol,
-                direction: s.direction,
-                strategyName: s.strategyName || 'Stacked Strategy',
-                mathematicalFormula: s.mathematicalFormula,
-                entryPrice: s.actualEntryPrice || s.triggerPrice,
-                exitPrice: s.actualExitPrice || s.triggerPrice,
-                grossReturnPips: gross,
-                netReturnPips: net,
-                spreadPips: spread,
-                marketSession: s.marketSessionName || 'Market Session',
-                rootCause,
-                rootCauseExplanation: `Forensic autopsy revealed that the loss was driven by ${rootCause.replace(/_/g, ' ').toLowerCase()}. The trade was initiated with high statistical confluence, but adverse microstructure dynamics invalidated the horizon edge.`,
-                lessonsLearned: lessons,
-                antidoteStrategyGeneId: `synth_antidote_${s.id}`,
-                antidoteStrategyName: antidoteName,
-                antidoteFormula,
-                antidoteOperator: rootCause === 'SESSION_BOUNDARY_LIQUIDITY_VACUUM' ? 'exponential_decay' : 'tanh_polynomial',
-                timestamp: s.plannedExitTimeUtc || s.predictionTimeUtc || new Date().toISOString(),
-              };
-
-              s.lossAutopsy = autopsy;
-              if (!parsed.lossAutopsies.some((a: any) => a.signalId === s.id)) {
-                parsed.lossAutopsies.unshift(autopsy);
-              }
-            }
+          // Migrate legacy loss records to an observation-only state.
+          // Older versions inferred causes and generated antidotes from OHLC heuristics;
+          // those claims are retained as explicitly unverified archive fields only.
+          for (const signal of parsed.signals) {
+            if (signal.outcomeResult !== 'LOSS') continue;
+            const stored = signal.lossAutopsy ||
+              parsed.lossAutopsies.find((item: any) => item.signalId === signal.id);
+            const baseAutopsy: LossAutopsy = stored || {
+              id: `autopsy_${signal.id}`,
+              signalId: signal.id,
+              symbol: signal.symbol,
+              direction: signal.direction,
+              strategyName: signal.strategyName || 'Unclassified strategy',
+              mathematicalFormula: signal.mathematicalFormula,
+              entryPrice: signal.actualEntryPrice ?? signal.triggerPrice,
+              exitPrice: signal.actualExitPrice ?? signal.triggerPrice,
+              grossReturnPips: signal.grossReturnPips ?? undefined,
+              netReturnPips: signal.netReturnPips ?? undefined,
+              spreadPips: signal.estimatedSpreadPips ?? undefined,
+              netReturnUnits: signal.netReturnUnits ?? undefined,
+              marketSession: signal.marketSessionName || 'Unknown session',
+              strategyGeneId: signal.synthesizedGeneId,
+              rootCause: 'OBSERVED_ADVERSE_SETTLEMENT',
+              rootCauseExplanation: 'A loss was observed. Its causal mechanism has not been established.',
+              lessonsLearned: [],
+              timestamp: signal.plannedExitTimeUtc || signal.predictionTimeUtc || new Date().toISOString(),
+            };
+            const observationOnly = sanitizeLossAutopsy(baseAutopsy);
+            signal.lossAutopsy = observationOnly;
+            const existingIndex = parsed.lossAutopsies.findIndex(
+              (item: any) => item.signalId === signal.id
+            );
+            if (existingIndex >= 0) parsed.lossAutopsies[existingIndex] = observationOnly;
+            else parsed.lossAutopsies.unshift(observationOnly);
           }
           // Cap history at 1000 records
           if (parsed.signals.length > 1000) {
@@ -930,7 +900,12 @@ class DatabaseService {
   // Autonomous Forensic Loss Autopsies & Self-Learning
   public addLossAutopsy(autopsy: LossAutopsy) {
     if (!this.state.lossAutopsies) this.state.lossAutopsies = [];
-    this.state.lossAutopsies.unshift(autopsy);
+    const observationOnly = sanitizeLossAutopsy(autopsy);
+    const existingIndex = this.state.lossAutopsies.findIndex(
+      item => item.signalId === observationOnly.signalId
+    );
+    if (existingIndex >= 0) this.state.lossAutopsies[existingIndex] = observationOnly;
+    else this.state.lossAutopsies.unshift(observationOnly);
     if (this.state.lossAutopsies.length > 200) {
       this.state.lossAutopsies = this.state.lossAutopsies.slice(0, 200);
     }
