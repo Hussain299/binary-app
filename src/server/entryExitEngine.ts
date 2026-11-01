@@ -14,8 +14,9 @@ import {
   SignalLifecycleState,
 } from '../types/index.js';
 import { db } from './db.js';
-import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
 import { getSessionFromTimestamp } from './dataFeeds.js';
+import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
+import { isForexMarketOpenAt, isForexMarketIntervalOpen, isForexSignalScheduleValid } from './marketHours.js';
 import { ADVANCE_NOTICE_MS, CLOCK_ALIGNMENT_TOLERANCE_MS, MAX_DECISION_PROCESSING_DELAY_MS, M1_CANDLE_MS, getNextCandleOpenMs, isAlignedCandleOpen, TradingTimeframeMinutes } from './tradingClock.js';
 
 export interface SignalCreationParams {
@@ -140,7 +141,18 @@ export class EntryExitEngine {
         throw new Error('Signal creation is outside the permitted three-minute advance decision window.');
       }
     }
+    // Check market state after causal schedule validation so each invariant retains
+    // its own deterministic error and regression test.
+    if (!isTest && !isForexMarketOpenAt(now)) {
+      throw new Error('Spot FX market is closed for the weekend; new paper signals are prohibited.');
+    }
+    if (!isTest && !isForexMarketOpenAt(signalCandleMs)) {
+      throw new Error('The signal candle timestamp falls outside the open FX market week.');
+    }
     const nextCandleCloseMs = nextCandleOpenMs + (expiryMinutes * 60 * 1000);
+    if (!isTest && !isForexMarketIntervalOpen(nextCandleOpenMs, nextCandleCloseMs)) {
+      throw new Error('The complete entry-to-expiry interval must remain inside open spot-FX market hours.');
+    }
 
     const candleOpenTimeUtc = new Date(nextCandleOpenMs).toISOString();
     const candleCloseTimeUtc = params.candleCloseTimeUtc || new Date(nextCandleCloseMs).toISOString();
@@ -281,12 +293,59 @@ export class EntryExitEngine {
   }
 
   /**
+   * Reconcile persisted active signals with the weekly FX calendar. Signals whose
+   * decision/entry/expiry crossed a closure are cancelled. On a closed weekend,
+   * already-expired-but-unsettled signals are also cancelled unscored so the UI
+   * cannot keep presenting Friday contracts as active Saturday/Sunday.
+   */
+  public cancelSignalsOutsideForexWeek(): ResearchSignal[] {
+    const cancelled: ResearchSignal[] = [];
+    const nowMs = Date.now();
+    const marketOpen = isForexMarketOpenAt(nowMs);
+    for (const signal of db.getActiveSignals()) {
+      const predictionTimeMs = Date.parse(signal.predictionTimeUtc);
+      const entryTimeMs = Date.parse(
+        signal.actualEntryTimeUtc || signal.candleOpenTimeUtc || signal.entryWindowStartUtc
+      );
+      const expiryTimeMs = Date.parse(
+        signal.plannedExitTimeUtc || signal.candleCloseTimeUtc || signal.entryWindowEndUtc
+      );
+      const validSchedule = isForexSignalScheduleValid(predictionTimeMs, entryTimeMs, expiryTimeMs);
+      const expiredWhileClosed = !marketOpen && Number.isFinite(expiryTimeMs) && expiryTimeMs <= nowMs;
+      if (validSchedule && !expiredWhileClosed) continue;
+
+      const previousState = signal.lifecycleState;
+      signal.lifecycleState = 'EXPIRED';
+      signal.outcomeResult = 'CANCELLED';
+      signal.netReturnUnits = null;
+      signal.actualExitTimeUtc = null;
+      signal.actualExitPrice = null;
+      signal.lifecycleHistory = Array.isArray(signal.lifecycleHistory) ? signal.lifecycleHistory : [];
+      signal.lifecycleHistory.push({
+        timestamp: new Date().toISOString(),
+        fromState: previousState,
+        toState: 'EXPIRED',
+        reason: !validSchedule
+          ? 'Weekly FX market-hours guard cancelled a legacy signal whose decision, entry or expiry window fell outside the open market week. No WIN/LOSS was inferred and no learning update was recorded.'
+          : 'The contract/entry window elapsed while the FX market was closed. It was marked expired and unscored; no weekend price was used and no learning update was recorded.',
+      });
+      db.updateSignal(signal);
+      cancelled.push(signal);
+    }
+    return cancelled;
+  }
+
+  /**
    * Evaluates active research signals against newly arrived completed candles.
    * Advances states through the causal state machine.
    */
   public evaluateSignals(candlesMap: Record<ForexSymbol, Candle[]>, includeTest: boolean = false): ResearchSignal[] {
-    const activeSignals = db.getActiveSignals(includeTest);
-    const updatedSignals: ResearchSignal[] = [];
+    const marketOpen = isForexMarketOpenAt(Date.now());
+    const cancelledOutsideHours = this.cancelSignalsOutsideForexWeek();
+    const activeSignals = db.getActiveSignals(includeTest).filter(signal =>
+      marketOpen || (includeTest && signal.ruleFamily.startsWith('test_'))
+    );
+    const updatedSignals: ResearchSignal[] = [...cancelledOutsideHours];
 
     for (const signal of activeSignals) {
       const candles = candlesMap[signal.symbol];

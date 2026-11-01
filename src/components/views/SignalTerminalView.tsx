@@ -140,6 +140,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const [isClearingHistory, setIsClearingHistory] = useState<boolean>(false);
   const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
   const [sessionData, setSessionData] = useState<MarketSessionInfo[]>([]);
+  const [sessionMarketTime, setSessionMarketTime] = useState<{ marketOpen: boolean; marketStatus: string; marketMessage: string } | null>(null);
   const [synthesizedStrategies, setSynthesizedStrategies] = useState<SynthesizedStrategyGene[]>([]);
   const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformanceRecord[]>([]);
   const [evolutionTelemetry, setEvolutionTelemetry] = useState<EvolutionTelemetry | null>(null);
@@ -164,6 +165,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
       if (res.ok) {
         const data = await res.json();
         if (data?.sessions) setSessionData(data.sessions);
+        if (data?.marketTime) setSessionMarketTime(data.marketTime);
       }
     } catch (e) {
       console.warn('Failed to fetch session accuracy:', e);
@@ -642,8 +644,11 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           >
             <Globe className="w-3.5 h-3.5 text-emerald-400" />
             <span className="hidden sm:inline">Sessions</span>
-            <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-[10px] text-emerald-400 font-mono font-bold">
-              {sessionData.find(s => s.isActive)?.shortName || 'Live'}
+            <span
+              title={sessionMarketTime?.marketMessage || 'Current FX session'}
+              className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold ${sessionMarketTime?.marketOpen === false ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/20 text-emerald-400'}`}
+            >
+              {sessionMarketTime?.marketOpen === false ? 'Market Closed' : sessionData.find(s => s.isActive)?.shortName || 'Live'}
             </span>
           </button>
 
@@ -1587,7 +1592,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </div>
 
             <p className="text-xs text-neutral-300 leading-relaxed">
-              Closed paper outcomes are grouped by the session recorded at entry. This is a descriptive breakdown; it does not prove that a session causes better performance or that the model optimizes separately by session:
+              Only settled paper outcomes whose decision, entry and expiry all fell inside one open FX week are counted. They are grouped by actual entry time across five exclusive New York-time reporting buckets; UTC and IST labels adjust for daylight saving. This analytics split does not change the existing strategy session-affinity rules and does not prove that a session causes better performance:
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1610,7 +1615,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                         <span className="font-bold text-white text-sm">{sess.name}</span>
                       </div>
                       <span className="text-[10px] text-neutral-400 font-mono block mt-0.5">
-                        {sess.istRange} ({sess.utcRange})
+                        {sess.istRange}
                       </span>
                     </div>
                     {sess.isActive ? (

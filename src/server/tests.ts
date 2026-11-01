@@ -5,7 +5,7 @@
  */
 
 import { Candle, ForexSymbol, ResearchSignal, SynthesizedStrategyGene, VerificationTestResult } from '../types/index.js';
-import { dataFeedEngine } from './dataFeeds.js';
+import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
@@ -30,6 +30,7 @@ import {
   doesResearchHoldoutOverlap,
 } from './evolutionEngine.js';
 import { findEligibleStartTimeframes, getNextCandleOpenMs } from './tradingClock.js';
+import { getForexMarketState, getReportingSessionFromTimestamp, isForexMarketIntervalOpen, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -75,6 +76,113 @@ export async function runAllVerificationTests(): Promise<{
       });
     }
   };
+
+  await runTest('MARKET_HOURS', 'Spot FX weekend closure follows New York time and DST', () => {
+    const cases: Array<[string, boolean]> = [
+      ['2026-10-30T20:59:00.000Z', true],  // Friday 16:59 EDT
+      ['2026-10-30T21:00:00.000Z', false], // Friday 17:00 EDT
+      ['2026-10-31T16:00:00.000Z', false], // Saturday
+      ['2026-11-01T21:59:00.000Z', false], // Sunday 16:59 EST
+      ['2026-11-01T22:00:00.000Z', true],  // Sunday 17:00 EST
+    ];
+    for (const [timestamp, expected] of cases) {
+      const actual = isForexMarketOpenAt(timestamp);
+      if (actual !== expected) {
+        throw new Error(`${timestamp}: expected marketOpen=${expected}, received ${actual}.`);
+      }
+    }
+    const closed = getForexMarketState('2026-10-31T16:00:00.000Z');
+    if (closed.isOpen || closed.status !== 'WEEKEND_CLOSED') {
+      throw new Error('Saturday must report the explicit weekend-closed state.');
+    }
+    const winterReopen = getForexMarketState('2026-11-01T21:59:00.000Z');
+    if (!winterReopen.message.includes('Monday 3:30 AM IST') || /UTC|New York|ET/.test(winterReopen.message)) {
+      throw new Error(`Weekend reopen must be displayed in IST only; received: ${winterReopen.message}`);
+    }
+    const summerReopen = getForexMarketState('2026-07-05T20:59:00.000Z');
+    if (!summerReopen.message.includes('Monday 2:30 AM IST') || /UTC|New York|ET/.test(summerReopen.message)) {
+      throw new Error(`DST-adjusted summer reopen must be displayed in IST only; received: ${summerReopen.message}`);
+    }
+    const session = getReportingSessionFromTimestamp('2026-11-02T19:00:00.000Z');
+    if (!session.istRange.endsWith('IST') || !/AM|PM/.test(session.istRange) ||
+        /UTC|ET/.test(session.hoursLabel)) {
+      throw new Error('Session reporting labels must be readable IST-only times.');
+    }
+  });
+
+  await runTest('MARKET_HOURS', 'Entry-to-expiry interval cannot cross the weekly FX close', () => {
+    if (!isForexMarketIntervalOpen(
+      Date.parse('2026-10-30T20:30:00.000Z'), // Friday 16:30 EDT
+      Date.parse('2026-10-30T20:55:00.000Z')  // Friday 16:55 EDT
+    )) {
+      throw new Error('A contract fully contained before Friday close should remain eligible.');
+    }
+    if (isForexMarketIntervalOpen(
+      Date.parse('2026-10-30T20:50:00.000Z'), // Friday 16:50 EDT
+      Date.parse('2026-10-30T21:20:00.000Z')  // Friday 17:20 EDT
+    )) {
+      throw new Error('A contract expiring after Friday close must be rejected.');
+    }
+    if (isForexMarketIntervalOpen(
+      Date.parse('2026-10-30T20:30:00.000Z'),
+      Date.parse('2026-11-01T22:30:00.000Z')
+    )) {
+      throw new Error('An interval crossing the entire weekend must be rejected.');
+    }
+    if (!isForexMarketIntervalOpen(
+      Date.parse('2026-11-01T22:10:00.000Z'), // Sunday 17:10 EST
+      Date.parse('2026-11-01T22:25:00.000Z')
+    )) {
+      throw new Error('A short interval after the Sunday reopen should be eligible.');
+    }
+  });
+
+  await runTest('MARKET_HOURS', 'Legacy weekend-created signals cannot be revived after the weekly reopen', () => {
+    const fridayDecision = Date.parse('2026-10-30T20:40:00.000Z'); // Friday 16:40 EDT
+    const fridayEntry = Date.parse('2026-10-30T20:45:00.000Z');
+    const fridayExpiry = Date.parse('2026-10-30T20:55:00.000Z');
+    if (!isForexSignalScheduleValid(fridayDecision, fridayEntry, fridayExpiry)) {
+      throw new Error('A valid Friday decision and contract wholly before the weekly close should remain valid.');
+    }
+    const saturdayDecision = Date.parse('2026-10-31T16:00:00.000Z');
+    const sundayEntry = Date.parse('2026-11-01T22:10:00.000Z');
+    const sundayExpiry = Date.parse('2026-11-01T22:20:00.000Z');
+    if (isForexSignalScheduleValid(saturdayDecision, sundayEntry, sundayExpiry)) {
+      throw new Error('A signal predicted on Saturday must remain cancelled after the Sunday reopen.');
+    }
+    const sundayPreOpenDecision = Date.parse('2026-11-01T21:50:00.000Z'); // Sunday 16:50 EST
+    if (isForexSignalScheduleValid(sundayPreOpenDecision, sundayEntry, sundayExpiry)) {
+      throw new Error('A decision made before the Sunday reopen cannot carry into the new trading week.');
+    }
+    if (isForexSignalScheduleValid(fridayDecision, sundayEntry, sundayExpiry)) {
+      throw new Error('A Friday decision cannot remain pending across the weekend and enter Sunday.');
+    }
+  });
+
+  await runTest('MARKET_HOURS', 'Session attribution separates Asia, London, overlap, New York and late New York', () => {
+    const cases: Array<[string, string]> = [
+      ['2026-11-02T07:59:00.000Z', 'ASIA'],           // Monday 02:59 EST
+      ['2026-11-02T08:00:00.000Z', 'LONDON'],         // Monday 03:00 EST
+      ['2026-11-02T13:00:00.000Z', 'OVERLAP'],       // Monday 08:00 EST
+      ['2026-11-02T17:00:00.000Z', 'NEW_YORK'],      // Monday 12:00 EST
+      ['2026-11-02T19:00:00.000Z', 'LATE_NEW_YORK'], // Monday 14:00 EST
+    ];
+    for (const [timestamp, expected] of cases) {
+      const actual = getReportingSessionFromTimestamp(timestamp).id;
+      if (actual !== expected) {
+        throw new Error(`${timestamp}: expected ${expected}, received ${actual}.`);
+      }
+    }
+    const summerOverlap = getReportingSessionFromTimestamp('2026-07-06T12:00:00.000Z');
+    const winterOverlap = getReportingSessionFromTimestamp('2026-11-02T13:00:00.000Z');
+    if (summerOverlap.utcRange !== '12:00–16:00 UTC' || winterOverlap.utcRange !== '13:00–17:00 UTC') {
+      throw new Error('Session UTC labels must follow the New York DST offset rather than a fixed UTC schedule.');
+    }
+    // Preserve the old classifier consumed by strategy sessionAffinity and regime logic.
+    if (getSessionFromTimestamp('2026-11-02T19:00:00.000Z').id !== 'NEW_YORK') {
+      throw new Error('Reporting-only session buckets must not change existing trading session-affinity semantics.');
+    }
+  });
 
   await runTest('DATA', 'Binary payout settlement (win, loss, push and payout floor)', () => {
     const win = calculateBinarySettlement('BUY', 1.10000, 1.10010, 80);
