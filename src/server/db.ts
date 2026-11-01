@@ -58,6 +58,15 @@ interface DatabaseSchema {
   processedOutcomeIds: string[];
   /** Holdout time ranges already inspected by candidate searches; prevents reuse. */
   researchHoldoutWindows: Array<{ symbol: ForexSymbol; batchId: string; startUtc: string; endUtc: string; reservedAt: string }>;
+  /** Per-hypothesis opportunity holdouts; stops overlapping rescans from inflating evidence. */
+  opportunityHoldoutWindows: Array<{
+    symbol: ForexSymbol;
+    candidateKey: string;
+    batchId: string;
+    startUtc: string;
+    endUtc: string;
+    reservedAt: string;
+  }>;
   cronState: {
     lastRun: string | null;
     nextRun: string | null;
@@ -101,6 +110,7 @@ class DatabaseService {
         if (!parsed.marketRegimes || typeof parsed.marketRegimes !== 'object') parsed.marketRegimes = {};
         if (!Array.isArray(parsed.processedOutcomeIds)) parsed.processedOutcomeIds = [];
         if (!Array.isArray(parsed.researchHoldoutWindows)) parsed.researchHoldoutWindows = [];
+        if (!Array.isArray(parsed.opportunityHoldoutWindows)) parsed.opportunityHoldoutWindows = [];
         // Historical versions wrote fabricated strategy accuracy values. Never trust them
         // without stored untouched-test evidence; quarantine all such legacy candidates.
         if (Array.isArray(parsed.synthesizedStrategies)) {
@@ -223,6 +233,7 @@ class DatabaseService {
       marketRegimes: {},
       processedOutcomeIds: [],
       researchHoldoutWindows: [],
+      opportunityHoldoutWindows: [],
       cronState: {
         lastRun: null,
         nextRun: null,
@@ -294,6 +305,60 @@ class DatabaseService {
     // A reservation must hit disk immediately, not after the normal debounce.
     this.saveStateSync();
     return true;
+  }
+
+  /**
+   * Reserve per-hypothesis opportunity holdout windows before evaluating them.
+   * Any overlapping interval for the same pair and candidate identity is rejected.
+   * Failed or interrupted runs still consume the reservation to prevent retry leakage.
+   */
+  public claimOpportunityHoldoutWindows(
+    windows: Array<{
+      symbol: ForexSymbol;
+      candidateKey: string;
+      batchId: string;
+      startUtc: string;
+      endUtc: string;
+    }>
+  ): Set<string> {
+    if (!Array.isArray(this.state.opportunityHoldoutWindows)) {
+      this.state.opportunityHoldoutWindows = [];
+    }
+    const claimed = new Set<string>();
+    const reservations = this.state.opportunityHoldoutWindows;
+
+    for (const window of windows) {
+      const startMs = Date.parse(window.startUtc);
+      const endMs = Date.parse(window.endUtc);
+      if (
+        !window.batchId ||
+        !window.candidateKey ||
+        !Number.isFinite(startMs) ||
+        !Number.isFinite(endMs) ||
+        endMs <= startMs
+      ) {
+        throw new Error("Opportunity holdout reservation requires a candidate identity and valid chronological interval.");
+      }
+      const identity = `${window.symbol}|${window.candidateKey}`;
+      if (claimed.has(identity)) continue;
+      const overlaps = reservations.some(existing => {
+        if (existing.symbol !== window.symbol || existing.candidateKey !== window.candidateKey) return false;
+        const existingStart = Date.parse(existing.startUtc);
+        const existingEnd = Date.parse(existing.endUtc);
+        return Number.isFinite(existingStart) && Number.isFinite(existingEnd) &&
+          startMs < existingEnd && existingStart < endMs;
+      });
+      if (overlaps) continue;
+
+      reservations.push({
+        ...window,
+        reservedAt: new Date().toISOString(),
+      });
+      claimed.add(identity);
+    }
+
+    if (claimed.size) this.saveStateSync();
+    return claimed;
   }
 
   // Candle Storage
