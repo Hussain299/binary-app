@@ -1386,7 +1386,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 return (
                   <div className="text-[11px] text-neutral-400 pt-2">
                     Forward paper results: {forward && forward.trades > 0
-                      ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored outcomes` : 'No scored outcomes'} · ${forward.scratches} scratches · ${forward.netPips > 0 ? '+' : ''}${forward.netPips.toFixed(1)} modeled net pips`
+                      ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored outcomes` : 'No scored outcomes'} · ${forward.scratches} scratches · ${(forward.netReturnUnits ?? 0) > 0 ? '+' : ''}${(forward.netReturnUnits ?? 0).toFixed(3)} payout-adjusted stake units`
                       : 'No completed forward outcomes yet'}
                   </div>
                 );
@@ -1597,9 +1597,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       <span className="text-base font-extrabold text-emerald-400">{sess.hasMeasuredData ? `${sess.winRate}%` : "No data"}</span>
                     </div>
                     <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
-                      <span className="text-[10px] text-neutral-400 block uppercase">Observed Paper Net Pips</span>
-                      <span className={`text-sm font-bold ${sess.netPips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {sess.netPips > 0 ? '+' : ''}{sess.netPips} Pips
+                      <span className="text-[10px] text-neutral-400 block uppercase">Observed Paper Net Return</span>
+                      <span className={`text-sm font-bold ${sess.netReturnUnits >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {sess.netReturnUnits > 0 ? '+' : ''}{sess.netReturnUnits.toFixed(3)} Stake Units
                       </span>
                       <span className="text-[9px] text-neutral-500 block">({sess.wins}W / {sess.losses}L / {sess.scratches} scratches · {sess.totalTrades} total)</span>
                     </div>
