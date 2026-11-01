@@ -113,6 +113,17 @@
   display:flex;min-width:0;min-height:0;flex:1 1 auto;flex-direction:column;
   transform-origin:50% 0;animation:sf-view-in 420ms cubic-bezier(.2,.75,.25,1) both;
 }
+.sf-view-stage--scroll {
+  /* Own the audit scroll at the viewport level; parents stay fixed and clipped. */
+  flex:1 1 0;min-width:0;min-height:0;height:100%;
+  overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;touch-action:pan-y;
+  scrollbar-gutter:stable;
+}
+.sf-view-stage--scroll > .sf-audit-page {
+  width:100%;min-height:100%;flex:0 0 auto;
+  overflow:visible;
+}
 @keyframes sf-view-in {
   from { opacity:0;transform:translate3d(0,10px,0) scale(.997);filter:blur(2px); }
   to { opacity:1;transform:translate3d(0,0,0) scale(1);filter:blur(0); }
@@ -286,8 +297,8 @@
 
 /* Daily audit — the default landing surface is a day-scoped paper ledger, not a research dashboard. */
 .sf-audit-page {
-  display:flex;min-width:0;min-height:0;flex:1 1 auto;flex-direction:column;gap:0;
-  overflow-x:hidden;overflow-y:auto;padding:clamp(18px,2.1vw,30px);
+  display:flex;min-width:0;flex-direction:column;gap:0;
+  padding:clamp(18px,2.1vw,30px);
 }
 .sf-audit-header {
   display:flex;align-items:flex-end;justify-content:space-between;gap:24px;
