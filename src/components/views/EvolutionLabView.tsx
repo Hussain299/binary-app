@@ -281,7 +281,7 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
             </select>
             <button
               onClick={runThreeHundredSearch}
-              disabled={isSearchingBatch || selectedHistoryCount < 30_000}
+              disabled={isSearchingBatch || selectedHistoryCount < 60_000}
               className="flex items-center gap-2 rounded-lg bg-cyan-400 px-4 py-2 text-xs font-bold text-neutral-950 hover:bg-cyan-300 disabled:opacity-40"
             >
               <Sparkles className={`w-3.5 h-3.5 ${isSearchingBatch ? 'animate-spin' : ''}`} />
