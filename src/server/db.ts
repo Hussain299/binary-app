@@ -88,6 +88,9 @@ class DatabaseService {
         if (!parsed.autopilotLogs) parsed.autopilotLogs = [];
         if (!Array.isArray(parsed.synthesizedStrategies)) parsed.synthesizedStrategies = [];
         if (!Array.isArray(parsed.lossAutopsies)) parsed.lossAutopsies = [];
+        // Quarantine every legacy autopsy, including orphaned records outside the
+        // retained signal window, before exposing any forensic history.
+        parsed.lossAutopsies = parsed.lossAutopsies.map((item: LossAutopsy) => sanitizeLossAutopsy(item));
         if (!parsed.strategyPerformance || typeof parsed.strategyPerformance !== 'object') parsed.strategyPerformance = {};
         if (!Array.isArray(parsed.episodicMemory)) parsed.episodicMemory = [];
         if (!parsed.marketRegimes || typeof parsed.marketRegimes !== 'object') parsed.marketRegimes = {};
