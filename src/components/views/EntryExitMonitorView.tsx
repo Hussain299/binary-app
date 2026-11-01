@@ -14,7 +14,7 @@ export const EntryExitMonitorView: React.FC<EntryExitMonitorViewProps> = ({ sign
   const sig = selectedSignal || signals[0];
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-y-auto bg-neutral-950 p-6 space-y-6">
+    <div className="sf-page">
       <div className="pb-4 border-b border-neutral-800">
         <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
           <Target className="w-4 h-4 text-emerald-400" />
