@@ -6,6 +6,7 @@ import type {
   StrategyGenome,
   StrategyDiscoveryMetrics,
   StrategyPaperMetrics,
+  RuleFamily,
 } from "../types/index.js";
 
 export type StrategyStyle = "TREND" | "MEAN_REVERSION" | "HYBRID" | "UNKNOWN";
@@ -336,6 +337,20 @@ export function inferGenomeStyle(expression?: StrategyExpressionNode): StrategyS
   if (trend >= meanReversion + 2) return "TREND";
   if (meanReversion >= trend + 2) return "MEAN_REVERSION";
   return "HYBRID";
+}
+
+/** Map the expressed genome's feature composition into an observed family bucket. */
+export function inferGenomeRuleFamily(expression?: StrategyExpressionNode): RuleFamily {
+  switch (inferGenomeStyle(expression)) {
+    case "TREND":
+      return "momentum_5";
+    case "MEAN_REVERSION":
+      return "mean_reversion_20";
+    case "HYBRID":
+      return "wick_reversal";
+    default:
+      return "volatility_squeeze";
+  }
 }
 
 function median(values: number[]): number {
