@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header.tsx';
 import { Sidebar, ViewTab } from './components/Sidebar.tsx';
 import { SignalTerminalView } from './components/views/SignalTerminalView.tsx';
+import { OpportunityResearchView } from './components/views/OpportunityResearchView.tsx';
 import { MarketExplorerView } from './components/views/MarketExplorerView.tsx';
 import { ModelLabView } from './components/views/ModelLabView.tsx';
 import { StrategyDiscoveryView } from './components/views/StrategyDiscoveryView.tsx';
@@ -12,7 +13,7 @@ import { EntryExitMonitorView } from './components/views/EntryExitMonitorView.ts
 import { PerformanceAnalyticsView } from './components/views/PerformanceAnalyticsView.tsx';
 import { SystemHealthView } from './components/views/SystemHealthView.tsx';
 import { ConfigurationView } from './components/views/ConfigurationView.tsx';
-import { LineChart, Menu, Zap, Lightbulb } from 'lucide-react';
+import { LineChart, Menu, Zap, Lightbulb, BrainCircuit } from 'lucide-react';
 import { soundNotificationService } from './utils/notifications.ts';
 import { NotificationBanner } from './components/NotificationBanner.tsx';
 import {
@@ -181,6 +182,7 @@ export default function App() {
               isEvaluating={isEvaluating}
             />
           )}
+          {activeTab === 'opportunities' && <OpportunityResearchView />}
           {activeTab === 'explorer' && <MarketExplorerView providers={providers} />}
           {activeTab === 'modellab' && (
             <ModelLabView
@@ -222,9 +224,22 @@ export default function App() {
 
         <button
           onClick={() => {
-            setActiveTab('strategy');
+            setActiveTab('opportunities');
             setIsMobileMenuOpen(false);
           }}
+          className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 transition-colors ${
+            activeTab === 'opportunities' ? 'text-emerald-400 font-bold' : 'text-neutral-400 hover:text-neutral-200'
+          }`}
+        >
+          <BrainCircuit className="w-4 h-4" />
+          <span className="text-[10px]">Ideas</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('strategy');
+            setIsMobileMenuOpen(false);
+          }
           className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 transition-colors ${
             activeTab === 'strategy' ? 'text-amber-400 font-bold' : 'text-neutral-400 hover:text-neutral-200'
           }`}
