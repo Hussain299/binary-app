@@ -48,12 +48,13 @@ export const FOREX_PAIRS: ForexSymbol[] = [
   'GBP/NZD',
 ];
 
-export type MarketSessionId = 'ASIA' | 'LONDON' | 'OVERLAP' | 'NEW_YORK';
+export type MarketSessionId = 'ASIA' | 'LONDON' | 'OVERLAP' | 'NEW_YORK' | 'LATE_NEW_YORK';
 
 export interface MarketSessionInfo {
   id: MarketSessionId;
   name: string;
   shortName: string;
+  hoursLabel: string;
   utcRange: string;
   istRange: string;
   isActive: boolean;
