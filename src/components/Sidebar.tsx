@@ -35,7 +35,6 @@ export type ViewTab =
 interface SidebarProps {
   activeTab: ViewTab;
   onTabChange: (tab: ViewTab) => void;
-  activeSignalsCount: number;
   totalExperiments: number;
   isOpen?: boolean;
   isCollapsed?: boolean;
@@ -49,13 +48,13 @@ const groups: Array<{
     id: ViewTab;
     label: string;
     icon: React.ComponentType<{ className?: string }>;
-    count?: 'signals' | 'history';
+    count?: 'history';
   }>;
 }> = [
   {
     label: 'Workspace',
     items: [
-      { id: 'terminal', label: 'Daily audit', icon: Zap, count: 'signals' },
+      { id: 'terminal', label: 'Daily audit', icon: Zap },
       { id: 'opportunities', label: 'Opportunities', icon: BrainCircuit },
       { id: 'explorer', label: 'Markets', icon: LineChart },
       { id: 'strategy', label: 'Strategies', icon: Lightbulb },
@@ -85,7 +84,6 @@ const groups: Array<{
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   onTabChange,
-  activeSignalsCount,
   totalExperiments,
   isOpen = false,
   isCollapsed = false,
@@ -110,11 +108,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {group.items.map(item => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
-              const count = item.count === 'signals'
-                ? activeSignalsCount
-                : item.count === 'history'
-                  ? totalExperiments
-                  : 0;
+              const count = item.count === 'history' ? totalExperiments : 0;
               return (
                 <button
                   key={item.id}

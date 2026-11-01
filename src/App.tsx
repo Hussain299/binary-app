@@ -135,10 +135,6 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
-  const activeSignalsCount = signals.filter(s =>
-    ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE', 'EXIT_PENDING'].includes(s.lifecycleState)
-  ).length;
-
   return (
     <div className="app-shell sf-app-shell relative flex h-[100dvh] w-full min-w-0 flex-col overflow-hidden text-neutral-100 antialiased font-sans">
       {/* Real-time In-App Signal Alert Banner */}
@@ -154,7 +150,6 @@ export default function App() {
       <Header
         onRefresh={handleRefresh}
         isRefreshing={isRefreshing}
-        activeSignalsCount={activeSignalsCount}
         onToggleSidebar={() => setIsMobileMenuOpen(prev => !prev)}
         isSidebarOpen={isMobileMenuOpen}
       />
@@ -165,8 +160,7 @@ export default function App() {
         <Sidebar
           activeTab={activeTab}
           onTabChange={setActiveTab}
-          activeSignalsCount={activeSignalsCount}
-          totalExperiments={experiments.length}
+            totalExperiments={experiments.length}
           isOpen={isMobileMenuOpen}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={() => setIsSidebarCollapsed(prev => !prev)}
