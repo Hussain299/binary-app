@@ -32,6 +32,39 @@ import { AutopilotStream } from '../AutopilotStream.tsx';
 
 interface EvolutionTelemetry {
   timestamp: string;
+  researchCoordinator: {
+    status: 'IDLE' | 'SCANNING' | 'WAITING_FOR_HISTORY' | 'WAITING_FOR_NEW_HISTORY' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+    symbol?: string;
+    batchId?: string;
+    startedAt?: string;
+    finishedAt?: string;
+    checkedAt?: string;
+    nextScanAt?: string;
+    completedCandidates: number;
+    totalCandidates: number;
+    historicalPasses: number;
+    rejected: number;
+    finalists: number;
+    message: string;
+    error?: string;
+    batchRunning: boolean;
+    scanIntervalMinutes: number;
+    marketPulseSeconds: number;
+    requiredNewM1Candles: number;
+    historyWindowLimit: number;
+  };
+  generations: Array<{
+    researchBatchId?: string;
+    status?: 'COMPLETED' | 'FAILED';
+    symbol?: string;
+    timestamp: string;
+    totalExperiments: number;
+    acceptedCount: number;
+    rejectedCount: number;
+    summary: string;
+    bestValidationExpectedValueUnits?: number;
+    holdoutPeriod?: { start: string; end: string };
+  }>;
   learning: {
     posterior: string;
     selection: string;
@@ -1149,6 +1182,62 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   </p>
                 )}
               </div>
+
+              {evolutionTelemetry && (
+                <div className="bg-neutral-950 p-3.5 rounded-xl border border-cyan-800/80 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-bold text-cyan-300 text-sm flex items-center gap-1.5">
+                      <Dna className="w-4 h-4" />
+                      Autonomous evolutionary research
+                    </span>
+                    <span className="text-[10px] text-neutral-400 font-mono">
+                      {evolutionTelemetry.researchCoordinator.status}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-neutral-300">
+                    {evolutionTelemetry.researchCoordinator.message}
+                  </p>
+                  {evolutionTelemetry.researchCoordinator.batchRunning && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] text-neutral-400 font-mono">
+                        <span>{evolutionTelemetry.researchCoordinator.symbol || 'Research batch'}</span>
+                        <span>
+                          {evolutionTelemetry.researchCoordinator.completedCandidates}/
+                          {evolutionTelemetry.researchCoordinator.totalCandidates}
+                        </span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-neutral-800 overflow-hidden">
+                        <div
+                          className="h-full bg-cyan-400 transition-all"
+                          style={{
+                            width: `${Math.min(100, 100 * evolutionTelemetry.researchCoordinator.completedCandidates / Math.max(1, evolutionTelemetry.researchCoordinator.totalCandidates))}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-[10px] font-mono text-neutral-400">
+                        <span>Historical pass: {evolutionTelemetry.researchCoordinator.historicalPasses}</span>
+                        <span>Rejected: {evolutionTelemetry.researchCoordinator.rejected}</span>
+                        <span>Holdout finalists: {evolutionTelemetry.researchCoordinator.finalists}</span>
+                      </div>
+                    </div>
+                  )}
+                  <p className="text-[10px] text-neutral-500">
+                    Market signals are polled every {evolutionTelemetry.researchCoordinator.marketPulseSeconds}s. Heavy candidate research is isolated to a {evolutionTelemetry.researchCoordinator.scanIntervalMinutes}-minute schedule and requires {evolutionTelemetry.researchCoordinator.requiredNewM1Candles.toLocaleString()} new M1 candles per consumed pair holdout. Research window capped at {evolutionTelemetry.researchCoordinator.historyWindowLimit.toLocaleString()} candles.
+                  </p>
+                  {evolutionTelemetry.generations.filter(item => !!item.researchBatchId).slice(0, 3).map(item => (
+                    <div key={item.researchBatchId} className="border-t border-neutral-800 pt-2 space-y-1">
+                      <div className="flex justify-between gap-2 text-[10px] font-mono">
+                        <span className="text-neutral-300">{item.symbol || 'Research'} · {item.status || 'RECORDED'}</span>
+                        <span className="text-neutral-500">{new Date(item.timestamp).toLocaleString()}</span>
+                      </div>
+                      <p className="text-[10px] text-neutral-400">{item.summary}</p>
+                    </div>
+                  ))}
+                  {evolutionTelemetry.researchCoordinator.error && (
+                    <p className="text-[11px] text-rose-300">{evolutionTelemetry.researchCoordinator.error}</p>
+                  )}
+                </div>
+              )}
 
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-amber-800/80 space-y-2">
                 <span className="font-bold text-amber-400 block text-sm flex items-center gap-1.5">
