@@ -129,6 +129,96 @@ export interface SignalLifecycleEvent {
   price?: number;
 }
 
+export type OpportunityHypothesisType =
+  | 'TREND_CONTINUATION'
+  | 'MEAN_REVERSION'
+  | 'WICK_REJECTION'
+  | 'MOMENTUM_BREAKOUT'
+  | 'VOLATILITY_EXPANSION'
+  | 'EVOLVED_GENOME';
+
+export type OpportunityDirection = SignalDirection | 'NO_TRADE';
+export type OpportunityAuditStatus =
+  | 'SHORTLISTED'
+  | 'REJECTED'
+  | 'INSUFFICIENT_EVIDENCE'
+  | 'NO_TRADE';
+export type OpportunityHumanStatus =
+  | 'PENDING'
+  | 'APPROVED_FOR_PAPER_REVIEW'
+  | 'REJECTED_BY_HUMAN'
+  | 'SUPERSEDED';
+
+export interface OpportunityForecastPoint {
+  minute: number;
+  q10: number;
+  q25: number;
+  median: number;
+  q75: number;
+  q90: number;
+}
+
+export interface OpportunityForecast {
+  status: 'AVAILABLE' | 'INSUFFICIENT_HISTORY';
+  points: OpportunityForecastPoint[];
+  /** Historical analogue terminal prices are retained for human direction revisions. */
+  terminalPrices: number[];
+  analogueCount: number;
+  meanDistance: number | null;
+  winRate: number | null;
+  lowerConfidenceBound: number | null;
+  payoutBreakEvenProbability: number;
+  expectedValueLowerBound: number | null;
+}
+
+export interface OpportunityAudit {
+  status: OpportunityAuditStatus;
+  rankScore: number;
+  reasons: string[];
+  counterEvidence: string[];
+  auditedAt: string;
+}
+
+export interface OpportunityHumanDecision {
+  status: OpportunityHumanStatus;
+  direction?: SignalDirection;
+  horizonMinutes?: 5 | 10 | 15 | 20 | 25 | 30;
+  decidedAt: string;
+  notes?: string;
+  parentOpportunityId?: string;
+}
+
+export interface TradeOpportunity {
+  id: string;
+  batchId: string;
+  symbol: ForexSymbol;
+  hypothesisType: OpportunityHypothesisType;
+  hypothesisName: string;
+  hypothesis: string;
+  sourceKind: 'EXPLORATORY_HEURISTIC' | 'HISTORICALLY_VALIDATED_GENOME';
+  strategyGeneId?: string;
+  direction: OpportunityDirection;
+  rawHypothesisScore: number;
+  activationThreshold: number;
+  horizonMinutes: 5 | 10 | 15 | 20 | 25 | 30;
+  generatedAt: string;
+  snapshotAt: string;
+  staleAfter: string;
+  entryTimeUtc: string;
+  expiryTimeUtc: string;
+  snapshotPrice: number;
+  proposedEntryPrice: number;
+  dataSource: string;
+  marketDataQuality: number;
+  datasetFingerprint: string;
+  featureSchemaVersion: string;
+  modelVersion: string;
+  marketFeatureVector: number[];
+  forecast: OpportunityForecast;
+  audit: OpportunityAudit;
+  humanDecision: OpportunityHumanDecision;
+}
+
 export interface ResearchSignal {
   id: string;
   symbol: ForexSymbol;
