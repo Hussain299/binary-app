@@ -513,9 +513,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-neutral-950 font-sans text-neutral-100">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-transparent font-sans text-neutral-100">
       {/* 1. TOP STATUS BAR: Zero clutter, essential numbers at a glance */}
-      <div className="bg-neutral-900/90 border-b border-neutral-800 px-3 sm:px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
+      <div className="bg-[#0f1722] border-b border-white/[0.07] px-3 sm:px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
         {/* Shared T-3m entry schedule for all supported start candles */}
         <div className="flex items-center gap-2.5">
           <span className={`relative flex h-3 w-3 ${nextDecisionActive ? '' : 'opacity-50'}`}>
@@ -570,42 +570,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
         </div>
       </div>
 
-      {/* SESSION ACCURACY STRIP (ASIA · LONDON · OVERLAP · NEW YORK) */}
-      <div className="bg-neutral-900/60 border-b border-neutral-800/80 px-3 sm:px-5 py-1.5 flex items-center justify-between gap-2 overflow-x-auto text-[11px] font-mono scrollbar-none shrink-0">
-        <div className="flex items-center gap-2 text-neutral-400 shrink-0">
-          <Globe className="w-3.5 h-3.5 text-cyan-400" />
-          <span className="font-bold text-neutral-300 uppercase text-[10px] tracking-wider">Forward Session Outcomes:</span>
-        </div>
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          {sessionData.length === 0 ? (
-            <span className="text-neutral-500">No completed forward session outcomes yet</span>
-          ) : sessionData.map(s => (
-            <button
-              key={s.id}
-              onClick={() => setShowSessionsModal(true)}
-              className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md border transition-all ${
-                s.isActive
-                  ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300 font-bold shadow-xs'
-                  : 'bg-neutral-950/70 border-neutral-800/80 text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              {s.isActive && (
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                </span>
-              )}
-              <span>{s.shortName}:</span>
-              <strong className={s.isActive ? 'text-emerald-400' : 'text-neutral-200'}>{s.hasMeasuredData ? `${s.winRate}%` : '—'}</strong>
-              <span className="text-[9px] text-neutral-500">n={s.totalTrades}</span>
-              {s.isActive && <span className="text-[9px] uppercase px-1 rounded bg-emerald-500/20 text-emerald-400">Live</span>}
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* 2. SECONDARY CONTROLS & INFO BUTTONS */}
-      <div className="bg-neutral-950 px-3 sm:px-5 py-2 border-b border-neutral-800/70 flex flex-wrap items-center justify-between gap-2 shrink-0">
+      <div className="bg-[#0b1018] px-3 sm:px-5 py-2 border-b border-white/[0.07] flex flex-wrap items-center justify-between gap-2 shrink-0">
         {/* Filters: Active | All | History */}
         <div className="flex items-center gap-1 bg-neutral-900 p-1 rounded-lg border border-neutral-800 text-xs font-medium">
           <button
@@ -617,7 +583,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             }`}
           >
             <Zap className="w-3 h-3" />
-            <span>Active Signals ({activeSignals.length})</span>
+            <span>Active ({activeSignals.length})</span>
           </button>
 
           <button
@@ -690,19 +656,12 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <span className="sm:hidden">Learning</span>
           </button>
 
-          <button
-            onClick={() => setShowStrategiesModal(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs text-neutral-300 font-medium transition-colors"
-          >
-            <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden sm:inline">Strategies</span>
-            <span className="sm:hidden">Strategies</span>
-          </button>
+
         </div>
       </div>
 
       {/* 3. MAIN SIGNALS FEED: BOLD, UNCLUTTERED, DIRECT TRADING TICKETS */}
-      <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-5 space-y-3">
         {/* HISTORY SUMMARY BANNER (Shown when viewing History tab) */}
         {filterState === 'CLOSED' && historySignals.length > 0 && (
           <div className="bg-neutral-900/90 border border-neutral-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
@@ -764,7 +723,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-3">
             {filteredSignals.map(sig => {
               const isBuy = sig.direction === 'BUY';
               const isWaiting = sig.lifecycleState === 'WAITING_FOR_ENTRY';
