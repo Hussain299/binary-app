@@ -21,6 +21,8 @@ import {
   EpisodicTradeMemory,
   calculateAdaptiveMutationRate,
   genomeSpeciesKey,
+  hasSufficientForwardParentEvidence,
+  evolutionaryParentFitness,
 } from './evolutionEngine.js';
 import { findEligibleStartTimeframes, getNextCandleOpenMs } from './tradingClock.js';
 
@@ -104,6 +106,87 @@ export async function runAllVerificationTests(): Promise<{
     }
     if (!(bayesianUcbScore(afterLoss, 2) > 0 && bayesianUcbScore(afterLoss, 2) <= 2)) {
       throw new Error('Bayesian UCB score must be finite and bounded for a valid posterior.');
+    }
+  });
+
+  await runTest('ML', 'Mature forward evidence steers or removes genetic parents', () => {
+    const discovery = {
+      trainScoredTrades: 180,
+      validationScoredTrades: 180,
+      trainWinRate: 0.74,
+      validationWinRate: 0.74,
+      validationExpectedValueUnits: 0.20,
+      validationProfitFactor: 1.35,
+      minimumPayoutPct: 80,
+    };
+    const makeGenome = (id: string, feature: 'return_1' | 'return_3') => ({
+      id,
+      genome: {
+        version: 1 as const,
+        expression: { kind: 'feature' as const, feature },
+        activationThreshold: 0.70,
+        signature: id,
+        complexity: 1,
+      },
+      discoveryMetrics: { ...discovery },
+    });
+    const strongPaper = {
+      trades: 120,
+      scoredTrades: 120,
+      wins: 90,
+      losses: 30,
+      scratches: 0,
+      winRate: 0.75,
+      allTimeWinRate: 0.75,
+      rollingWinRates: [],
+      netReturnUnits: 30,
+      minimumPayoutPct: 80,
+      netPips: 0,
+      profitFactor: 1.5,
+      confidenceInterval95: [0.67, 0.82] as [number, number],
+    };
+    const matureStrong = { ...makeGenome('mature-strong', 'return_1'), paperMetrics: strongPaper };
+    const smallNoisy = {
+      ...makeGenome('small-noisy', 'return_3'),
+      paperMetrics: {
+        ...strongPaper,
+        trades: 40,
+        scoredTrades: 40,
+        wins: 12,
+        losses: 28,
+        winRate: 0.30,
+        netReturnUnits: -16,
+        confidenceInterval95: [0.18, 0.45] as [number, number],
+      },
+    };
+    const matureBad = {
+      ...makeGenome('mature-bad', 'return_3'),
+      paperMetrics: {
+        ...strongPaper,
+        wins: 55,
+        losses: 45,
+        winRate: 0.55,
+        netReturnUnits: -2,
+        profitFactor: 0.90,
+        confidenceInterval95: [0.45, 0.64] as [number, number],
+      },
+    };
+    if (!hasSufficientForwardParentEvidence(strongPaper)) {
+      throw new Error('A genuinely positive mature paper sample should qualify as forward parent evidence.');
+    }
+    if (hasSufficientForwardParentEvidence(matureBad.paperMetrics)) {
+      throw new Error('Negative or break-even paper performance must not qualify as parent evidence.');
+    }
+    if (!(evolutionaryParentFitness(matureStrong) > evolutionaryParentFitness(makeGenome('validation-only', 'return_3')))) {
+      throw new Error('Mature positive forward evidence must influence parent ranking.');
+    }
+    const selected = selectEvolutionParents([matureStrong, smallNoisy, matureBad], 10);
+    const selectedIds = new Set(selected.map(parent => parent.id));
+    if (!selectedIds.has('small-noisy')) {
+      throw new Error('A sub-100-outcome sample must not be allowed to overturn frozen discovery evidence.');
+    }
+    if (selectedIds.has('mature-bad')) {
+      throw new Error('A mature negative forward record must remove that genome from reproduction.');
     }
   });
 
