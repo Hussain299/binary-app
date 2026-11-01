@@ -318,10 +318,16 @@ apiRouter.post('/opportunities/:id/revise', (req: Request, res: Response) => {
     return res.status(409).json({ error: 'No same-snapshot forecast exists for the requested horizon. Generate a fresh batch rather than extrapolating an unmeasured path.' });
   }
   try {
-    const revised = opportunityEngine.reviseDirection(source, direction);
+    const requestedEntryPrice = req.body?.entryPrice === undefined
+      ? source.proposedEntryPrice
+      : Number(req.body.entryPrice);
+    if (!Number.isFinite(requestedEntryPrice) || requestedEntryPrice <= 0) {
+      return res.status(400).json({ error: 'entryPrice must be a positive finite price.' });
+    }
+    const revised = opportunityEngine.reviseDirection(source, direction, requestedEntryPrice);
     revised.humanDecision.parentOpportunityId = original.id;
     revised.humanDecision.horizonMinutes = requestedHorizon as 5 | 10 | 15 | 20 | 25 | 30;
-    revised.humanDecision.notes = typeof req.body?.notes === 'string' ? req.body.notes.slice(0, 500) : 'Human revised direction and/or horizon.';
+    revised.humanDecision.notes = typeof req.body?.notes === 'string' ? req.body.notes.slice(0, 500) : 'Human revised direction, horizon and/or entry reference.';
     db.storeOpportunities([revised]);
     return res.json({
       success: true,
