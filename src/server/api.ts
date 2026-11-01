@@ -249,19 +249,13 @@ apiRouter.get('/evolution/state', (_req: Request, res: Response) => {
   });
 });
 
-// Validate one generated candidate against its pair's uploaded historical candles.
-apiRouter.post('/strategies/validate', (req: Request, res: Response) => {
-  try {
-    const gene = db.getSynthesizedStrategyById(String(req.body.geneId || ''));
-    if (!gene) return res.status(404).json({ error: 'Strategy candidate not found.' });
-    const symbol = gene.symbol || FOREX_PAIRS.find(p => p.replace('/', '') === String(req.body.symbol || '').toUpperCase().replace('/', ''));
-    if (!symbol) return res.status(400).json({ error: 'The candidate has no currency pair. Supply a valid symbol.' });
-    const candles = historicalDataStore.getCandles(symbol);
-    const validated = researchEngine.validateSynthesizedStrategy({ ...gene, symbol }, candles);
-    res.json({ success: true, gene: validated });
-  } catch (err: any) {
-    res.status(409).json({ error: err.message });
-  }
+// Individual holdout testing is deliberately disabled: the untouched test is only
+// exposed to pre-registered finalists from a complete discovery-ranked batch.
+apiRouter.post('/strategies/validate', (_req: Request, res: Response) => {
+  return res.status(409).json({
+    error: 'Individual candidate holdout testing is disabled to prevent repeated test-set selection. Run the 300-candidate research batch; only validation-qualified finalists are evaluated on the untouched test.',
+    requiredProcess: 'POST /api/strategies/search-batch',
+  });
 });
 
 // Run a real 300-candidate symbolic search against imported M1 history.
@@ -364,25 +358,13 @@ apiRouter.get('/strategies/search-batch/:jobId', (req: Request, res: Response) =
   return res.json(job);
 });
 
-// POST /api/strategies/evolve — Trigger immediate evolutionary synthesis of a novel strategy
-apiRouter.post('/strategies/evolve', async (_req: Request, res: Response) => {
-  try {
-    const pair: ForexSymbol = FOREX_PAIRS[Math.floor(Math.random() * FOREX_PAIRS.length)];
-    const { candles } = await dataFeedEngine.fetchCandles(pair, 60);
-    const generations = db.getGenerations();
-    const currentGen = (generations[0]?.generation || 7) + 1;
-    const newGene = researchEngine.synthesizeInfiniteNovelStrategy(candles, pair, currentGen);
-    
-    res.json({
-      success: true,
-      gene: newGene,
-      strategies: db.getSynthesizedStrategies(),
-      promotedCount: db.getPromotedActiveStrategies().length,
-      paperTradingCount: db.getPaperTradingStrategies().filter(gene => gene.status === 'PAPER_TRADING').length,
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
+// Single random-candidate creation is disabled. Use the complete 300-candidate
+// evolutionary search so that candidates are compared and tested under one protocol.
+apiRouter.post('/strategies/evolve', (_req: Request, res: Response) => {
+  return res.status(410).json({
+    error: 'Single random candidate generation has been retired. Start a complete 300-candidate evolutionary research batch instead.',
+    requiredProcess: 'POST /api/strategies/search-batch',
+  });
 });
 
 // POST /api/signals/clear-history — Purges closed trade history while keeping active/pending signals
