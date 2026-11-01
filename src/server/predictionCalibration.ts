@@ -14,6 +14,8 @@ export interface CalibrationObservation {
 
 export interface CalibratedScore {
   probability: number | null;
+  /** One-sided 95% Wilson lower bound for the fitted isotonic block. */
+  lowerConfidenceProbability: number | null;
   status: "CALIBRATED" | "UNCALIBRATED" | "OVERCONFIDENT";
   sampleSize: number;
   /** Forward-challenged Brier score; null until a chronological validation slice exists. */
@@ -33,6 +35,18 @@ interface CalibrationBlock {
 function blockProbability(block: CalibrationBlock): number {
   // Beta(2,2) shrinkage prevents small bins from reporting extreme probabilities.
   return (block.wins + 2) / (block.count + 4);
+}
+
+function wilsonLowerBound(wins: number, sampleSize: number, z = 1.96): number {
+  if (sampleSize <= 0) return 0;
+  const p = Math.max(0, Math.min(1, wins / sampleSize));
+  const z2 = z * z;
+  const denominator = 1 + z2 / sampleSize;
+  const center = p + z2 / (2 * sampleSize);
+  const margin = z * Math.sqrt(
+    (p * (1 - p) / sampleSize) + (z2 / (4 * sampleSize * sampleSize))
+  );
+  return Math.max(0, Math.min(1, (center - margin) / denominator));
 }
 
 function mergeBlocks(left: CalibrationBlock, right: CalibrationBlock): CalibrationBlock {
@@ -165,6 +179,7 @@ export function calibratePredictionScore(
   if (chronological.length < minimumSampleSize) {
     return {
       probability: null,
+      lowerConfidenceProbability: null,
       status: "UNCALIBRATED",
       sampleSize: chronological.length,
       brierScore: null,
@@ -179,10 +194,13 @@ export function calibratePredictionScore(
 
   // The live estimate uses all outcomes known before this prediction timestamp.
   const finalBlocks = buildIsotonicBlocks(chronological);
-  const probability = probabilityForScore(finalBlocks, rawScore);
+  const matchedBlock = finalBlocks.find(block => rawScore <= block.maxScore) || finalBlocks[finalBlocks.length - 1];
+  const probability = blockProbability(matchedBlock);
+  const lowerConfidenceProbability = wilsonLowerBound(matchedBlock.wins, matchedBlock.count);
 
   return {
     probability: Number(probability.toFixed(4)),
+    lowerConfidenceProbability: Number(lowerConfidenceProbability.toFixed(4)),
     status: rawScore - probability >= 0.10 ? "OVERCONFIDENT" : "CALIBRATED",
     sampleSize: chronological.length,
     brierScore: diagnostics.brierScore,
