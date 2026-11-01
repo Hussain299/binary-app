@@ -469,6 +469,7 @@ export interface EvolutionGeneration {
   lessonsLearned: string[];
   /** Present only for real 300-candidate symbolic search batches. */
   researchBatchId?: string;
+  status?: 'COMPLETED' | 'FAILED';
   symbol?: ForexSymbol;
   bestValidationExpectedValueUnits?: number;
   holdoutPeriod?: { start: string; end: string };
