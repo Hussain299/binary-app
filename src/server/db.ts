@@ -697,6 +697,14 @@ class DatabaseService {
       scoredOutcomes: [], signalIds: [], bayesAlpha: 1, bayesBeta: 1,
       updatedAt: new Date().toISOString(),
     };
+    // Final model-learning guard: only outcomes whose decision, entry and expiry
+    // stayed inside one open FX week may update the strategy evidence ledger.
+    const decisionMs = Date.parse(signal.predictionTimeUtc);
+    const entryMs = Date.parse(signal.actualEntryTimeUtc || signal.candleOpenTimeUtc || signal.entryWindowStartUtc);
+    const expiryMs = Date.parse(signal.plannedExitTimeUtc || signal.candleCloseTimeUtc || signal.entryWindowEndUtc);
+    if (!isForexSignalScheduleValid(decisionMs, entryMs, expiryMs)) {
+      return { ...existing };
+    }
     existing.scoredOutcomes = Array.isArray(existing.scoredOutcomes)
       ? existing.scoredOutcomes.filter(outcome =>
           (outcome.result === 'WIN' || outcome.result === 'LOSS') &&
