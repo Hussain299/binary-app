@@ -105,15 +105,24 @@ class DatabaseService {
           parsed.synthesizedStrategies = parsed.synthesizedStrategies.filter(
             (gene: any) => !hardcodedSeedIds.has(gene.id)
           );
+          const completedBatchIds = new Set(
+            (Array.isArray(parsed.generations) ? parsed.generations : [])
+              .filter((generation: any) =>
+                generation?.researchBatchId && generation.status === 'COMPLETED'
+              )
+              .map((generation: any) => generation.researchBatchId)
+          );
           parsed.synthesizedStrategies = parsed.synthesizedStrategies.map((gene: any) => {
-            if (!gene.backtestMetrics || !gene.accuracyStatus ||
-                gene.backtestMetrics.testScoredSampleSize < 300 ||
-                gene.backtestMetrics.validationScoredSampleSize < 150 ||
-                gene.backtestMetrics.testWinRate < 0.70 ||
-                gene.backtestMetrics.validationWinRate < 0.70 ||
-                !Array.isArray(gene.backtestMetrics.testBlockWinRates) ||
-                gene.backtestMetrics.testBlockWinRates.length !== 3 ||
-                gene.backtestMetrics.testBlockWinRates.some((rate: number) => rate < 0.70)) {
+            const registeredCompletedBatch =
+              typeof gene.searchBatchId === 'string' &&
+              completedBatchIds.has(gene.searchBatchId) &&
+              parsed.researchHoldoutWindows.some((window: any) => window.batchId === gene.searchBatchId);
+            if (!registeredCompletedBatch ||
+                !hasSufficientHistoricalApprovalEvidence(
+                  gene.backtestMetrics,
+                  gene.accuracyStatus,
+                  gene.sampleCount
+                )) {
               return {
                 ...gene,
                 verifiedAccuracy: 0,
@@ -124,13 +133,12 @@ class DatabaseService {
                 status: 'EXPERIMENTING',
               };
             }
-            // Older approval records may predate the stricter forward 300-trade gate.
+            // Re-check forward approval on every restart.
             if (gene.status === 'PROMOTED_ACTIVE' && !this.hasForwardApprovalEvidence(gene)) {
               return { ...gene, status: 'PAPER_TRADING' };
             }
             return gene;
-          });
-        }
+          });        }
         // An empty population stays empty until the research engine actually generates candidates.
         if (Array.isArray(parsed.signals)) {
           // Keep persistent trade history while filtering out removed pairs or test artifacts
@@ -635,17 +643,18 @@ class DatabaseService {
 
   private hasForwardApprovalEvidence(gene: SynthesizedStrategyGene): boolean {
     const metrics = gene.paperMetrics;
-    return !!metrics &&
-      metrics.trades >= 300 &&
-      metrics.scoredTrades >= 300 &&
-      metrics.winRate >= 0.70 &&
-      Array.isArray(metrics.rollingWinRates) &&
-      metrics.rollingWinRates.length === 3 &&
-      metrics.rollingWinRates.every(rate => rate >= 0.70) &&
-      metrics.minimumPayoutPct >= 80 &&
-      metrics.netReturnUnits > 0 &&
-      metrics.profitFactor >= 1.15 &&
-      metrics.confidenceInterval95[0] >= 0.60;
+    if (!metrics || metrics.trades < 300 || metrics.scoredTrades < 300 ||
+        metrics.minimumPayoutPct < 80 || metrics.netReturnUnits <= 0 ||
+        metrics.profitFactor < 1.15 ||
+        !Array.isArray(metrics.rollingWinRates) ||
+        metrics.rollingWinRates.length !== 3 ||
+        !Array.isArray(metrics.confidenceInterval95) ||
+        metrics.confidenceInterval95.length !== 2) return false;
+    const breakEven = 1 / (1 + metrics.minimumPayoutPct / 100);
+    return metrics.winRate > breakEven &&
+      metrics.rollingWinRates.every(rate => Number.isFinite(rate) && rate > breakEven) &&
+      Number.isFinite(metrics.confidenceInterval95[0]) &&
+      metrics.confidenceInterval95[0] > breakEven;
   }
 
   public getPromotedActiveStrategies(): SynthesizedStrategyGene[] {
