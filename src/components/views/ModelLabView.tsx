@@ -23,13 +23,13 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({ experiments }) => {
       <section className="rounded-xl border border-amber-800/60 bg-amber-950/20 p-5 space-y-2">
         <div className="flex items-center gap-2 text-amber-300">
           <ShieldCheck className="w-5 h-5" />
-          <h2 className="text-base font-bold">Individual holdout testing is disabled</h2>
+          <h2 className="text-base font-bold">Single-rule testing is disabled</h2>
         </div>
         <p className="text-sm text-neutral-200 leading-relaxed">
           Re-running one rule against the same final test period lets repeated choices overfit the test itself. SignalForge therefore does not publish new single-rule test scores from this screen.
         </p>
         <p className="text-xs text-neutral-400 leading-relaxed">
-          Use the 300-candidate evolutionary research process instead: it ranks candidates on chronological train/validation data, opens the untouched test only for preselected finalists, and permanently records the consumed test window for that currency pair. A later batch requires at least 30,000 newer genuine M1 candles.
+          Use the 300-candidate evolutionary research process instead: it ranks candidates on chronological train/validation data, opens the untouched test only for preselected finalists, and permanently records the consumed test window for that currency pair. A new batch requires at least 60,000 genuinely newer M1 candles.
         </p>
       </section>
 
