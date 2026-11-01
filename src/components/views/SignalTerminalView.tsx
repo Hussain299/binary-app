@@ -947,7 +947,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                             <Lightbulb className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                           )}
                           <span className="text-neutral-200 font-semibold truncate text-[11px]">
-                            {sig.strategyName || '5-Min Momentum Breakout'}
+                            {sig.strategyName || 'Unclassified historical signal'}
                           </span>
                         </div>
                         <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800/80 font-mono text-[11px] font-bold shrink-0">
@@ -1050,10 +1050,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-purple-800/80 space-y-2">
                 <span className="font-bold text-purple-400 block text-sm flex items-center gap-1.5">
                   <Layers className="w-4 h-4" />
-                  1. Signal Confluence (Strength Score, Not Win Probability)
+                  1. Symbolic Genome Activation (Strength Score, Not Win Probability)
                 </span>
                 <p>
-                  The current rule-based signal engine combines technical confluences such as trend direction, wick geometry, RSI and range expansion. A larger confluence count is only a signal-strength heuristic; it does not establish a win rate. Performance is calculated separately from uploaded historical tests and completed forward paper outcomes.
+                  The current candidate engine evaluates each stored symbolic genome against causal, normalized market features. Its activation score controls whether a candidate fires; it is not a calibrated probability of winning. Performance is calculated separately from untouched historical tests and evolved-genome forward paper outcomes.
                 </p>
               </div>
 
@@ -1070,7 +1070,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-emerald-800/80 space-y-2">
                 <span className="font-bold text-emerald-400 block text-sm flex items-center gap-1.5">
                   <Brain className="w-4 h-4" />
-                  3. Every Closed Trade Is Forward Paper Evidence
+                  3. Every Closed Evolved-Genome Trade Is Forward Paper Evidence
                 </span>
                 <p>
                   Each decisive WIN or LOSS updates that strategy's persisted Beta posterior exactly once. SCRATCH results do not change the win/loss posterior. The prediction-time 19-feature vector is stored with its settled outcome in a separate episodic memory bank; later signals compare the ten closest earlier trades and are vetoed only when a sufficiently similar neighborhood has non-positive payout-adjusted return.
