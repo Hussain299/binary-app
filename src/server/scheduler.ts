@@ -183,9 +183,7 @@ export class AutonomousScheduler {
             } else {
               this.logMind(
                 'EXECUTION',
-                `Position closed for ${sig.symbol} ${sig.direction} at ${sig.actualExitPrice}. Net: ${
-                  sig.netReturnPips! > 0 ? '+' : ''
-                }${sig.netReturnPips} pips (${sig.outcomeResult}). Recorded as a forward paper observation ${tradeExp.id}.`,
+                `Paper contract closed for ${sig.symbol} ${sig.direction} at ${sig.actualExitPrice}. Payout-adjusted return: ${(sig.netReturnUnits ?? 0) > 0 ? '+' : ''}${(sig.netReturnUnits ?? 0).toFixed(3)} stake units (${sig.outcomeResult}). Recorded as forward paper observation ${tradeExp.id}.`,
                 sig.symbol,
                 sig.id
               );
