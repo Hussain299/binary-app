@@ -12,7 +12,6 @@ import {
   ForexSymbol,
   ResearchExperiment,
   RuleFamily,
-  SynthesizedStrategyGene,
 } from '../types/index.js';
 import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.js';
 import { db } from './db.js';
