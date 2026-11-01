@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research-integrity-overhaul
+      - research-intelligence-foundation
   pull_request:
     branches:
       - main
