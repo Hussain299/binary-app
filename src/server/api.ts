@@ -272,10 +272,10 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
     const jobId = `strategy_search_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     const latestCandidateGeneration = db.getSynthesizedStrategies().reduce(
       (maximum, gene) => Math.max(maximum, gene.generation || 0),
-      7
+      0
     );
     const latestGeneration = Math.max(
-      db.getGenerations()[0]?.generation || 7,
+      db.getGenerations()[0]?.generation || 0,
       latestCandidateGeneration
     );
     const batchGeneration = latestGeneration + 1;
