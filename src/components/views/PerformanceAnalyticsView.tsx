@@ -35,10 +35,10 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
       <div className="pb-4 border-b border-neutral-800">
         <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
           <BarChart3 className="w-4 h-4 text-emerald-400" />
-          <span>Performance Analytics & Evidence</span>
+          <span>Paper performance</span>
         </h3>
         <p className="text-xs text-neutral-400 font-mono mt-1">
-          Evolved-genome forward-paper outcomes only, using payout-adjusted binary contract returns. Legacy rule-based observations are excluded.
+          Settled evolved-strategy paper outcomes only. Paper prices are not broker fills.
         </p>
       </div>
 
