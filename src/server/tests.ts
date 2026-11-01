@@ -30,7 +30,7 @@ import {
   doesResearchHoldoutOverlap,
 } from './evolutionEngine.js';
 import { findEligibleStartTimeframes, getNextCandleOpenMs } from './tradingClock.js';
-import { getForexMarketState, getSessionFromTimestamp, isForexMarketIntervalOpen, isForexMarketOpenAt } from './marketHours.js';
+import { getForexMarketState, getSessionFromTimestamp, isForexMarketIntervalOpen, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -121,6 +121,25 @@ export async function runAllVerificationTests(): Promise<{
       Date.parse('2026-11-01T22:25:00.000Z')
     )) {
       throw new Error('A short interval after the Sunday reopen should be eligible.');
+    }
+  });
+
+  await runTest('MARKET_HOURS', 'Legacy weekend-created signals cannot be revived after the weekly reopen', () => {
+    const fridayDecision = Date.parse('2026-10-30T20:40:00.000Z'); // Friday 16:40 EDT
+    const fridayEntry = Date.parse('2026-10-30T20:45:00.000Z');
+    const fridayExpiry = Date.parse('2026-10-30T20:55:00.000Z');
+    if (!isForexSignalScheduleValid(fridayDecision, fridayEntry, fridayExpiry)) {
+      throw new Error('A valid Friday decision and contract wholly before the weekly close should remain valid.');
+    }
+    const saturdayDecision = Date.parse('2026-10-31T16:00:00.000Z');
+    const sundayEntry = Date.parse('2026-11-01T22:10:00.000Z');
+    const sundayExpiry = Date.parse('2026-11-01T22:20:00.000Z');
+    if (isForexSignalScheduleValid(saturdayDecision, sundayEntry, sundayExpiry)) {
+      throw new Error('A signal predicted on Saturday must remain cancelled after the Sunday reopen.');
+    }
+    const fridayDecisionSundayEntry = Date.parse('2026-11-01T22:10:00.000Z');
+    if (isForexSignalScheduleValid(fridayDecisionSundayEntry, sundayEntry, sundayExpiry)) {
+      throw new Error('A prediction cannot claim validity if its decision timestamp is closed.');
     }
   });
 
