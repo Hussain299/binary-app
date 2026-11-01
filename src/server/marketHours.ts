@@ -203,7 +203,7 @@ export function getMarketSessionDefinitions(value: string | Date | number = Date
  * New York 12:00–14:00; late New York 14:00–17:00.
  * The corresponding UTC/IST labels adjust automatically for US daylight saving.
  */
-export function getSessionFromTimestamp(timestampUtc: string | Date | number): {
+export function getReportingSessionFromTimestamp(timestampUtc: string | Date | number): {
   id: SessionDefinition['id'];
   name: string;
   shortName: string;
