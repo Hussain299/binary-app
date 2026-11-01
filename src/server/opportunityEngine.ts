@@ -213,8 +213,6 @@ export function evaluateOpportunityHoldout(
 
   for (const row of historicalRows) {
     if (row.index < holdoutStartIndex) continue;
-    const direction = directionAt(row);
-    if (!direction) continue;
 
     const entryIndex = row.index + 1;
     const exitIndex = row.index + horizon;
@@ -224,6 +222,10 @@ export function evaluateOpportunityHoldout(
     if (entryTimeMs < busyUntilMs) continue;
     if (candles[exitIndex].timestampMs !== expiryTimeMs - M1_MS) continue;
     if (!isForexMarketIntervalOpen(entryTimeMs, expiryTimeMs)) continue;
+
+    // Only evaluate a hypothesis at a valid, non-overlapping holdout decision point.
+    const direction = directionAt(row);
+    if (!direction) continue;
 
     const entryPrice = candles[entryIndex].open;
     const exitPrice = candles[exitIndex].close;
