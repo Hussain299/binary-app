@@ -89,7 +89,7 @@ export class EntryExitEngine {
     const signalHigh = params.signalCandle.high;
     const signalLow = params.signalCandle.low;
 
-    // Dynamic Expiry Duration (5 to 30 minutes based on strategy and accuracy)
+    // The selected genome controls a 5–30 minute starting candle and matching expiry horizon.
     const expiryMinutes = params.expiryMinutes || (
       params.ruleFamily.includes('momentum')
         ? 5
