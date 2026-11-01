@@ -462,6 +462,29 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
 
               <p className="text-neutral-300 leading-relaxed">{gen.summary}</p>
 
+              {gen.subGenerations && gen.subGenerations.length > 0 && (
+                <div className="rounded border border-neutral-800 bg-neutral-950 p-3 space-y-2">
+                  <div className="text-[10px] uppercase text-neutral-500 font-semibold">
+                    Internal Genetic Generations · 30 candidates each
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-2">
+                    {gen.subGenerations.map(stage => (
+                      <div key={stage.generation} className="rounded border border-neutral-800 p-2 space-y-1">
+                        <div className="text-[10px] font-bold text-white">Gen {stage.generation}</div>
+                        <div className="text-[10px] text-neutral-400">{stage.candidateCount} candidates · {stage.qualifiedParentCount} parent-qualified</div>
+                        <div className="text-[10px] text-neutral-400">{stage.distinctSpecies} qualified species</div>
+                        <div className="text-[10px] text-neutral-300">Best validation EV: {stage.bestValidationExpectedValueUnits.toFixed(3)}</div>
+                        <div className="text-[10px] text-neutral-500">Best validation WR: {(stage.bestValidationWinRate * 100).toFixed(1)}%</div>
+                        <div className="text-[10px] text-neutral-500">Mean mutation: {(stage.meanMutationRate * 100).toFixed(1)}%</div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-neutral-500">
+                    These are discovery/validation measurements used for evolution, not untouched-test or forward-paper results.
+                  </p>
+                </div>
+              )}
+
               {/* Lessons Learned */}
               <div className="bg-neutral-950 p-3 rounded border border-neutral-800 space-y-1 text-neutral-400 text-[11px]">
                 <div className="text-neutral-500 uppercase text-[10px] font-semibold mb-1">
