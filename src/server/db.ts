@@ -525,7 +525,10 @@ class DatabaseService {
   public getSessionAccuracyBreakdown(): MarketSessionInfo[] {
     const currentSession = getSessionFromTimestamp(new Date());
     const closedSignals = this.getSignals().filter(
-      s => s.lifecycleState === 'CLOSED' && ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
+      s => s.isNovelAiSynthesized === true &&
+        !!s.synthesizedGeneId &&
+        s.lifecycleState === 'CLOSED' &&
+        ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
     );
 
     const sessions: Array<{
