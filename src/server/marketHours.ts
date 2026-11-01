@@ -131,6 +131,21 @@ function nextWeeklyCloseMs(value: string | Date | number): number {
   );
 }
 
+/**
+ * Validates all three timestamps for a causal paper signal. The decision and
+ * its complete entry-to-expiry interval must fall inside the open FX week.
+ */
+export function isForexSignalScheduleValid(
+  predictionTimeMs: number,
+  entryTimeMs: number,
+  expiryTimeMs: number
+): boolean {
+  if (!Number.isFinite(predictionTimeMs) || !Number.isFinite(entryTimeMs) ||
+      !Number.isFinite(expiryTimeMs) || predictionTimeMs > entryTimeMs ||
+      !isForexMarketOpenAt(predictionTimeMs)) return false;
+  return isForexMarketIntervalOpen(entryTimeMs, expiryTimeMs);
+}
+
 /** True only when the whole [entry, expiry) interval occurs before the weekly close. */
 export function isForexMarketIntervalOpen(
   entryTimeMs: number,
