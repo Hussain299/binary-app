@@ -457,7 +457,7 @@ export async function runAllVerificationTests(): Promise<{
         revisedSell.forecast.lowerConfidenceBound >= revisedBuy.forecast.lowerConfidenceBound!) {
       throw new Error('A human direction override must not reuse the original model direction\'s holdout approval.');
     }
-    const changedEntry = opportunityEngine.reviseDirection(original, 'BUY', original.proposedEntryPrice + 0.00005);
+    const changedEntry = opportunityEngine.reviseDirection(original, 'BUY', original.proposedEntryPrice + 0.00002);
     if (changedEntry.audit.status !== 'INSUFFICIENT_EVIDENCE' ||
         changedEntry.audit.holdoutSampleSize !== 0) {
       throw new Error('A changed manual entry reference must receive fresh independent validation before shortlisting.');
