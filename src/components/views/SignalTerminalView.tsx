@@ -1592,7 +1592,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </div>
 
             <p className="text-xs text-neutral-300 leading-relaxed">
-              All settled forward-paper outcomes are grouped by their actual entry time, not the earlier prediction time. The five exclusive session windows use New York local time; UTC and IST labels adjust for daylight saving. This is descriptive evidence, not proof that a session causes better performance:
+              Only settled paper outcomes whose decision, entry and expiry all fell inside one open FX week are counted. They are grouped by actual entry time across five exclusive New York-time reporting buckets; UTC and IST labels adjust for daylight saving. This analytics split does not change the existing strategy session-affinity rules and does not prove that a session causes better performance:
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
