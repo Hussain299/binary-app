@@ -378,7 +378,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     const intervalMs = timeframeMinutes * 60_000;
     let entryTimeMs = (Math.floor(nowMs / intervalMs) + 1) * intervalMs;
     let decisionTimeMs = entryTimeMs - 3 * 60_000;
-    while (decisionTimeMs + 60_000 <= nowMs) {
+    while (decisionTimeMs + 25_000 <= nowMs) {
       entryTimeMs += intervalMs;
       decisionTimeMs += intervalMs;
     }
@@ -386,7 +386,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
       timeframeMinutes,
       entryTimeMs,
       decisionTimeMs,
-      windowActive: nowMs >= decisionTimeMs && nowMs < decisionTimeMs + 60_000,
+      windowActive: nowMs >= decisionTimeMs && nowMs < decisionTimeMs + 25_000,
     };
   });
   const activeDecisionTime = nextDecisionSchedules
@@ -409,7 +409,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
   };
   const nextDecisionCountdown = nextDecisionActive
-    ? formatCountdown(nextDecisionTimeMs + 60_000 - nowMs)
+    ? formatCountdown(nextDecisionTimeMs + 25_000 - nowMs)
     : formatCountdown(nextDecisionTimeMs - nowMs);
   const nextEntryCountdown = formatCountdown(nextEntryMs - nowMs);
   const nextDecisionTimeframes = nextDecisionGroup.map(item => `${item.timeframeMinutes}M`).join(' / ');
@@ -1321,7 +1321,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     const forward = strategyPerformance.find(item => item.strategyId === gene.id);
                     const measuredTest = gene.accuracyStatus === 'BACKTESTED' && !!gene.backtestMetrics;
                     const statusLabel = gene.status === 'PROMOTED_ACTIVE'
-                      ? 'FORWARD APPROVED'
+                      ? 'FORWARD PAPER GATE PASSED'
                       : gene.status === 'PAPER_TRADING'
                         ? 'PAPER TRADING'
                         : gene.status === 'REJECTED'
@@ -1750,7 +1750,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2 border-t border-neutral-850 text-xs font-mono">
                 <div className="bg-neutral-900/80 p-2 rounded-lg border border-neutral-800">
-                  <span className="text-[10px] text-neutral-400 block uppercase">Forward Approved</span>
+                  <span className="text-[10px] text-neutral-400 block uppercase">Forward-paper gate passed (paper only)</span>
                   <span className="text-sm font-extrabold text-cyan-400">
                     {synthesizedStrategies.filter(s => s.status === 'PROMOTED_ACTIVE').length} Strategies
                   </span>
@@ -1841,7 +1841,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                           <span className="font-bold text-white text-sm">{gene.name}</span>
                         </div>
                         <span className="text-[11px] text-neutral-400 font-mono block">
-                          Optimal Horizon: <strong className="text-amber-300">{gene.optimalHorizonMinutes} Min Dynamic Expiry</strong> · Session: <strong className="text-cyan-300">{gene.sessionAffinity}</strong>
+                          Entry candle / expiry: <strong className="text-amber-300">{gene.optimalHorizonMinutes} minutes</strong> · Session: <strong className="text-cyan-300">{gene.sessionAffinity}</strong>
                         </span>
                       </div>
 
