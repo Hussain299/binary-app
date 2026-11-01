@@ -892,7 +892,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                                 Loss Diagnostics
                               </span>
                               <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-900/40 text-rose-300 font-mono">
-                                {sig.lossAutopsy ? sig.lossAutopsy.rootCause.replace(/_/g, ' ') : 'Self-Evolved Antidote'}
+                                {sig.lossAutopsy ? sig.lossAutopsy.rootCause.replace(/_/g, ' ') : 'LOSS OBSERVATION'}
                               </span>
                             </div>
                             {sig.lossAutopsy && (
@@ -900,8 +900,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                                 <div className="text-neutral-300">
                                   <strong className="text-amber-400">Lesson:</strong> {sig.lossAutopsy.lessonsLearned[0]}
                                 </div>
-                                <div className="text-cyan-300 truncate">
-                                  <strong className="text-neutral-400">Unvalidated Filter Candidate:</strong> {sig.lossAutopsy.antidoteStrategyName}
+                                <div className="text-neutral-400">
+                                  No cause or replacement strategy was inferred from this single loss.
                                 </div>
                               </div>
                             )}
@@ -1426,13 +1426,13 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 </div>
               )}
 
-              {/* RULE-BASED LOSS DIAGNOSTICS */}
+              {/* OBSERVED LOSS RECORD */}
               {selectedSignal.lossAutopsy && (
                 <div className="pt-2 border-t border-rose-900/60 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-rose-400 uppercase font-black tracking-wider flex items-center gap-1.5 font-mono">
                       <Microscope className="w-3.5 h-3.5 text-rose-400" />
-                      RULE-BASED LOSS DIAGNOSTICS
+                      OBSERVED LOSS RECORD · NO CAUSAL CLAIM
                     </span>
                     <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono text-[9px] font-bold">
                       {selectedSignal.lossAutopsy.rootCause.replace(/_/g, ' ')}
@@ -1440,14 +1440,14 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   </div>
                   <div className="p-3 rounded-xl bg-rose-950/30 border border-rose-900/60 text-xs text-neutral-300 space-y-2">
                     <div>
-                      <strong className="text-rose-300 block mb-1 text-[11px]">Rule-based Diagnostic:</strong>
+                      <strong className="text-rose-300 block mb-1 text-[11px]">Observed outcome:</strong>
                       <p className="leading-relaxed text-[11px] text-neutral-300">
                         {selectedSignal.lossAutopsy.rootCauseExplanation}
                       </p>
                     </div>
 
                     <div className="pt-1.5 border-t border-rose-900/40">
-                      <strong className="text-amber-400 block mb-1 text-[11px]">Algorithmic Lessons Learned:</strong>
+                      <strong className="text-amber-400 block mb-1 text-[11px]">Recorded evidence:</strong>
                       <ul className="list-disc list-inside space-y-1 text-[11px] text-neutral-300">
                         {selectedSignal.lossAutopsy.lessonsLearned.map((l, i) => (
                           <li key={i}>{l}</li>
@@ -1455,14 +1455,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       </ul>
                     </div>
 
-                    <div className="pt-1.5 border-t border-rose-900/40">
-                      <strong className="text-cyan-400 block mb-1 text-[11px]">Autonomously Evolved Antidote Strategy:</strong>
-                      <div className="p-2 rounded-lg bg-neutral-950 border border-cyan-800/60 font-mono text-[10px] text-cyan-300 space-y-0.5">
-                        <span className="font-bold text-white block">{selectedSignal.lossAutopsy.antidoteStrategyName}</span>
-                        <span>{selectedSignal.lossAutopsy.antidoteFormula}</span>
-                      </div>
-                    </div>
-                  </div>
+                    <div className="pt-1.5 border-t border-rose-900/40 text-[11px] text-neutral-400">
+                      No replacement genome was fabricated from this loss. Its outcome is already stored against the original evolved genome and can influence future selection only when the forward sample is sufficiently mature.
+                    </div>                  </div>
                 </div>
               )}
             </div>
