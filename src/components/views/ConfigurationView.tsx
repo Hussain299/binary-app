@@ -69,10 +69,10 @@ export const ConfigurationView: React.FC = () => {
         <div>
           <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
             <Settings className="w-4 h-4 text-emerald-400" />
-            <span>Settings, Quality Assurance & Data Export</span>
+            <span>Settings & checks</span>
           </h3>
           <p className="text-xs text-neutral-400 font-mono mt-1">
-            SignalForge runs its research server locally, while live prices still depend on its configured public market-data providers.
+            Local persistence, market-data configuration and verification tools.
           </p>
         </div>
 
@@ -82,7 +82,7 @@ export const ConfigurationView: React.FC = () => {
           className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-emerald-950 bg-emerald-400 hover:bg-emerald-300 rounded transition-colors disabled:opacity-50"
         >
           <Play className={`w-3.5 h-3.5 ${isRunningTests ? 'animate-spin' : ''}`} />
-          <span>{isRunningTests ? 'Running Assertions...' : 'Run Automated Test Suite'}</span>
+          <span>{isRunningTests ? 'Running Assertions...' : 'Run tests'}</span>
         </button>
       </div>
 
