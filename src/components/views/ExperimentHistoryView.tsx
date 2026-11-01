@@ -26,9 +26,9 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
       <div className="h-12 border-b border-neutral-800 px-6 flex items-center justify-between shrink-0 bg-neutral-900/30">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 text-xs text-neutral-400 font-mono">
-            <span className="text-white font-semibold">EXPERIMENT HISTORY</span>
+            <span className="text-white font-semibold">ARCHIVED EXPERIMENTS</span>
             <span>·</span>
-            <span>{experiments.length} PERMANENT EXPERIMENT RUNS</span>
+            <span>{experiments.length} STORED RECORDS</span>
           </div>
         </div>
 
@@ -74,12 +74,17 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
       </div>
 
       {/* Main Table Content */}
+      <div className="px-6 pt-4">
+        <div className="rounded-lg border border-amber-900/60 bg-amber-950/20 p-3 text-[11px] text-neutral-300">
+          <strong className="text-amber-200">Legacy research warning:</strong> single-rule runs from the previous workflow may have inspected overlapping final-test windows. Their stored percentages are historical diagnostics only, not current strategy-approval evidence. New candidate tests are restricted to preselected batches and non-reused holdout periods.
+        </div>
+      </div>
       <div className="flex-1 overflow-y-auto p-6">
         {filtered.length === 0 ? (
           <div className="h-64 flex flex-col items-center justify-center text-center text-neutral-500 font-mono text-xs">
             <History className="w-8 h-8 text-neutral-600 mb-2" />
             <p className="text-neutral-400 font-medium text-sm">No Experiments Matched</p>
-            <p className="mt-1">Run an experiment from the Model Lab or trigger a research cycle.</p>
+            <p className="mt-1">Run a registered 300-candidate evolutionary batch from the research terminal.</p>
           </div>
         ) : (
           <div className="border border-neutral-800 rounded overflow-hidden">
@@ -89,9 +94,9 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
                   <th className="py-2.5 px-4 font-semibold">Type / Experiment</th>
                   <th className="py-2.5 px-4 font-semibold">Pair</th>
                   <th className="py-2.5 px-4 font-semibold">Rule & Horizon</th>
-                  <th className="py-2.5 px-4 font-semibold text-right">Train Dir. Acc</th>
-                  <th className="py-2.5 px-4 font-semibold text-right">Val Dir. Acc</th>
-                  <th className="py-2.5 px-4 font-semibold text-right">Test Dir. Acc</th>
+                  <th className="py-2.5 px-4 font-semibold text-right">Legacy Train</th>
+                  <th className="py-2.5 px-4 font-semibold text-right">Legacy Validation</th>
+                  <th className="py-2.5 px-4 font-semibold text-right">Legacy Test (not approval)</th>
                   <th className="py-2.5 px-4 font-semibold text-right">F1 Score</th>
                   <th className="py-2.5 px-4 font-semibold text-right">Profit Factor</th>
                   <th className="py-2.5 px-4 font-semibold text-center">Auditor Verdict</th>
@@ -107,7 +112,7 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
                       className="hover:bg-neutral-900/60 cursor-pointer transition-colors"
                     >
                       <td className="py-2.5 px-4">
-                        <span className="text-neutral-500">{isForwardObservation ? 'FORWARD' : `G${exp.generation}`}</span> ·{' '}
+                        <span className="text-neutral-500">{isForwardObservation ? 'FORWARD' : `LEGACY G${exp.generation}`}</span> ·{' '}
                         <strong className="text-white">{exp.name}</strong>
                       </td>
                       <td className="py-2.5 px-4 text-neutral-300 font-semibold">{exp.symbol}</td>
@@ -174,7 +179,12 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
               <div className="bg-neutral-950 p-3 rounded border border-neutral-800 space-y-1">
                 <div className="text-white font-semibold">Observed forward paper outcome: {selectedExp.liveOutcome || 'RECORDED'}</div>
                 <div>One completed candle-based paper observation only. This record is not a broker fill, historical backtest or strategy win-rate estimate.</div>
-                <div>Net result: {(selectedExp.observedNetPips ?? 0) > 0 ? '+' : ''}{(selectedExp.observedNetPips ?? 0).toFixed(1)} pips</div>
+                
+              </div>
+            )}
+            {selectedExp.experimentType !== 'LIVE_TRADE' && selectedExp.experimentType !== 'FORWARD_OBSERVATION' && (
+              <div className="rounded border border-amber-900/60 bg-amber-950/20 p-3 text-amber-200">
+                Archived single-rule experiment. Its holdout may have been inspected in earlier runs and must not be treated as current approval evidence.
               </div>
             )}
             <div>
