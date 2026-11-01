@@ -873,7 +873,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                             )}
                           </div>
                           <span className="font-mono text-sm font-black px-2 py-0.5 rounded bg-neutral-950 border border-neutral-800">
-                            {sig.netReturnPips !== null ? `${sig.netReturnPips > 0 ? '+' : ''}${sig.netReturnPips} Pips` : (sig.outcomeResult || 'CLOSED')}
+                            {typeof sig.netReturnUnits === 'number' ? `${sig.netReturnUnits > 0 ? '+' : ''}${sig.netReturnUnits.toFixed(3)} Stake Units` : typeof sig.netReturnPips === 'number' ? `${sig.netReturnPips > 0 ? '+' : ''}${sig.netReturnPips} Legacy Pips` : (sig.outcomeResult || 'CLOSED')}
                           </span>
                         </div>
 
