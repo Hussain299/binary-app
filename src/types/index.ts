@@ -158,6 +158,15 @@ export interface OpportunityForecastPoint {
   q90: number;
 }
 
+export interface OpportunityHistoricalCandle {
+  /** Completed one-minute candle offset from the snapshot; the latest candle is minute 0. */
+  minuteOffset: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
 export interface OpportunityForecast {
   status: 'AVAILABLE' | 'INSUFFICIENT_HISTORY';
   points: OpportunityForecastPoint[];
@@ -214,6 +223,7 @@ export interface TradeOpportunity {
   featureSchemaVersion: string;
   modelVersion: string;
   marketFeatureVector: number[];
+  recentPriceHistory: OpportunityHistoricalCandle[];
   forecast: OpportunityForecast;
   audit: OpportunityAudit;
   humanDecision: OpportunityHumanDecision;
