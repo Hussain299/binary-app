@@ -334,8 +334,8 @@ class DatabaseService {
   public storeOpportunities(opportunities: TradeOpportunity[]): void {
     if (!Array.isArray(this.state.opportunities)) this.state.opportunities = [];
     if (!opportunities.length) return;
-    const batchId = opportunities[0].batchId;
-    const existing = this.state.opportunities.filter(item => item.batchId !== batchId);
+    const incomingIds = new Set(opportunities.map(item => item.id));
+    const existing = this.state.opportunities.filter(item => !incomingIds.has(item.id));
     this.state.opportunities = [
       ...opportunities,
       ...existing,
