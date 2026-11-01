@@ -5,6 +5,7 @@ import type {
   StrategyFeatureName,
   StrategyGenome,
   StrategyDiscoveryMetrics,
+  StrategyPaperMetrics,
 } from "../types/index.js";
 
 export type StrategyStyle = "TREND" | "MEAN_REVERSION" | "HYBRID" | "UNKNOWN";
@@ -33,6 +34,8 @@ export interface EvolutionParentCandidate {
   id: string;
   genome?: StrategyGenome;
   discoveryMetrics?: StrategyDiscoveryMetrics;
+  /** Measured outcomes from the latest unique forward-paper sample. */
+  paperMetrics?: StrategyPaperMetrics;
 }
 
 /**
@@ -63,9 +66,53 @@ export function genomeSpeciesKey(genome?: StrategyGenome): string {
   return style + ":" + (features.slice(0, 4).join(",") || "constant");
 }
 
+const MIN_FORWARD_PARENT_SAMPLE = 100;
+
+/** Binary break-even probability at the worst payout observed in the paper sample. */
+export function binaryBreakEvenWinRate(payoutPct: number): number {
+  if (!Number.isFinite(payoutPct) || payoutPct <= 0) return 1;
+  return 1 / (1 + payoutPct / 100);
+}
+
+/**
+ * Forward evidence is allowed to influence parent selection only after 100
+ * scored outcomes and only when its lower Wilson bound clears the actual
+ * payout break-even rate. Small samples cannot rewrite the genome population.
+ */
+export function hasSufficientForwardParentEvidence(
+  paper?: StrategyPaperMetrics
+): boolean {
+  if (!paper || paper.scoredTrades < MIN_FORWARD_PARENT_SAMPLE) return false;
+  if (
+    !Number.isFinite(paper.winRate) ||
+    !Number.isFinite(paper.netReturnUnits) ||
+    !Number.isFinite(paper.profitFactor) ||
+    !Number.isFinite(paper.minimumPayoutPct) ||
+    !Array.isArray(paper.confidenceInterval95) ||
+    paper.confidenceInterval95.length !== 2 ||
+    !paper.confidenceInterval95.every(Number.isFinite)
+  ) return false;
+  const breakEven = binaryBreakEvenWinRate(paper.minimumPayoutPct);
+  return paper.minimumPayoutPct >= 80 &&
+    paper.netReturnUnits > 0 &&
+    paper.profitFactor >= 1.15 &&
+    paper.winRate > breakEven &&
+    paper.confidenceInterval95[0] > breakEven;
+}
+
+/** Blend frozen discovery EV with mature forward EV; never uses untouched-test metrics. */
+export function evolutionaryParentFitness(candidate: EvolutionParentCandidate): number {
+  const discoveryEv = candidate.discoveryMetrics?.validationExpectedValueUnits ?? 0;
+  const paper = candidate.paperMetrics;
+  if (!paper || !hasSufficientForwardParentEvidence(paper)) return discoveryEv;
+  const forwardEvPerTrade = paper.netReturnUnits / Math.max(1, paper.scoredTrades);
+  const forwardWeight = Math.min(0.75, paper.scoredTrades / (paper.scoredTrades + 100));
+  return (discoveryEv * (1 - forwardWeight)) + (forwardEvPerTrade * forwardWeight);
+}
+
 function compareParentFitness(a: EvolutionParentCandidate, b: EvolutionParentCandidate): number {
   return (
-    (b.discoveryMetrics!.validationExpectedValueUnits - a.discoveryMetrics!.validationExpectedValueUnits) ||
+    (evolutionaryParentFitness(b) - evolutionaryParentFitness(a)) ||
     (b.discoveryMetrics!.validationWinRate - a.discoveryMetrics!.validationWinRate) ||
     (b.discoveryMetrics!.validationProfitFactor - a.discoveryMetrics!.validationProfitFactor) ||
     (a.genome!.complexity - b.genome!.complexity)
@@ -74,7 +121,8 @@ function compareParentFitness(a: EvolutionParentCandidate, b: EvolutionParentCan
 
 /**
  * Select validation-qualified parents while preserving distinct symbolic species.
- * Holdout metrics are not accepted by this function and cannot affect evolution.
+ * Mature forward paper evidence can disqualify a once-promising parent, or
+ * gradually influence its fitness. Historical holdout metrics are not accepted.
  */
 export function selectEvolutionParents<T extends EvolutionParentCandidate>(
   candidates: T[],
@@ -86,18 +134,27 @@ export function selectEvolutionParents<T extends EvolutionParentCandidate>(
   const ranked = candidates
     .filter(candidate => {
       const metrics = candidate.discoveryMetrics;
-      return !!candidate.genome &&
-        !!metrics &&
-        metrics.trainScoredTrades >= 150 &&
-        metrics.validationScoredTrades >= 150 &&
-        Number.isFinite(metrics.validationWinRate) &&
-        metrics.validationWinRate >= 0.70 &&
-        Number.isFinite(metrics.validationExpectedValueUnits) &&
-        metrics.validationExpectedValueUnits > 0 &&
-        Number.isFinite(metrics.validationProfitFactor) &&
-        metrics.validationProfitFactor >= 1.15 &&
-        Number.isFinite(metrics.minimumPayoutPct) &&
-        (metrics.minimumPayoutPct ?? 0) >= 80;
+      if (!candidate.genome ||
+          !metrics ||
+          metrics.trainScoredTrades < 150 ||
+          metrics.validationScoredTrades < 150 ||
+          !Number.isFinite(metrics.validationWinRate) ||
+          metrics.validationWinRate < 0.70 ||
+          !Number.isFinite(metrics.validationExpectedValueUnits) ||
+          metrics.validationExpectedValueUnits <= 0 ||
+          !Number.isFinite(metrics.validationProfitFactor) ||
+          metrics.validationProfitFactor < 1.15 ||
+          !Number.isFinite(metrics.minimumPayoutPct) ||
+          (metrics.minimumPayoutPct ?? 0) < 80) return false;
+
+      // A mature negative/uncertain live-paper record removes this genome
+      // from reproduction; a small noisy record does not.
+      if (candidate.paperMetrics &&
+          candidate.paperMetrics.scoredTrades >= MIN_FORWARD_PARENT_SAMPLE &&
+          !hasSufficientForwardParentEvidence(candidate.paperMetrics)) {
+        return false;
+      }
+      return true;
     })
     .sort(compareParentFitness);
 
@@ -139,7 +196,7 @@ export function calculateAdaptiveMutationRate(
 
   const speciesCount = new Set(eligible.map(parent => genomeSpeciesKey(parent.genome))).size;
   const diversity = speciesCount / eligible.length;
-  const fitness = eligible.map(parent => parent.discoveryMetrics!.validationExpectedValueUnits);
+  const fitness = eligible.map(parent => evolutionaryParentFitness(parent));
   const mean = fitness.reduce((sum, value) => sum + value, 0) / fitness.length;
   const variance = fitness.reduce((sum, value) => sum + Math.pow(value - mean, 2), 0) / fitness.length;
   const coefficientOfVariation = Math.sqrt(variance) / Math.max(0.05, Math.abs(mean));
