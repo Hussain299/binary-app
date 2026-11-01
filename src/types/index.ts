@@ -185,6 +185,9 @@ export interface OpportunityAudit {
   rankScore: number;
   /** Later chronological holdout metrics; separated from the analogue library used for the graph. */
   holdoutSampleSize: number;
+  holdoutWins: number;
+  holdoutLosses: number;
+  holdoutScratches: number;
   holdoutWinRate: number | null;
   holdoutLowerConfidenceBound: number | null;
   holdoutExpectedValueLowerBound: number | null;
