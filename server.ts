@@ -9,6 +9,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { apiRouter } from './src/server/api.js';
 import { autonomousScheduler } from './src/server/scheduler.js';
+import { db } from './src/server/db.js';
+import { learningPlatform } from './src/server/learningPlatform.js';
 
 dotenv.config();
 
@@ -49,6 +51,23 @@ async function startServer() {
 
   // Start background autonomous research cycle
   autonomousScheduler.start();
+
+  // Reconcile due, human-approved paper predictions independently of UI polling.
+  const reconcileLearningOutcomes = () => {
+    try {
+      const result = learningPlatform.reconcileDuePredictions(
+        symbol => db.getCandles(symbol, 5000),
+        Date.now(),
+      );
+      if (result.resolved || result.invalidated) {
+        console.info('[Learning] Resolved ' + result.resolved + '; quarantined ' + result.invalidated + ' invalid outcomes.');
+      }
+    } catch (error) {
+      console.error('[Learning] Outcome reconciliation failed:', error);
+    }
+  };
+  reconcileLearningOutcomes();
+  setInterval(reconcileLearningOutcomes, 15_000);
 
   app.listen(PORT, HOST, () => {
     console.log(`[SignalForge ML] Server running at http://${HOST}:${PORT}`);

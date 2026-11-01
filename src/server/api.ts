@@ -11,6 +11,7 @@ import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
 import { opportunityEngine } from './opportunityEngine.js';
+import { learningPlatform, runLearningPlatformVerificationTests } from './learningPlatform.js';
 import { autonomousScheduler } from './scheduler.js';
 import { runAllVerificationTests } from './tests.js';
 import { historicalDataStore } from './historicalData.js';
@@ -773,8 +774,19 @@ apiRouter.get('/system/export-d1', (_req: Request, res: Response) => {
 // POST /api/test/run and /api/tests/run — Run automated verification test suite
 const handleRunTests = async (_req: Request, res: Response) => {
   try {
-    const report = await runAllVerificationTests();
-    res.json(report);
+    const baseReport = await runAllVerificationTests();
+    const learningResults = await runLearningPlatformVerificationTests();
+    const results = [...baseReport.results, ...learningResults];
+    const passed = results.filter(result => result.passed).length;
+    res.json({
+      summary: {
+        total: results.length,
+        passed,
+        failed: results.length - passed,
+        durationMs: baseReport.summary.durationMs + learningResults.reduce((sum, result) => sum + result.durationMs, 0),
+      },
+      results,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -792,6 +804,77 @@ apiRouter.get('/autopilot/logs', (_req: Request, res: Response) => {
 });
 
 // GET /api/autopilot/status — Autonomous Engine health and status
+// Forward learning is opt-in, human-approved, immutable and paper-only.
+apiRouter.get('/learning/board', (_req: Request, res: Response) => {
+  try {
+    const reconciliation = learningPlatform.reconcileDuePredictions(
+      symbol => db.getCandles(symbol, 5000),
+      Date.now(),
+    );
+    return res.json({
+      ...learningPlatform.getBoard(150),
+      reconciliation,
+      researchOnly: true,
+      brokerExecutionEnabled: false,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Learning board could not be loaded.' });
+  }
+});
+
+apiRouter.post('/learning/capture-approved', (_req: Request, res: Response) => {
+  try {
+    const summary = learningPlatform.captureApprovedOpportunities(db.getOpportunities(3000), Date.now());
+    return res.status(summary.captured > 0 ? 201 : 200).json({
+      success: true,
+      ...summary,
+      board: learningPlatform.getBoard(150).summary,
+      brokerExecutionEnabled: false,
+    });
+  } catch (err: any) {
+    return res.status(409).json({ error: err.message || 'Approved research snapshots could not be captured.' });
+  }
+});
+
+apiRouter.post('/learning/execution-profile', (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    const nullableNumber = (value: unknown): number | null => {
+      if (value === null || value === undefined || value === '') return null;
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) throw new Error('Execution assumptions must be finite numbers or blank.');
+      return parsed;
+    };
+    const executionProfile = learningPlatform.updateExecutionProfile({
+      payoutPct: Number(body.payoutPct),
+      spreadPips: nullableNumber(body.spreadPips),
+      slippagePips: nullableNumber(body.slippagePips),
+      latencyMs: nullableNumber(body.latencyMs),
+      assetAvailability: body.assetAvailability,
+      brokerAcceptance: body.brokerAcceptance,
+    });
+    return res.json({ success: true, executionProfile, brokerExecutionEnabled: false });
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Execution profile is invalid.' });
+  }
+});
+
+apiRouter.post('/learning/champion', (req: Request, res: Response) => {
+  try {
+    const cohortKey = String(req.body?.cohortKey || '');
+    const modelVersion = String(req.body?.modelVersion || '');
+    learningPlatform.setChampion(cohortKey, modelVersion, Date.now());
+    return res.json({
+      success: true,
+      board: learningPlatform.getBoard(150),
+      message: 'Champion designation updated by explicit human review. No automatic strategy execution was enabled.',
+      brokerExecutionEnabled: false,
+    });
+  } catch (err: any) {
+    return res.status(409).json({ error: err.message || 'Champion review was rejected by the evidence gate.' });
+  }
+});
+
 apiRouter.get('/autopilot/status', (_req: Request, res: Response) => {
   res.json({
     status: 'ACTIVE_AUTOPILOT',
