@@ -294,6 +294,8 @@ export interface StrategyBacktestMetrics {
   expectedValueUnits: number;
   profitFactor: number;
   confidenceInterval95: [number, number];
+  /** One-sided lower bound after Bonferroni correction across the ten holdout finalists. */
+  multipleTestingLowerBound?: number;
   /** Win rates for the latest three consecutive 100-trade blocks in the untouched test. */
   testBlockWinRates: number[];
   trainPeriod: { start: string; end: string };
