@@ -20,7 +20,7 @@ import {
 } from '../types/index.js';
 import { db } from './db.js';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
-import { calculateAdaptiveMutationRate, selectEvolutionParents } from './evolutionEngine.js';
+import { binaryBreakEvenWinRate, calculateAdaptiveMutationRate, outcomeFitsResearchWindow, selectEvolutionParents, wilsonLowerBound } from './evolutionEngine.js';
 import { ADVANCE_NOTICE_MS, M1_CANDLE_MS, getNextCandleOpenMs, TradingTimeframeMinutes } from './tradingClock.js';
 
 type StrategyHorizon = 5 | 10 | 15 | 20 | 25 | 30;
@@ -54,6 +54,39 @@ interface PreparedGeneResearchData {
 }
 
 export class ResearchEngine {
+  private evolutionBatchRunning = false;
+
+  public isEvolutionBatchRunning(): boolean {
+    return this.evolutionBatchRunning;
+  }
+
+  /** Shared lock prevents UI-triggered and scheduled searches from racing on holdout data. */
+  public async runNovelStrategySearchBatch(
+    symbol: ForexSymbol,
+    candles: Candle[],
+    searchBatchId: string,
+    baseGeneration: number,
+    onProgress: (progress: {
+      completed: number;
+      passedHistorical: number;
+      insufficientSample: number;
+      rejected: number;
+      replicationFinalists: number;
+    }) => void
+  ): Promise<SynthesizedStrategyGene[]> {
+    if (this.evolutionBatchRunning) {
+      throw new Error('An evolutionary research batch is already running.');
+    }
+    this.evolutionBatchRunning = true;
+    try {
+      return await this.runNovelStrategySearchBatchInternal(
+        symbol, candles, searchBatchId, baseGeneration, onProgress
+      );
+    } finally {
+      this.evolutionBatchRunning = false;
+    }
+  }
+
 
   /**
    * Computes technical features from candles:
@@ -1203,36 +1236,54 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     if (!gene.genome && !gene.operatorParameters) {
       throw new Error('This legacy candidate has no stored executable genome or coefficients. Generate a new symbolic candidate.');
     }
-    const trainRows = data.rows.filter(row => row.candle.timestampMs < data.trainEndMs);
-    const validationRows = data.rows.filter(row =>
-      row.candle.timestampMs >= data.validationStartMs &&
-      row.candle.timestampMs < data.validationEndMs
+    // Assign an outcome only when its complete entry-to-expiry interval is inside
+    // the partition. A decision bar before a boundary is not enough: its future
+    // settlement must never borrow prices from the next partition.
+    const trainRows = data.rows.filter(row =>
+      outcomeFitsResearchWindow(
+        row.entryTimeMs, row.entryTimeframeMinutes,
+        data.candles[60]?.timestampMs ?? -Infinity, data.trainEndMs
+      )
     );
-    const testRows = data.rows.filter(row => row.candle.timestampMs >= data.testStartMs);
+    const validationRows = data.rows.filter(row =>
+      outcomeFitsResearchWindow(
+        row.entryTimeMs, row.entryTimeframeMinutes,
+        data.validationStartMs, data.validationEndMs
+      )
+    );
+    const testEndMs = data.candles[data.candles.length - 1].timestampMs + M1_CANDLE_MS;
+    const testRows = data.rows.filter(row =>
+      outcomeFitsResearchWindow(
+        row.entryTimeMs, row.entryTimeframeMinutes, data.testStartMs, testEndMs
+      )
+    );
     const train = this.simulateGeneRows(gene, trainRows, data);
     const validation = this.simulateGeneRows(gene, validationRows, data);
     const test = this.simulateGeneRows(gene, testRows, data);
     const interval = this.wilsonInterval(test.wins, test.scoredTrades);
     const blockRates = this.getThreeBlockWinRates(test.scoredOutcomes);
+    const breakEvenRate = binaryBreakEvenWinRate(test.payoutPct);
+    const validationLowerBound = wilsonLowerBound(validation.wins, validation.scoredTrades);
+    // Ten finalists see the one-time holdout. One-sided Bonferroni alpha=.05/10
+    // controls family-wise false positives across those pre-registered candidates.
+    const multipleTestingLowerBound = wilsonLowerBound(test.wins, test.scoredTrades, 2.576);
     const enoughTrades = test.scoredTrades >= 300 && validation.scoredTrades >= 150 && train.scoredTrades >= 150;
     const passed =
       enoughTrades &&
-      test.winRate >= 0.70 &&
-      validation.winRate >= 0.70 &&
+      validationLowerBound > breakEvenRate &&
+      multipleTestingLowerBound > breakEvenRate &&
       blockRates.length === 3 &&
-      blockRates.every(rate => rate >= 0.70) &&
+      blockRates.every(rate => rate > breakEvenRate) &&
       test.netReturnUnits > 0 &&
-      test.profitFactor >= 1.15 &&
-      interval[0] >= 0.60;
+      test.profitFactor >= 1.15;
 
     let failureReason = '';
     if (test.scoredTrades < 300) failureReason = `Insufficient independent test outcomes: ${test.scoredTrades}/300.`;
     else if (validation.scoredTrades < 150 || train.scoredTrades < 150) failureReason = `Insufficient train/validation outcomes (train ${train.scoredTrades}, validation ${validation.scoredTrades}; require 150 each).`;
-    else if (validation.winRate < 0.70) failureReason = `Validation win rate ${(validation.winRate * 100).toFixed(1)}% is below 70%.`;
-    else if (test.winRate < 0.70) failureReason = `Untouched test win rate ${(test.winRate * 100).toFixed(1)}% is below 70%.`;
-    else if (blockRates.length !== 3 || blockRates.some(rate => rate < 0.70)) failureReason = 'One or more consecutive 100-trade test blocks fell below 70%.';
-    else if (test.netReturnUnits <= 0 || test.profitFactor < 1.15) failureReason = 'Binary payout-adjusted return or profit factor failed at the 80% payout assumption.';
-    else if (interval[0] < 0.60) failureReason = 'The 95% Wilson lower bound is below 60%.';
+    else if (validationLowerBound <= breakEvenRate) failureReason = `Validation 95% Wilson lower bound ${(validationLowerBound * 100).toFixed(1)}% does not clear payout break-even ${(breakEvenRate * 100).toFixed(1)}%.`;
+    else if (multipleTestingLowerBound <= breakEvenRate) failureReason = `Untouched-test lower bound after the ten-finalist correction (${(multipleTestingLowerBound * 100).toFixed(1)}%) does not clear payout break-even ${(breakEvenRate * 100).toFixed(1)}%.`;
+    else if (blockRates.length !== 3 || blockRates.some(rate => rate <= breakEvenRate)) failureReason = 'One or more consecutive 100-trade test blocks did not beat payout break-even.';
+    else if (test.netReturnUnits <= 0 || test.profitFactor < 1.15) failureReason = 'Payout-adjusted net expectancy or profit factor failed.';
 
     const backtestMetrics: StrategyBacktestMetrics = {
       trainSampleSize: train.trades,
@@ -1252,6 +1303,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       expectedValueUnits: Number(test.expectedValueUnits.toFixed(4)),
       profitFactor: Number(test.profitFactor.toFixed(2)),
       confidenceInterval95: interval,
+      multipleTestingLowerBound,
       testBlockWinRates: blockRates,
       trainPeriod: { start: data.candles[60].timestamp, end: new Date(data.trainEndMs).toISOString() },
       validationPeriod: { start: new Date(data.validationStartMs).toISOString(), end: new Date(data.validationEndMs).toISOString() },
@@ -1283,7 +1335,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     throw new Error('Individual candidate holdout testing is disabled. Use runNovelStrategySearchBatch so the pair holdout is reserved and exposed only to preselected finalists.');
   }
 
-  public async runNovelStrategySearchBatch(
+  private async runNovelStrategySearchBatchInternal(
     symbol: ForexSymbol,
     candles: Candle[],
     searchBatchId: string,
@@ -1317,6 +1369,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       gene: SynthesizedStrategyGene;
       trainScoredTrades: number;
       validationScoredTrades: number;
+      validationWins: number;
       trainWinRate: number;
       validationWinRate: number;
       validationExpectedValueUnits: number;
@@ -1389,6 +1442,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
         gene,
         trainScoredTrades: train.scoredTrades,
         validationScoredTrades: validation.scoredTrades,
+        validationWins: validation.wins,
         trainWinRate: train.winRate,
         validationWinRate: validation.winRate,
         validationExpectedValueUnits: validation.expectedValueUnits,
@@ -1411,7 +1465,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       .filter(candidate =>
         candidate.trainScoredTrades >= 150 &&
         candidate.validationScoredTrades >= 150 &&
-        candidate.validationWinRate >= 0.70 &&
+        wilsonLowerBound(candidate.validationWins, candidate.validationScoredTrades) > breakEvenRate &&
         candidate.validationExpectedValueUnits > 0 &&
         candidate.validationProfitFactor >= 1.15
       )
