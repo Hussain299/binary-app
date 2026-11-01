@@ -768,7 +768,7 @@ export async function runAllVerificationTests(): Promise<{
   });
 
   await runTest('RESEARCH', 'Skeptical Auditor Rejection of Overfitted Candidates', async () => {
-    const candles = makeM1TestCandles('EUR/GBP', 12000);
+    const candles = makeM1TestCandles('EUR/GBP', 40000);
     const exp = researchEngine.runWalkForwardExperiment('EUR/GBP', candles, 'wick_reversal', 15, 1, { allowTestFixtures: true });
     const reviews = await researchEngine.generateTrinityReviews(exp);
 
