@@ -14,11 +14,15 @@
     --app-accent: #a9f4d1;
     --app-accent-strong: #5bd8a5;
   }
-  html, body, #root { width:100%; min-width:320px; height:100%; min-height:100%; margin:0; }
+  html, body, #root { width:100%; min-width:320px; min-height:100%; margin:0; }
+  html { min-height:100%; }
   body {
+    min-height:100vh;
     font-family:var(--font-sans); background:var(--app-bg); color:var(--app-text);
-    overflow:hidden; text-rendering:optimizeLegibility; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+    overflow-x:hidden; overflow-y:auto;
+    text-rendering:optimizeLegibility; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
   }
+  #root { min-height:100vh; }
   button,input,select,textarea { font:inherit; }
   button { -webkit-tap-highlight-color:transparent; }
   button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible {
@@ -110,19 +114,8 @@
   animation:sf-drawer-in 260ms cubic-bezier(.2,.8,.2,1) both;
 }
 .sf-view-stage {
-  display:flex;min-width:0;min-height:0;flex:1 1 auto;flex-direction:column;
+  display:flex;min-width:0;flex:1 0 auto;flex-direction:column;
   transform-origin:50% 0;animation:sf-view-in 420ms cubic-bezier(.2,.75,.25,1) both;
-}
-.sf-view-stage--scroll {
-  /* Own the audit scroll at the viewport level; parents stay fixed and clipped. */
-  flex:1 1 0;min-width:0;min-height:0;height:100%;
-  overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;
-  -webkit-overflow-scrolling:touch;touch-action:pan-y;
-  scrollbar-gutter:stable;
-}
-.sf-view-stage--scroll > .sf-audit-page {
-  width:100%;min-height:100%;flex:0 0 auto;
-  overflow:visible;
 }
 @keyframes sf-view-in {
   from { opacity:0;transform:translate3d(0,10px,0) scale(.997);filter:blur(2px); }
@@ -131,8 +124,8 @@
 @keyframes sf-drawer-in { from {opacity:0;transform:translate3d(-14px,0,0)} to {opacity:1;transform:translate3d(0,0,0)} }
 
 .sf-page {
-  display:flex;min-width:0;min-height:0;flex:1 1 auto;flex-direction:column;
-  gap:clamp(16px,1.8vw,24px);overflow-x:hidden;overflow-y:auto;padding:clamp(18px,2.2vw,30px);background:transparent;
+  display:flex;min-width:0;flex:0 0 auto;flex-direction:column;
+  gap:clamp(16px,1.8vw,24px);overflow:visible;padding:clamp(18px,2.2vw,30px);background:transparent;
 }
 .sf-page > :first-child { min-width:0; }
 .sf-page h3,.sf-page h4 { letter-spacing:-.025em; }
@@ -183,7 +176,7 @@
   backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
 }
 .sf-lab-pool { min-height:230px; }
-.sf-lab-detail { border-radius:17px;overflow-x:hidden;overflow-y:auto; }
+.sf-lab-detail { border-radius:17px;overflow:visible; }
 .sf-filter-tab { border:1px solid transparent;border-radius:8px;transition:color 160ms ease,border-color 160ms ease,background 160ms ease; }
 .sf-filter-tab.bg-white\/10 { border-color:rgba(226,239,244,.09);background:rgba(255,255,255,.075);color:#f0f5f2; }
 .sf-opportunity-row { border:1px solid transparent;border-radius:12px;transition:transform 180ms cubic-bezier(.2,.8,.2,1),border-color 180ms ease,background 180ms ease,box-shadow 180ms ease; }
@@ -201,9 +194,9 @@
 ::-webkit-scrollbar-thumb:hover { background:#405363;background-clip:padding-box; }
 
 @media (max-width:1023px) {
-  .sf-lab-layout { overflow-y:auto; }
-  .sf-lab-pool { width:100%;max-height:310px;flex:0 0 auto; }
-  .sf-lab-detail { min-height:520px;flex:1 0 auto; }
+  .sf-lab-layout { overflow:visible; }
+  .sf-lab-pool { width:100%;flex:0 0 auto; }
+  .sf-lab-detail { min-height:520px;flex:0 0 auto; }
 }
 @media (max-width:640px) {
   .sf-topbar { min-height:60px;height:60px; }
