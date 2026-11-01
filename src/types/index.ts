@@ -171,7 +171,7 @@ export interface ResearchSignal {
   netReturnUnits?: number | null;
   outcomeResult: 'WIN' | 'LOSS' | 'SCRATCH' | 'PENDING' | 'CANCELLED';
   
-  // Model Meta & 5-Minute Candle Synchronization
+  // Model metadata and 5–30 minute entry-candle synchronization
   ruleFamily: string;
   modelVersion: string;
   notes?: string;
@@ -180,6 +180,8 @@ export interface ResearchSignal {
   strategyWinRate?: number;
   strategyHistoricalSampleSize?: number;
   strategyEvidenceStatus?: 'UNVALIDATED' | 'INSUFFICIENT_SAMPLE' | 'BACKTESTED';
+  /** Forward evidence gate only; paperOnly remains true regardless. */
+  strategyForwardApproved?: boolean;
   strategyId?: string;
   advanceNoticeMinutes?: number;
   candleOpenTimeUtc?: string;
