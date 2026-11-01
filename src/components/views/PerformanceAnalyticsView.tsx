@@ -7,28 +7,24 @@ interface PerformanceAnalyticsViewProps {
   signals: ResearchSignal[];
 }
 
-export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> = ({
-  experiments,
-  signals,
-}) => {
-  const completedSignals = signals.filter(
-    signal => signal.lifecycleState === 'CLOSED' &&
-      ['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult)
+export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> = ({ experiments, signals }) => {
+  const completed = signals.filter(signal =>
+    signal.lifecycleState === 'CLOSED' &&
+    ['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult)
   );
-  const scoredSignals = completedSignals.filter(
-    signal => signal.outcomeResult === 'WIN' || signal.outcomeResult === 'LOSS'
+  const scored = completed.filter(signal =>
+    signal.outcomeResult === 'WIN' || signal.outcomeResult === 'LOSS'
   );
-  const wins = scoredSignals.filter(signal => signal.outcomeResult === 'WIN').length;
-  const losses = scoredSignals.filter(signal => signal.outcomeResult === 'LOSS').length;
-  const scratches = completedSignals.filter(signal => signal.outcomeResult === 'SCRATCH').length;
-  const winRate = scoredSignals.length > 0 ? (wins / scoredSignals.length) * 100 : null;
-  const totalNetPips = completedSignals.reduce((sum, signal) => sum + (signal.netReturnPips || 0), 0);
-  const avgNetPips = completedSignals.length > 0 ? totalNetPips / completedSignals.length : null;
-
-  const backtests = experiments
-    .filter(experiment => experiment.experimentType !== 'LIVE_TRADE' && experiment.experimentType !== 'FORWARD_OBSERVATION')
+  const wins = scored.filter(signal => signal.outcomeResult === 'WIN').length;
+  const losses = scored.length - wins;
+  const scratches = completed.length - scored.length;
+  const winRate = scored.length ? wins / scored.length : null;
+  const netReturnUnits = completed.reduce((sum, signal) => sum + (signal.netReturnUnits ?? 0), 0);
+  const avgReturnUnits = completed.length ? netReturnUnits / completed.length : null;
+  const archivedExperiments = experiments
+    .filter(item => item.experimentType !== 'LIVE_TRADE' && item.experimentType !== 'FORWARD_OBSERVATION')
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-  const latestBacktest = backtests[0] || null;
+  const latestArchived = archivedExperiments[0] || null;
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-y-auto bg-neutral-950 p-6 space-y-6">
@@ -38,90 +34,85 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
           <span>Performance Analytics & Evidence</span>
         </h3>
         <p className="text-xs text-neutral-400 font-mono mt-1">
-          Candle-based forward paper outcomes and historical out-of-sample experiments are reported separately; broker fills are not connected.
+          Forward-paper outcomes use payout-adjusted binary contract returns. Historical exploratory tests are archived separately and are not current approval evidence.
         </p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono text-xs">
         <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-          <span className="text-neutral-500 text-[10px] block uppercase">Forward Signal Win Rate</span>
+          <span className="text-neutral-500 text-[10px] block uppercase">Forward Paper Win Rate</span>
           <span className="text-2xl font-bold text-emerald-400 tabular-nums">
-            {winRate === null ? 'No data' : `${winRate.toFixed(1)}%`}
+            {winRate === null ? 'No data' : `${(winRate * 100).toFixed(1)}%`}
           </span>
           <span className="text-[10px] text-neutral-400 block mt-1">
-            {wins}W / {losses}L · n={scoredSignals.length} · {scratches} scratches
+            {wins}W / {losses}L · scored n={scored.length} · {scratches} scratches
           </span>
         </div>
 
         <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-          <span className="text-neutral-500 text-[10px] block uppercase">Cumulative Forward Net Pips</span>
-          <span className={`text-2xl font-bold tabular-nums ${totalNetPips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-            {completedSignals.length === 0 ? 'No data' : `${totalNetPips >= 0 ? '+' : ''}${totalNetPips.toFixed(1)}`}
+          <span className="text-neutral-500 text-[10px] block uppercase">Forward Net Return</span>
+          <span className={`text-2xl font-bold tabular-nums ${netReturnUnits >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {completed.length === 0 ? 'No data' : `${netReturnUnits > 0 ? '+' : ''}${netReturnUnits.toFixed(3)}`}
           </span>
           <span className="text-[10px] text-neutral-400 block mt-1">
-            {avgNetPips === null ? 'No completed outcomes' : `${avgNetPips > 0 ? '+' : ''}${avgNetPips.toFixed(2)} pips per completed forward outcome`}
+            {avgReturnUnits === null ? 'No completed outcomes' : `${avgReturnUnits > 0 ? '+' : ''}${avgReturnUnits.toFixed(4)} stake units per completed contract`}
           </span>
         </div>
 
         <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-          <span className="text-neutral-500 text-[10px] block uppercase">Historical Experiments</span>
-          <span className="text-2xl font-bold text-white tabular-nums">{backtests.length}</span>
-          <span className="text-[10px] text-neutral-400 block mt-1">Historical backtests only · forward observations excluded</span>
+          <span className="text-neutral-500 text-[10px] block uppercase">Settled Paper Contracts</span>
+          <span className="text-2xl font-bold text-white tabular-nums">{completed.length}</span>
+          <span className="text-[10px] text-neutral-400 block mt-1">Includes wins, losses and scratches</span>
         </div>
 
         <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-          <span className="text-neutral-500 text-[10px] block uppercase">Latest Untouched Test</span>
-          <span className="text-2xl font-bold text-white tabular-nums">
-            {latestBacktest ? `${(latestBacktest.metrics.testAccuracy * 100).toFixed(1)}%` : 'No data'}
-          </span>
-          <span className="text-[10px] text-neutral-400 block mt-1">
-            {latestBacktest ? `n=${latestBacktest.metrics.sampleSize} · ${latestBacktest.symbol} · ${latestBacktest.horizonMinutes}m` : 'Import historical candles and run a test'}
-          </span>
+          <span className="text-neutral-500 text-[10px] block uppercase">Archived Research Runs</span>
+          <span className="text-2xl font-bold text-white tabular-nums">{archivedExperiments.length}</span>
+          <span className="text-[10px] text-neutral-400 block mt-1">Legacy exploratory records; not approval evidence</span>
         </div>
       </div>
 
-      <div className="bg-neutral-900/60 border border-neutral-800 rounded p-5 space-y-3">
+      <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-5 space-y-3">
         <h4 className="text-sm font-semibold text-white flex items-center gap-2">
           <TrendingUp className="w-4 h-4 text-emerald-400" />
-          Latest Historical Backtest
+          Forward Paper Ledger
         </h4>
-        {latestBacktest ? (
+        {completed.length ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
-            <div className="bg-neutral-950 rounded border border-neutral-800 p-3">
-              <span className="text-neutral-500 block text-[10px]">Test directional accuracy</span>
-              <strong className="text-white text-lg">{(latestBacktest.metrics.testAccuracy * 100).toFixed(1)}%</strong>
-              <span className="text-neutral-500 block">scored n={latestBacktest.metrics.scoredTradeSampleSize} / total n={latestBacktest.metrics.sampleSize}</span>
+            <div className="rounded border border-neutral-800 bg-neutral-950 p-3">
+              <span className="text-neutral-500 block text-[10px]">Wins</span>
+              <strong className="text-emerald-300 text-lg">{wins}</strong>
             </div>
-            <div className="bg-neutral-950 rounded border border-neutral-800 p-3">
-              <span className="text-neutral-500 block text-[10px]">Net-positive trade rate</span>
-              <strong className="text-emerald-300 text-lg">{(latestBacktest.metrics.winRate * 100).toFixed(1)}%</strong>
-              <span className="text-neutral-500 block">After modeled spread · scored n={latestBacktest.metrics.scoredTradeSampleSize}</span>
+            <div className="rounded border border-neutral-800 bg-neutral-950 p-3">
+              <span className="text-neutral-500 block text-[10px]">Losses</span>
+              <strong className="text-rose-300 text-lg">{losses}</strong>
             </div>
-            <div className="bg-neutral-950 rounded border border-neutral-800 p-3">
-              <span className="text-neutral-500 block text-[10px]">Expected value</span>
-              <strong className="text-white text-lg">{latestBacktest.metrics.expectedValuePips.toFixed(2)}</strong>
-              <span className="text-neutral-500 block">Pips per sample</span>
+            <div className="rounded border border-neutral-800 bg-neutral-950 p-3">
+              <span className="text-neutral-500 block text-[10px]">Scratches</span>
+              <strong className="text-neutral-200 text-lg">{scratches}</strong>
             </div>
-            <div className="bg-neutral-950 rounded border border-neutral-800 p-3">
-              <span className="text-neutral-500 block text-[10px]">Profit factor</span>
-              <strong className="text-white text-lg">{latestBacktest.metrics.profitFactor.toFixed(2)}</strong>
-              <span className="text-neutral-500 block">Spread-adjusted simulation</span>
+            <div className="rounded border border-neutral-800 bg-neutral-950 p-3">
+              <span className="text-neutral-500 block text-[10px]">Net return</span>
+              <strong className={`text-lg ${netReturnUnits >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{netReturnUnits > 0 ? '+' : ''}{netReturnUnits.toFixed(3)} units</strong>
             </div>
             <div className="col-span-2 md:col-span-4 text-neutral-400">
-              {latestBacktest.name} · Test period: {latestBacktest.testPeriod.start} – {latestBacktest.testPeriod.end}
-              <br />
-              95% CI for net-positive rate (scored n={latestBacktest.metrics.scoredTradeSampleSize}): {(latestBacktest.metrics.confidenceInterval95[0] * 100).toFixed(1)}%–{(latestBacktest.metrics.confidenceInterval95[1] * 100).toFixed(1)}%.
+              Win rate uses decisive WIN/LOSS outcomes only. Scratches are excluded from that denominator; each contract's net payout is included in cumulative return. These are candle-based paper observations, not broker fills.
             </div>
           </div>
         ) : (
-          <p className="text-xs text-neutral-400">No historical experiment has completed yet. Synthetic fallback data is not eligible for research results.</p>
+          <p className="text-xs text-neutral-400">No completed forward-paper contracts have been recorded yet. No performance rate is inferred from unclosed predictions.</p>
         )}
       </div>
 
-      <div className="bg-amber-950/20 border border-amber-900/50 rounded-lg p-4 flex gap-3 text-xs text-neutral-300">
+      <div className="rounded-xl border border-amber-900/60 bg-amber-950/20 p-4 flex gap-3 text-xs text-neutral-300">
         <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
         <div>
-          <strong className="text-amber-300">Cost-model limitation:</strong> Historical results use configured spread assumptions, not tick-by-tick broker bid/ask quotes, variable slippage or commission. They are research estimates, not guaranteed execution results. Always compare them with the forward paper outcome ledger.
+          <strong className="text-amber-300">Legacy historical results:</strong> previously saved single-rule experiments may have inspected overlapping test windows. Their old win rates and accuracy values are intentionally not presented as evidence for current strategy approval.
+          {latestArchived && (
+            <div className="mt-2 text-neutral-400">
+              Most recent archived record: {latestArchived.name} · {latestArchived.symbol} · {latestArchived.horizonMinutes}m · {latestArchived.testPeriod.start} – {latestArchived.testPeriod.end}.
+            </div>
+          )}
         </div>
       </div>
 
@@ -130,7 +121,7 @@ export const PerformanceAnalyticsView: React.FC<PerformanceAnalyticsViewProps> =
           <Activity className="w-4 h-4 text-cyan-400" />
           Evidence policy
         </div>
-        Forward paper win rate excludes scratches from the win/loss denominator but includes their net pips in cumulative PnL. Every rate is displayed with its scored sample count; total predictions and scratches are also reported. A single winning trade is never treated as proof that a strategy is validated.
+        No sample is called validated because of a high percentage alone. Current candidates need a preselected, non-reused historical test and independent forward-paper evidence. A paper candle price is not an executable broker fill, and no return target is guaranteed.
       </div>
     </div>
   );
