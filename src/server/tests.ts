@@ -38,6 +38,7 @@ import {
   stableHash,
 } from './researchReproducibility.js';
 import { sanitizeLossAutopsy, OBSERVATION_ONLY_LESSONS } from './researchGovernance.js';
+import { calibratePredictionScore } from './predictionCalibration.js';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -146,6 +147,58 @@ export async function runAllVerificationTests(): Promise<{
         candidateA.datasetFingerprint !== fingerprintA ||
         candidateA.featureSchemaVersion !== 'causal-market-features-v1') {
       throw new Error('Generated candidates must carry their reproduction manifest.');
+    }
+  });
+
+  await runTest('ML', 'Raw strategy scores become probabilities only after sufficient forward evidence', () => {
+    const observations: Array<{ rawScore: number; outcome: 'WIN' | 'LOSS' }> = [];
+    for (let bin = 0; bin < 10; bin++) {
+      const rawScore = 0.50 + bin * 0.05;
+      const winsInBin = 3 + bin;
+      for (let sample = 0; sample < 20; sample++) {
+        observations.push({
+          rawScore,
+          outcome: sample < winsInBin ? 'WIN' : 'LOSS',
+        });
+      }
+    }
+
+    const insufficient = calibratePredictionScore(0.8, observations.slice(0, 80));
+    if (insufficient.status !== 'UNCALIBRATED' ||
+        insufficient.probability !== null ||
+        insufficient.sampleSize !== 80) {
+      throw new Error('Calibration must abstain when fewer than 100 earlier outcomes are available.');
+    }
+
+    const lowScore = calibratePredictionScore(0.5, observations);
+    const highScore = calibratePredictionScore(0.95, observations);
+    if (lowScore.probability === null || highScore.probability === null) {
+      throw new Error('A sufficiently large forward sample should produce calibrated probabilities.');
+    }
+    if (!(highScore.probability > lowScore.probability)) {
+      throw new Error('Isotonic calibration must preserve monotonic score ordering.');
+    }
+    if (highScore.status !== 'OVERCONFIDENT' || highScore.probability >= 0.95) {
+      throw new Error('A raw score materially above observed performance must be flagged as overconfident.');
+    }
+    if (
+      lowScore.brierScore === null || highScore.brierScore === null ||
+      lowScore.expectedCalibrationError === null ||
+      highScore.expectedCalibrationError === null ||
+      !Number.isFinite(lowScore.brierScore) ||
+      !Number.isFinite(highScore.expectedCalibrationError)
+    ) {
+      throw new Error('Calibration diagnostics must include finite Brier and calibration-error values.');
+    }
+
+    let rejectedInvalidScore = false;
+    try {
+      calibratePredictionScore(1.2, observations);
+    } catch {
+      rejectedInvalidScore = true;
+    }
+    if (!rejectedInvalidScore) {
+      throw new Error('Out-of-range raw scores must be rejected rather than silently calibrated.');
     }
   });
 
