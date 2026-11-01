@@ -209,11 +209,25 @@ apiRouter.get('/evolution/state', (_req: Request, res: Response) => {
       updatedAt: record.updatedAt,
     };
   });
+  const generations = db.getGenerations();
+  const experiments = db.getExperiments();
+  const historicalExperiments = experiments.filter(e =>
+    e.experimentType !== 'LIVE_TRADE' && e.experimentType !== 'FORWARD_OBSERVATION'
+  );
+  const accepted = historicalExperiments.filter(e => e.auditorVerdict === 'ACCEPTED');
+  const rejected = historicalExperiments.filter(e => e.auditorVerdict === 'REJECTED');
   res.json({
     timestamp: new Date().toISOString(),
+    currentGeneration: generations.length > 0 ? generations[0].generation : 1,
+    totalExperiments: historicalExperiments.length,
+    totalForwardObservations: experiments.length - historicalExperiments.length,
+    acceptedCount: accepted.length,
+    rejectedCount: rejected.length,
+    generations,
+    topCandidates: accepted.slice(0, 10),
     learning: {
       posterior: 'Beta-Bernoulli',
-      selection: 'Bayesian upper-confidence score',
+      selection: 'Bayesian upper-confidence score with forward-paper feedback',
       decisiveUpdates: strategies.reduce((sum, item) => sum + item.decisiveOutcomes, 0),
       strategyCount: strategies.length,
     },
@@ -415,24 +429,6 @@ apiRouter.post('/evolution/run', async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/evolution/state — Current evolutionary state and top candidates
-apiRouter.get('/evolution/state', (_req: Request, res: Response) => {
-  const generations = db.getGenerations();
-  const experiments = db.getExperiments();
-  const historicalExperiments = experiments.filter(e => e.experimentType !== 'LIVE_TRADE' && e.experimentType !== 'FORWARD_OBSERVATION');
-  const accepted = historicalExperiments.filter(e => e.auditorVerdict === 'ACCEPTED');
-  const rejected = historicalExperiments.filter(e => e.auditorVerdict === 'REJECTED');
-
-  res.json({
-    currentGeneration: generations.length > 0 ? generations[0].generation : 1,
-    totalExperiments: historicalExperiments.length,
-    totalForwardObservations: experiments.length - historicalExperiments.length,
-    acceptedCount: accepted.length,
-    rejectedCount: rejected.length,
-    generations,
-    topCandidates: accepted.slice(0, 10),
-  });
-});
 
 // GET /api/research/history
 apiRouter.get('/research/history', (_req: Request, res: Response) => {
