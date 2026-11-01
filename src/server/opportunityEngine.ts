@@ -531,6 +531,15 @@ export class OpportunityEngine {
       featureSchemaVersion: FEATURE_SCHEMA_VERSION,
       modelVersion: "opportunity-research-v1",
       marketFeatureVector: [...context.currentFeatures],
+      recentPriceHistory: context.candles.slice(-30).map(candle => ({
+        minuteOffset: Math.round(
+          (candle.timestampMs + M1_MS - Date.parse(context.snapshotAt)) / M1_MS
+        ),
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      })),
       forecast,
       audit,
       humanDecision: { status: "PENDING", decidedAt: generatedAt },
