@@ -161,6 +161,7 @@ export interface ResearchSignal {
   calibrationStatus: 'CALIBRATED' | 'UNCALIBRATED' | 'OVERCONFIDENT';
   /** Empirical probability calibrated only from earlier settled outcomes; absent until sample suffices. */
   calibratedProbability?: number;
+  calibratedProbabilityLowerBound?: number;
   calibrationSampleSize?: number;
   calibrationBrierScore?: number;
   lifecycleState: SignalLifecycleState;
