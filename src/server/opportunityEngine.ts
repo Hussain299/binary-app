@@ -373,11 +373,16 @@ function auditOpportunity(
 export class OpportunityEngine {
   private async preparePairContext(symbol: ForexSymbol): Promise<PairContext> {
     const live = await dataFeedEngine.fetchCandles(symbol, 120);
-    const liveCandles = live.candles.filter(isRealCandle).sort((a, b) => a.timestampMs - b.timestampMs);
-    const latestLive = liveCandles[liveCandles.length - 1];
     const nowMs = Date.now();
-    if (!latestLive || nowMs - latestLive.timestampMs < -60_000 || nowMs - latestLive.timestampMs > 180_000) {
-      throw new Error(`${symbol}: no fresh real one-minute feed is available; synthetic continuity candles are not eligible.`);
+    // Candle timestamps mark the minute open in the existing causal clock contract.
+    // Exclude the still-forming minute: every feature and forecast starts from a closed bar.
+    const liveCandles = live.candles
+      .filter(candle => isRealCandle(candle) && candle.timestampMs + M1_MS <= nowMs)
+      .sort((a, b) => a.timestampMs - b.timestampMs);
+    const latestLive = liveCandles[liveCandles.length - 1];
+    const latestClosedAgeMs = latestLive ? nowMs - (latestLive.timestampMs + M1_MS) : Infinity;
+    if (!latestLive || latestClosedAgeMs < 0 || latestClosedAgeMs > 120_000) {
+      throw new Error(`${symbol}: no fresh, fully closed real one-minute feed is available; partial and synthetic candles are not eligible.`);
     }
     if (liveCandles.length < 61) {
       throw new Error(`${symbol}: at least 61 recent real one-minute candles are required for causal features.`);
