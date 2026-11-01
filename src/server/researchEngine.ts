@@ -971,7 +971,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     return 'ASIA';
   }
 
-  private prepareGeneResearchData(candles: Candle[]): PreparedGeneResearchData {
+  private prepareGeneResearchData(candles: Candle[], previousHoldoutEndMs: number | null = null): PreparedGeneResearchData {
     const MIN_HISTORY = 30_000;
     if (candles.length < MIN_HISTORY) {
       throw new Error(`Need at least ${MIN_HISTORY.toLocaleString()} real one-minute candles to support the 300-trade test gate; received ${candles.length.toLocaleString()}.`);
@@ -1052,10 +1052,34 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       a.entryTimeframeMinutes - b.entryTimeframeMinutes
     );
 
-    const trainEndMs = ordered[Math.floor(ordered.length * 0.45)]?.timestampMs ?? ordered[0].timestampMs;
-    const validationStartMs = trainEndMs + 35 * M1_CANDLE_MS;
-    const validationEndMs = ordered[Math.floor(ordered.length * 0.65)]?.timestampMs ?? ordered[ordered.length - 1].timestampMs;
-    const testStartMs = validationEndMs + 35 * M1_CANDLE_MS;
+    let trainEndMs: number;
+    let validationStartMs: number;
+    let validationEndMs: number;
+    let testStartMs: number;
+
+    if (previousHoldoutEndMs !== null) {
+      // Historical data at or before a previously inspected holdout may now
+      // be treated as known past. The next test must be wholly beyond it.
+      const newSegmentStart = ordered.findIndex(c => c.timestampMs >= previousHoldoutEndMs - 5_000);
+      if (newSegmentStart < 0) {
+        throw new Error('No candles exist after the last consumed holdout window. Import at least 30,000 new M1 candles before another evolutionary batch.');
+      }
+      const newSegmentLength = ordered.length - newSegmentStart;
+      if (newSegmentLength < MIN_HISTORY) {
+        throw new Error(`Only ${newSegmentLength.toLocaleString()} new M1 candles exist after the last consumed holdout. Another independent search requires at least ${MIN_HISTORY.toLocaleString()} new candles; old test data will not be reused.`);
+      }
+      const trainEndIndex = newSegmentStart + Math.floor(newSegmentLength * 0.45);
+      const validationEndIndex = newSegmentStart + Math.floor(newSegmentLength * 0.65);
+      trainEndMs = ordered[Math.min(ordered.length - 1, trainEndIndex)]?.timestampMs ?? ordered[ordered.length - 1].timestampMs;
+      validationStartMs = trainEndMs + 35 * M1_CANDLE_MS;
+      validationEndMs = ordered[Math.min(ordered.length - 1, validationEndIndex)]?.timestampMs ?? ordered[ordered.length - 1].timestampMs;
+      testStartMs = validationEndMs + 35 * M1_CANDLE_MS;
+    } else {
+      trainEndMs = ordered[Math.floor(ordered.length * 0.45)]?.timestampMs ?? ordered[0].timestampMs;
+      validationStartMs = trainEndMs + 35 * M1_CANDLE_MS;
+      validationEndMs = ordered[Math.floor(ordered.length * 0.65)]?.timestampMs ?? ordered[ordered.length - 1].timestampMs;
+      testStartMs = validationEndMs + 35 * M1_CANDLE_MS;
+    }
     return {
       candles: ordered, closes, ema9, ema21, rsi14, rows,
       trainEndMs, validationStartMs, validationEndMs, testStartMs,
@@ -1212,7 +1236,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       profitFactor: Number(test.profitFactor.toFixed(2)),
       confidenceInterval95: interval,
       testBlockWinRates: blockRates,
-      trainPeriod: { start: data.candles[60].timestamp, end: data.candles[Math.max(60, Math.floor(data.candles.length * 0.45) - 1)].timestamp },
+      trainPeriod: { start: data.candles[60].timestamp, end: new Date(data.trainEndMs).toISOString() },
       validationPeriod: { start: new Date(data.validationStartMs).toISOString(), end: new Date(data.validationEndMs).toISOString() },
       testPeriod: { start: new Date(data.testStartMs).toISOString(), end: data.candles[data.candles.length - 1].timestamp },
     };
@@ -1251,7 +1275,12 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       replicationFinalists: number;
     }) => void
   ): Promise<SynthesizedStrategyGene[]> {
-    const data = this.prepareGeneResearchData(candles);
+    const previousHoldoutEndMs = db.getLatestResearchHoldoutEndMs(symbol);
+    const data = this.prepareGeneResearchData(candles, previousHoldoutEndMs);
+    const holdoutEndMs = data.candles[data.candles.length - 1].timestampMs + M1_CANDLE_MS;
+    if (!db.claimResearchHoldoutWindow(symbol, searchBatchId, data.testStartMs, holdoutEndMs)) {
+      throw new Error('This chronological test period overlaps a holdout window already inspected for this pair. Import at least 30,000 newer M1 candles to create a genuinely new test period.');
+    }
     const trainRows = data.rows.filter(row => row.candle.timestampMs < data.trainEndMs);
     const validationRows = data.rows.filter(row =>
       row.candle.timestampMs >= data.validationStartMs &&
