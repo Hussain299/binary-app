@@ -30,6 +30,33 @@ export interface MarketRegimeSnapshot extends RegimeAssessment {
   assessedAt: string;
 }
 
+export interface ResearchHoldoutWindow {
+  symbol: string;
+  startUtc: string;
+  endUtc: string;
+}
+
+/** Inclusive interval intersection; malformed stored windows are ignored safely. */
+export function doesResearchHoldoutOverlap(
+  windows: ResearchHoldoutWindow[],
+  symbol: string,
+  startMs: number,
+  endMs: number
+): boolean {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+    throw new Error("Holdout interval must be finite and chronological.");
+  }
+  return windows.some(window => {
+    if (window.symbol !== symbol) return false;
+    const existingStart = Date.parse(window.startUtc);
+    const existingEnd = Date.parse(window.endUtc);
+    if (!Number.isFinite(existingStart) || !Number.isFinite(existingEnd) || existingEnd <= existingStart) {
+      return false;
+    }
+    return startMs <= existingEnd && endMs >= existingStart;
+  });
+}
+
 export interface EvolutionParentCandidate {
   id: string;
   genome?: StrategyGenome;
