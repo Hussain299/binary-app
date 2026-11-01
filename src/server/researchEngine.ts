@@ -1533,9 +1533,6 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     )];
     const selectedHorizon: StrategyHorizon[] = [5, 10, 15, 20, 25, 30];
     const sessions: Array<MarketSessionId | 'ALL'> = ['ASIA', 'LONDON', 'OVERLAP', 'NEW_YORK', 'ALL'];
-    const operatorOptions: SynthesizedStrategyGene['nonLinearOperator'][] = [
-      'tanh_polynomial', 'fractal_power', 'exponential_decay', 'harmonic_dispersion',
-    ];
     const horizon = traitParent?.optimalHorizonMinutes &&
       Math.random() >= mutationRate
       ? traitParent.optimalHorizonMinutes
@@ -1544,10 +1541,6 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       Math.random() >= mutationRate
       ? traitParent.sessionAffinity
       : sessions[Math.floor(Math.random() * sessions.length)];
-    const operator = traitParent?.nonLinearOperator &&
-      Math.random() >= mutationRate
-      ? traitParent.nonLinearOperator
-      : operatorOptions[Math.floor(Math.random() * operatorOptions.length)];
     const parents = [parentA, parentB]
       .filter((gene): gene is SynthesizedStrategyGene => !!gene)
       .map(gene => gene.id);
@@ -1558,16 +1551,8 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       code,
       generation,
       mathematicalFormula: formula,
-      parents: parents.length ? parents : ['Random symbolic seed'],
+      parents,
       mutationRate,
-      nonLinearOperator: operator,
-      operatorParameters: {
-        alpha: 1,
-        beta: 1,
-        gamma: 1,
-        exponent: 1,
-        threshold: activationThreshold,
-      },
       genome,
       searchBatchId,
       symbol,
@@ -1639,7 +1624,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     const params = gene.operatorParameters || { alpha: 1.45, beta: 0.68, gamma: 0.28, exponent: 1.8, threshold: 0.38 };
     const { alpha, beta, gamma, exponent } = params;
     let activationScore = 0;
-    switch (gene.nonLinearOperator) {
+    switch (gene.nonLinearOperator ?? 'tanh_polynomial') {
       case 'tanh_polynomial': {
         const zEntropy = ((candle.close - prevCandle.close) * pipFactor) / 2.0;
         const wickDelta = Math.pow(lowerWickRatio, exponent) - Math.pow(upperWickRatio, exponent);
