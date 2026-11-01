@@ -98,9 +98,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const renderNavigation = (compact: boolean) => (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3">
       {groups.map(group => (
-        <section key={group.label} className="mb-4 last:mb-0">
+        <section key={group.label} className="sf-nav-group mb-4 last:mb-0">
           {!compact && (
-            <div className="px-3 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+            <div className="sf-nav-group-label">
               {group.label}
             </div>
           )}
@@ -121,18 +121,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   aria-label={item.label}
                   aria-current={isActive ? 'page' : undefined}
                   onClick={() => handleSelect(item.id)}
-                  className={`group relative flex h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-[13px] font-medium transition-colors duration-150
-                    ${compact ? 'justify-center px-0' : ''}
-                    ${isActive
-                      ? 'bg-emerald-400/10 text-emerald-300'
-                      : 'text-neutral-400 hover:bg-white/[0.045] hover:text-neutral-100'}`}
+                  className={`sf-nav-item group relative flex h-10 w-full items-center gap-3 text-left text-[13px] font-medium ${compact ? 'is-compact justify-center px-0' : ''} ${isActive ? 'is-active' : ''}`}
                 >
                   {isActive && <span className="absolute bottom-2 left-0 top-2 w-[2px] rounded-full bg-emerald-400" />}
-                  <Icon className={`h-[17px] w-[17px] shrink-0 ${isActive ? 'text-emerald-300' : 'text-neutral-500 group-hover:text-neutral-300'}`} />
+                  <Icon className="sf-nav-icon" />
                   {!compact && <span className="min-w-0 flex-1 truncate">{item.label}</span>}
                   {!compact && count > 0 && (
-                    <span className={`min-w-5 rounded-md px-1.5 py-0.5 text-center text-[10px] tabular-nums
-                      ${isActive ? 'bg-emerald-400/15 text-emerald-200' : 'bg-white/[0.05] text-neutral-500'}`}>
+                    <span className="sf-nav-count">
                       {count > 999 ? '999+' : count}
                     </span>
                   )}
@@ -149,7 +144,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   );
 
   const footer = (compact: boolean) => (
-    <div className="border-t border-white/[0.07] p-3">
+    <div className="sf-sidebar-footer border-t p-3">
       {compact ? (
         <div className="flex flex-col items-center gap-2 text-[9px] font-semibold text-neutral-500">
           <span title="Three-minute advance decision">T−3</span>
@@ -160,9 +155,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <>
           <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.14em] text-neutral-500">Research rules</div>
           <div className="flex flex-wrap gap-1.5">
-            <span className="rounded-md border border-white/[0.07] bg-white/[0.035] px-2 py-1 text-[10px] text-neutral-400">3m advance</span>
-            <span className="rounded-md border border-white/[0.07] bg-white/[0.035] px-2 py-1 text-[10px] text-neutral-400">5–30m candles</span>
-            <span className="rounded-md border border-white/[0.07] bg-white/[0.035] px-2 py-1 text-[10px] text-neutral-400">Paper only</span>
+            <span className="sf-rule-chip">3m advance</span>
+            <span className="sf-rule-chip">5–30m candles</span>
+            <span className="sf-rule-chip">Paper only</span>
           </div>
         </>
       )}
@@ -171,16 +166,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <>
-      <aside className={`hidden shrink-0 flex-col border-r border-white/[0.07] bg-[#0b1018] transition-[width] duration-200 lg:flex
+      <aside className={`sf-sidebar hidden shrink-0 flex-col transition-[width] duration-300 ease-out lg:flex
         ${isCollapsed ? 'w-[72px]' : 'w-[232px]'}`}>
-        <div className={`flex h-12 shrink-0 items-center border-b border-white/[0.07] ${isCollapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
+        <div className={`sf-sidebar-header flex shrink-0 items-center ${isCollapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
           {!isCollapsed && <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">Workspace</span>}
           <button
             type="button"
             onClick={onToggleCollapse}
             title={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
             aria-label={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
-            className="rounded-md p-1.5 text-neutral-500 transition-colors hover:bg-white/[0.06] hover:text-neutral-200"
+            className="sf-icon-button !h-8 !w-8 !rounded-lg !border-transparent !bg-transparent"
           >
             {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
           </button>
@@ -195,12 +190,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close navigation"
-            className="absolute inset-0 bg-black/65 backdrop-blur-[2px]"
+            className="sf-mobile-scrim absolute inset-0"
           />
-          <aside className="relative z-10 flex h-full w-[280px] max-w-[86vw] flex-col border-r border-white/10 bg-[#0b1018] shadow-2xl">
+          <aside className="sf-mobile-drawer relative z-10 flex h-full w-[280px] max-w-[86vw] flex-col">
             <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/[0.07] px-4">
               <span className="text-sm font-semibold text-white">Navigation</span>
-              <button type="button" onClick={onClose} aria-label="Close navigation" className="rounded-lg p-2 text-neutral-400 hover:bg-white/[0.06] hover:text-white">
+              <button type="button" onClick={onClose} aria-label="Close navigation" className="sf-icon-button">
                 <X className="h-4 w-4" />
               </button>
             </div>

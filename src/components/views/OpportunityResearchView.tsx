@@ -119,7 +119,7 @@ function ForecastGraph({ opportunity }: { opportunity: TradeOpportunity }) {
   const bodyWidth = Math.max(2, Math.min(9, ((width - left - right) / Math.max(1, maxMinute - minMinute)) * 0.58));
 
   return (
-    <div className="rounded-xl border border-white/[0.07] bg-[#0a111b] p-2 sm:p-4">
+    <div className="sf-chart-frame rounded-xl border border-white/[0.07] bg-[#0a111b] p-2 sm:p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
         <div className="text-xs font-semibold text-neutral-200">
           {hasForecast ? 'Recent price action + analogue forecast distribution' : 'Recent real-market price action'}
@@ -323,50 +323,50 @@ export const OpportunityResearchView: React.FC = () => {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-transparent text-neutral-100">
-      <div className="shrink-0 border-b border-white/[0.07] bg-[#0d1520] px-4 py-4 sm:px-6">
+    <div className="sf-opportunity-view flex h-full min-h-0 flex-col overflow-hidden bg-transparent text-neutral-100">
+      <div className="sf-opportunity-hero shrink-0 border-b border-white/[0.07] px-4 py-4 sm:px-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-300">
+            <div className="sf-opportunity-kicker flex items-center gap-2">
               <BrainCircuit className="h-4 w-4" /> Pre-trade research intelligence
             </div>
-            <h1 className="mt-1 text-xl font-bold tracking-tight text-white sm:text-2xl">Opportunity laboratory</h1>
-            <p className="mt-1 max-w-3xl text-xs leading-5 text-neutral-400">
+            <h1 className="sf-opportunity-title mt-2">Opportunity laboratory</h1>
+            <p className="sf-opportunity-copy mt-2">
               Generate competing BUY/SELL/NO-TRADE hypotheses, compare them with historical market analogues and inspect probabilistic paths before making a human decision.
             </p>
           </div>
           <button
             onClick={generate}
             disabled={isGenerating}
-            className="flex items-center gap-2 rounded-lg border border-emerald-400/30 bg-emerald-400 px-4 py-2.5 text-xs font-bold text-[#07130e] transition hover:bg-emerald-300 disabled:cursor-wait disabled:opacity-60"
+            className="sf-primary-button flex items-center gap-2"
           >
             <RefreshCw className={`h-4 w-4 ${isGenerating ? 'animate-spin' : ''}`} />
             {isGenerating ? 'Generating hypotheses…' : 'Generate opportunities'}
           </button>
         </div>
         <div className="mt-4 grid grid-cols-3 gap-2 sm:max-w-xl">
-          <div className="rounded-lg border border-emerald-400/15 bg-emerald-400/[0.06] px-3 py-2">
+          <div className="sf-hero-stat rounded-lg border border-emerald-400/15 bg-emerald-400/[0.06] px-3 py-2">
             <div className="text-xl font-bold tabular-nums text-emerald-300">{shortlistCount}</div>
             <div className="text-[10px] text-neutral-400">Shortlisted</div>
           </div>
-          <div className="rounded-lg border border-amber-400/15 bg-amber-400/[0.05] px-3 py-2">
+          <div className="sf-hero-stat rounded-lg border border-amber-400/15 bg-amber-400/[0.05] px-3 py-2">
             <div className="text-xl font-bold tabular-nums text-amber-300">{insufficientCount}</div>
             <div className="text-[10px] text-neutral-400">Insufficient evidence</div>
           </div>
-          <div className="rounded-lg border border-white/[0.07] bg-white/[0.025] px-3 py-2">
+          <div className="sf-hero-stat rounded-lg border border-white/[0.07] bg-white/[0.025] px-3 py-2">
             <div className="text-xl font-bold tabular-nums text-neutral-200">{rejectedCount}</div>
             <div className="text-[10px] text-neutral-400">Rejected / no trade</div>
           </div>
         </div>
         {(message || error) && (
-          <div className={`mt-3 rounded-lg border px-3 py-2 text-xs leading-5 ${error ? 'border-amber-500/20 bg-amber-500/[0.06] text-amber-200' : 'border-white/[0.07] bg-white/[0.025] text-neutral-300'}`}>
+          <div role="status" aria-live="polite" className={`sf-inline-notice mt-3 rounded-lg border px-3 py-2 ${error ? 'border-amber-500/20 bg-amber-500/[0.06] text-amber-200' : 'border-white/[0.07] bg-white/[0.025] text-neutral-300'}`}>
             {error || message}
           </div>
         )}
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3 sm:p-4 lg:flex-row">
-        <section className="flex min-h-[210px] flex-col overflow-hidden rounded-xl border border-white/[0.07] bg-[#0d1520] lg:w-[340px] lg:shrink-0">
+      <div className="sf-lab-layout flex min-h-0 flex-1 flex-col overflow-hidden p-3 lg:flex-row">
+        <section className="sf-lab-panel sf-lab-pool flex min-h-[210px] flex-col lg:w-[350px] lg:shrink-0">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.07] px-3 py-3">
             <div className="flex items-center gap-2 text-xs font-semibold text-white">
               <FlaskConical className="h-4 w-4 text-emerald-300" /> Hypothesis pool
@@ -379,7 +379,7 @@ export const OpportunityResearchView: React.FC = () => {
               ['ALL', 'All'],
               ['INSUFFICIENT_EVIDENCE', 'Insufficient'],
             ] as Array<[Filter, string]>).map(([value, label]) => (
-              <button key={value} onClick={() => setFilter(value)} className={`rounded-md px-2 py-1.5 text-[10px] font-semibold ${filter === value ? 'bg-white/10 text-white' : 'text-neutral-500 hover:text-neutral-300'}`}>
+              <button key={value} onClick={() => setFilter(value)} className={`sf-filter-tab rounded-md px-2 py-1.5 text-[10px] font-semibold ${filter === value ? 'bg-white/10 text-white' : 'text-neutral-500 hover:text-neutral-300'}`}>
                 {label}
               </button>
             ))}
@@ -399,7 +399,7 @@ export const OpportunityResearchView: React.FC = () => {
               <button
                 key={item.id}
                 onClick={() => setSelectedId(item.id)}
-                className={`w-full rounded-lg border p-3 text-left transition ${selected?.id === item.id ? 'border-emerald-400/30 bg-emerald-400/[0.07]' : 'border-transparent bg-white/[0.02] hover:border-white/10 hover:bg-white/[0.04]'}`}
+                className={`sf-opportunity-row w-full rounded-lg border p-3 text-left transition ${selected?.id === item.id ? 'border-emerald-400/30 bg-emerald-400/[0.07]' : 'border-transparent bg-white/[0.02] hover:border-white/10 hover:bg-white/[0.04]'}`} aria-pressed={selected?.id === item.id}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -431,7 +431,7 @@ export const OpportunityResearchView: React.FC = () => {
           </div>
         </section>
 
-        <section className="min-h-0 min-w-0 flex-1 overflow-y-auto rounded-xl border border-white/[0.07] bg-[#0d1520]">
+        <section className="sf-lab-panel sf-lab-detail min-h-0 min-w-0 flex-1 overflow-y-auto">
           {selected ? (
             <div className="space-y-4 p-3 sm:p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">

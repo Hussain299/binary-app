@@ -139,7 +139,7 @@ export default function App() {
   ).length;
 
   return (
-    <div className="app-shell flex h-[100dvh] w-full min-w-0 flex-col overflow-hidden bg-[#080d14] text-neutral-100 antialiased font-sans relative">
+    <div className="app-shell sf-app-shell relative flex h-[100dvh] w-full min-w-0 flex-col overflow-hidden text-neutral-100 antialiased font-sans">
       {/* Real-time In-App Signal Alert Banner */}
       <NotificationBanner
         notification={activeNotification}
@@ -173,7 +173,8 @@ export default function App() {
         />
 
         {/* Dynamic View Viewport */}
-        <main className="app-main min-w-0 flex-1 flex flex-col h-full overflow-hidden bg-transparent">
+        <main className="app-main min-w-0 flex h-full flex-1 flex-col overflow-hidden bg-transparent">
+          <div key={activeTab} className="sf-view-stage">
           {activeTab === 'terminal' && (
             <SignalTerminalView
               signals={signals}
@@ -204,6 +205,7 @@ export default function App() {
           )}
           {activeTab === 'health' && <SystemHealthView />}
           {activeTab === 'config' && <ConfigurationView />}
+          </div>
         </main>
       </div>
 
