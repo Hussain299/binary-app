@@ -39,6 +39,43 @@ export interface EvolutionParentCandidate {
  * Parent selection is restricted to frozen train/validation evidence.
  * Holdout metrics are deliberately not part of this function's type or ranking.
  */
+function collectGenomeFeatures(expression: StrategyExpressionNode): StrategyFeatureName[] {
+  const features = new Set<StrategyFeatureName>();
+  const visit = (node: StrategyExpressionNode): void => {
+    if (node.kind === "feature") {
+      features.add(node.feature);
+    } else if (node.kind === "unary") {
+      visit(node.input);
+    } else if (node.kind === "binary") {
+      visit(node.left);
+      visit(node.right);
+    }
+  };
+  visit(expression);
+  return [...features].sort();
+}
+
+/** Coarse strategy species preserve different feature families during selection. */
+export function genomeSpeciesKey(genome?: StrategyGenome): string {
+  if (!genome) return "UNKNOWN";
+  const features = collectGenomeFeatures(genome.expression);
+  const style = inferGenomeStyle(genome.expression);
+  return style + ":" + (features.slice(0, 4).join(",") || "constant");
+}
+
+function compareParentFitness(a: EvolutionParentCandidate, b: EvolutionParentCandidate): number {
+  return (
+    (b.discoveryMetrics!.validationExpectedValueUnits - a.discoveryMetrics!.validationExpectedValueUnits) ||
+    (b.discoveryMetrics!.validationWinRate - a.discoveryMetrics!.validationWinRate) ||
+    (b.discoveryMetrics!.validationProfitFactor - a.discoveryMetrics!.validationProfitFactor) ||
+    (a.genome!.complexity - b.genome!.complexity)
+  );
+}
+
+/**
+ * Select validation-qualified parents while preserving distinct symbolic species.
+ * Holdout metrics are not accepted by this function and cannot affect evolution.
+ */
 export function selectEvolutionParents<T extends EvolutionParentCandidate>(
   candidates: T[],
   limit = 30
@@ -46,7 +83,7 @@ export function selectEvolutionParents<T extends EvolutionParentCandidate>(
   if (!Number.isInteger(limit) || limit < 1) {
     throw new Error("Evolution parent limit must be a positive integer.");
   }
-  return candidates
+  const ranked = candidates
     .filter(candidate => {
       const metrics = candidate.discoveryMetrics;
       return !!candidate.genome &&
@@ -62,13 +99,58 @@ export function selectEvolutionParents<T extends EvolutionParentCandidate>(
         Number.isFinite(metrics.minimumPayoutPct) &&
         (metrics.minimumPayoutPct ?? 0) >= 80;
     })
-    .sort((a, b) =>
-      (b.discoveryMetrics!.validationExpectedValueUnits - a.discoveryMetrics!.validationExpectedValueUnits) ||
-      (b.discoveryMetrics!.validationWinRate - a.discoveryMetrics!.validationWinRate) ||
-      (b.discoveryMetrics!.validationProfitFactor - a.discoveryMetrics!.validationProfitFactor) ||
-      (a.genome!.complexity - b.genome!.complexity)
-    )
-    .slice(0, limit);
+    .sort(compareParentFitness);
+
+  const selected: T[] = [];
+  const selectedIds = new Set<string>();
+  const representedSpecies = new Set<string>();
+  // First pass protects novelty: one high-fitness representative per species.
+  for (const candidate of ranked) {
+    const species = genomeSpeciesKey(candidate.genome);
+    if (representedSpecies.has(species)) continue;
+    selected.push(candidate);
+    selectedIds.add(candidate.id);
+    representedSpecies.add(species);
+    if (selected.length >= limit) return selected;
+  }
+  // Fill remaining slots with the best qualified candidates across species.
+  for (const candidate of ranked) {
+    if (selectedIds.has(candidate.id)) continue;
+    selected.push(candidate);
+    if (selected.length >= limit) break;
+  }
+  return selected;
+}
+
+/**
+ * Adaptive mutation pressure: low population diversity or near-identical
+ * validation fitness increases exploration. The result is bounded to avoid
+ * destructive randomization or premature convergence.
+ */
+export function calculateAdaptiveMutationRate(
+  parents: EvolutionParentCandidate[]
+): number {
+  const eligible = parents.filter(parent =>
+    !!parent.genome &&
+    !!parent.discoveryMetrics &&
+    Number.isFinite(parent.discoveryMetrics.validationExpectedValueUnits)
+  );
+  if (eligible.length < 4) return 0.30;
+
+  const speciesCount = new Set(eligible.map(parent => genomeSpeciesKey(parent.genome))).size;
+  const diversity = speciesCount / eligible.length;
+  const fitness = eligible.map(parent => parent.discoveryMetrics!.validationExpectedValueUnits);
+  const mean = fitness.reduce((sum, value) => sum + value, 0) / fitness.length;
+  const variance = fitness.reduce((sum, value) => sum + Math.pow(value - mean, 2), 0) / fitness.length;
+  const coefficientOfVariation = Math.sqrt(variance) / Math.max(0.05, Math.abs(mean));
+  const diversityPressure = (1 - diversity) * 0.16;
+  const stagnationPressure = coefficientOfVariation < 0.12
+    ? 0.08
+    : coefficientOfVariation < 0.25
+      ? 0.04
+      : 0;
+  const rate = 0.12 + diversityPressure + stagnationPressure;
+  return Number(Math.max(0.12, Math.min(0.36, rate)).toFixed(3));
 }
 
 export interface BetaPosterior {
