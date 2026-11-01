@@ -769,7 +769,7 @@ export async function runAllVerificationTests(): Promise<{
   });
 
   await runTest('ML', 'Purged Walk-Forward Splits & Embargo Verification', () => {
-    const candles = makeM1TestCandles('EUR/USD', 12000);
+    const candles = makeM1TestCandles('EUR/USD', 40000);
     const exp = researchEngine.runWalkForwardExperiment('EUR/USD', candles, 'momentum_5', 10, 1, { allowTestFixtures: true });
 
     if (exp.purgedWindowCandles < 10) {
