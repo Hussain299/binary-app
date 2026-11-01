@@ -227,7 +227,8 @@ export function classifyMarketRegime(
   const atrPeriod = 14;
   const currentAtr = ranges.slice(-atrPeriod).reduce((sum, value) => sum + value, 0) / atrPeriod;
   const historicalAtr: number[] = [];
-  const lastHistoricalEnd = ranges.length - atrPeriod;
+  // The baseline must end before the first candle in the current ATR window.
+  const lastHistoricalEnd = ranges.length - atrPeriod - 1;
   const firstHistoricalEnd = Math.max(atrPeriod - 1, lastHistoricalEnd - 29);
   for (let end = firstHistoricalEnd; end <= lastHistoricalEnd; end++) {
     const window = ranges.slice(end - atrPeriod + 1, end + 1);
