@@ -76,7 +76,7 @@ export class EntryExitEngine {
 
   /**
    * Factory for creating a research signal in DETECTED state, moving to WAITING_FOR_ENTRY.
-   * Every trade is synchronized to open strictly on the 5-minute candle opening.
+   * Every trade is synchronized to its explicitly selected 5–30 minute entry candle.
    */
   public createResearchSignal(params: SignalCreationParams): ResearchSignal {
     const isJpy = params.symbol.includes('JPY');
@@ -181,7 +181,7 @@ export class EntryExitEngine {
       entryCondition = `Strict ${entryTimeframeMinutes}M Candle Open (${candleOpenTimeIst}) [Trigger: ${triggerPrice}] · ${expiryMinutes}m Expiry`;
     }
 
-    // Entry window: test fixtures preserve their synthetic path; live signals use the explicit N-minute candle open.
+    // Entry window: tests preserve their synthetic path; live signals use the explicit N-minute candle open.
     const entryWindowStartMs = isTest ? (signalCandleMs + 60 * 1000) : nextCandleOpenMs;
     const entryWindowEndMs = entryWindowStartMs + (expiryMinutes * 60 * 1000);
 
