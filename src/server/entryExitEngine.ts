@@ -271,7 +271,7 @@ export class EntryExitEngine {
       synthesizedGeneId: params.synthesizedGeneId,
       mathematicalFormula: params.mathematicalFormula,
       whyHumansMissThis: params.whyHumansMissThis,
-      paperOnly: params.paperOnly ?? false,
+      paperOnly: true, // Research and forward validation are paper-only; no signal may authorize broker execution.
       marketFeatureVector: params.marketFeatureVector ? [...params.marketFeatureVector] : undefined,
     };
 
