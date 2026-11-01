@@ -96,7 +96,8 @@ export async function runAllVerificationTests(): Promise<{
     if (sequenceA.some(value => value < 0 || value >= 1)) {
       throw new Error('Seeded random values must remain in [0, 1).');
     }
-    const other = Array.from({ length: 32 }, () => createSeededRandom('different-seed')());
+    const otherRandom = createSeededRandom('different-seed');
+    const other = Array.from({ length: 32 }, () => otherRandom());
     if (JSON.stringify(sequenceA) === JSON.stringify(other)) {
       throw new Error('Different seeds should not produce the same random stream.');
     }
@@ -119,8 +120,8 @@ export async function runAllVerificationTests(): Promise<{
     if (derivedA !== derivedB || derivedA === derivedDifferentData) {
       throw new Error('Research seeds must be stable for an exact run and change with its dataset.');
     }
-    if (stableHash('signalforge') !== stableHash('signalforge')) {
-      throw new Error('Stable hashes must be repeatable.');
+    if (stableHash('signalforge') === stableHash('a-different-value')) {
+      throw new Error('Distinct experiment metadata should not share the same stable hash.');
     }
 
     const candidateA = researchEngine.synthesizeInfiniteNovelStrategy(
