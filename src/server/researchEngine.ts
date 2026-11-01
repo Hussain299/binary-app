@@ -21,6 +21,7 @@ import {
 import { db } from './db.js';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
 import { selectEvolutionParents } from './evolutionEngine.js';
+import { ADVANCE_NOTICE_MS, M1_CANDLE_MS, getNextCandleOpenMs, TradingTimeframeMinutes } from './tradingClock.js';
 
 type StrategyHorizon = 5 | 10 | 15 | 20 | 25 | 30;
 type GeneFeatureVector = Record<StrategyFeatureName, number>;
@@ -57,62 +58,79 @@ export class ResearchEngine {
    * Computes technical features from candles:
    * Returns, Candle body/wick ratios, ATR(14), RSI(14), EMA(9)-EMA(21) slope, Range position.
    */
-  public extractFeatures(candles: Candle[]): Array<{
+  public extractFeatures(
+    candles: Candle[],
+    entryTimeframeMinutes: StrategyHorizon = 5
+  ): Array<{
     candle: Candle;
     features: number[];
-    labels: Record<number, number>; // scheduled entry-to-expiry direction
-    futureMoves: Record<number, number>; // scheduled entry-to-expiry price movement
+    labels: Record<number, number>;
+    futureMoves: Record<number, number>;
+    entryTimeMs: number;
+    expiryTimeMs: number;
+    exitCandleTimeMs: number;
+    entryTimeframeMinutes: StrategyHorizon;
   }> {
     const n = candles.length;
     if (n < 70) return [];
+    if (![5, 10, 15, 20, 25, 30].includes(entryTimeframeMinutes)) {
+      throw new Error('Research entry timeframe must be between 5 and 30 minutes.');
+    }
 
     const isJpy = candles[0].symbol.includes('JPY');
     const pipFactor = isJpy ? 100 : 10000;
-    const FIVE_MIN_MS = 5 * 60 * 1000;
-    const ONE_MIN_MS = 60 * 1000;
-
-    const closes = candles.map(c => c.close);
-    const ema9 = this.calculateEMA(closes, 9);
-    const ema21 = this.calculateEMA(closes, 21);
-    const rsi14 = this.calculateRSI(closes, 14);
-    const atr14 = this.calculateATR(candles, 14);
-    const horizons = [5, 10, 15, 20, 25, 30];
     const samples: Array<{
       candle: Candle;
       features: number[];
       labels: Record<number, number>;
       futureMoves: Record<number, number>;
+      entryTimeMs: number;
+      expiryTimeMs: number;
+      exitCandleTimeMs: number;
+      entryTimeframeMinutes: StrategyHorizon;
     }> = [];
-    const seenEntryTimes = new Set<number>();
 
-    // Each historical decision is made once, on a completed M1 bar, at the
-    // first point in the 3-minute advance window for the next 5M boundary.
-    // The same scheduled entry boundary can never create multiple backtest trades.
+    // The M1 decision candle must be fully closed at exactly T-3m. Entry is
+    // at the next aligned N-minute candle open; settlement uses the M1 bar
+    // whose close equals entry + N minutes (not the following minute).
     for (let i = 25; i < n - 40; i++) {
       const candle = candles[i];
       const previous = candles[i - 1];
-      const decisionTime = candle.timestampMs + ONE_MIN_MS;
-      const entryTime = (Math.floor(decisionTime / FIVE_MIN_MS) + 1) * FIVE_MIN_MS;
-      const secondsToEntry = entryTime - decisionTime;
-      if (secondsToEntry < 15_000 || secondsToEntry > 180_000) continue;
-      if (seenEntryTimes.has(entryTime)) continue;
+      const decisionTime = candle.timestampMs + M1_CANDLE_MS;
+      const entryTime = getNextCandleOpenMs(
+        decisionTime,
+        entryTimeframeMinutes as TradingTimeframeMinutes
+      );
+      if (entryTime - decisionTime !== ADVANCE_NOTICE_MS) continue;
 
-      let entryIndex = i + 1;
-      while (entryIndex < n && candles[entryIndex].timestampMs < entryTime) entryIndex++;
-      if (entryIndex >= n || Math.abs(candles[entryIndex].timestampMs - entryTime) > 5_000) continue;
-      seenEntryTimes.add(entryTime);
+      const entryIndex = candles.findIndex((item, index) =>
+        index >= i + 1 &&
+        Math.abs(item.timestampMs - entryTime) <= 5_000
+      );
+      if (entryIndex < 0) continue;
+
+      const expiryTime = entryTime + entryTimeframeMinutes * M1_CANDLE_MS;
+      const exitCandleTime = expiryTime - M1_CANDLE_MS;
+      let exitIndex = entryIndex;
+      while (exitIndex < n && candles[exitIndex].timestampMs < exitCandleTime) exitIndex++;
+      if (exitIndex >= n ||
+          Math.abs(candles[exitIndex].timestampMs - exitCandleTime) > 5_000) continue;
 
       const range = Math.max(0.00001, candle.high - candle.low);
       const body = Math.abs(candle.close - candle.open);
       const upperWick = candle.high - Math.max(candle.open, candle.close);
       const lowerWick = Math.min(candle.open, candle.close) - candle.low;
+      const closes = candles.map(item => item.close);
+      const ema9 = this.calculateEMA(closes, 9);
+      const ema21 = this.calculateEMA(closes, 21);
+      const rsi14 = this.calculateRSI(closes, 14);
+      const atr14 = this.calculateATR(candles, 14);
       let min20 = Infinity;
       let max20 = -Infinity;
       for (let k = i - 19; k <= i; k++) {
         min20 = Math.min(min20, candles[k].low);
         max20 = Math.max(max20, candles[k].high);
       }
-
       const features = [
         (candle.close - previous.close) * pipFactor,
         body / range,
@@ -123,29 +141,18 @@ export class ResearchEngine {
         (atr14[i] || 0.0005) * pipFactor,
         (candle.close - min20) / Math.max(0.00001, max20 - min20),
       ];
-
-      const labels: Record<number, number> = {};
-      const futureMoves: Record<number, number> = {};
-      for (const horizon of horizons) {
-        const exitTime = entryTime + horizon * ONE_MIN_MS;
-        let exitIndex = entryIndex + 1;
-        while (exitIndex < n && candles[exitIndex].timestampMs < exitTime) exitIndex++;
-        if (exitIndex >= n || Math.abs(candles[exitIndex].timestampMs - exitTime) > 5_000) {
-          labels[horizon] = Number.NaN;
-          futureMoves[horizon] = Number.NaN;
-          continue;
-        }
-
-        // Identical to the production research fill model: entry at scheduled
-        // M5 candle open, expiry at the first M1 candle closing the target time.
-        const move = candles[exitIndex].close - candles[entryIndex].open;
-        futureMoves[horizon] = move;
-        labels[horizon] = move > 0 ? 1 : 0;
-      }
-
-      samples.push({ candle, features, labels, futureMoves });
+      const move = candles[exitIndex].close - candles[entryIndex].open;
+      samples.push({
+        candle,
+        features,
+        labels: { [entryTimeframeMinutes]: move > 0 ? 1 : 0 },
+        futureMoves: { [entryTimeframeMinutes]: move },
+        entryTimeMs: entryTime,
+        expiryTimeMs: expiryTime,
+        exitCandleTimeMs: candles[exitIndex].timestampMs,
+        entryTimeframeMinutes,
+      });
     }
-
     return samples;
   }
 
@@ -180,7 +187,7 @@ export class ResearchEngine {
 
     // Only rows with a valid, causal 3-minute advance decision and exact scheduled
     // M5 entry/expiry candles are eligible for this execution-aligned model study.
-    const dataset = this.extractFeatures(candles).filter(item =>
+    const dataset = this.extractFeatures(candles, horizonMinutes as StrategyHorizon).filter(item =>
       Number.isFinite(item.labels[horizonMinutes]) &&
       Number.isFinite(item.futureMoves[horizonMinutes])
     );
@@ -191,7 +198,7 @@ export class ResearchEngine {
 
     // One eligible observation represents one M5 entry opportunity. Purge enough
     // M5 opportunities to cover the forward label horizon between every split.
-    const purgeSamples = Math.ceil(horizonMinutes / 5) + 1;
+    const purgeSamples = 1; // One full N-minute opportunity is embargoed because samples now use the N-minute entry timeframe.
     const trainEnd = Math.floor(total * 0.60);
     const validationStart = trainEnd + purgeSamples;
     const validationEnd = Math.min(total, validationStart + Math.floor(total * 0.20));
@@ -473,7 +480,7 @@ export class ResearchEngine {
       horizonMinutes,
       parameters: {
         threshold: selectedThreshold,
-        purgeEmbargoMinutes: purgeSamples * 5,
+        purgeEmbargoMinutes: purgeSamples * horizonMinutes,
         featureCount,
         spreadModeledPips: modeledSpreadPips,
         algorithm: 'logistic_regression',
