@@ -730,7 +730,7 @@ export class AutonomousScheduler {
 
       return {
         durationMs,
-        pairsProcessed: Object.keys(candlesMap).length,
+        pairsProcessed: Object.keys(freshCandlesMap).length,
         signalsCreated: createdSignals.length,
         signalsUpdated: updatedSignals.length,
         experimentsRun: experimentsRun.length,
