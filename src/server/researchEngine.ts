@@ -784,6 +784,28 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     };
   }
 
+  /** Returns the exact ordered normalized feature vector used by symbolic genomes. */
+  public extractCausalFeatureVector(
+    candle: Candle,
+    previous: Candle,
+    closes: number[],
+    ema9: number[],
+    ema21: number[],
+    rsi14: number[],
+    index: number = closes.length - 1
+  ): number[] {
+    if (index < 34 || index >= closes.length ||
+        ![candle.open, candle.high, candle.low, candle.close].every(Number.isFinite)) {
+      throw new Error("Causal feature extraction requires a valid candle and at least 35 indexed closes.");
+    }
+    const features = this.buildGeneFeatureVector(candle, previous, closes, ema9, ema21, rsi14, index);
+    return this.genomeFeatures.map(name => {
+      const value = features[name];
+      if (!Number.isFinite(value)) throw new Error("Feature extraction produced a non-finite value: " + name);
+      return value;
+    });
+  }
+
   private evaluateGenomeExpression(node: StrategyExpressionNode, features: GeneFeatureVector): number {
     if (node.kind === 'feature') return this.clamp(features[node.feature]);
     if (node.kind === 'constant') return this.clamp(node.value);
