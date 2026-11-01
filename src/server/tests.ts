@@ -5,7 +5,7 @@
  */
 
 import { Candle, ForexSymbol, ResearchSignal, SynthesizedStrategyGene, VerificationTestResult } from '../types/index.js';
-import { dataFeedEngine } from './dataFeeds.js';
+import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
@@ -30,7 +30,7 @@ import {
   doesResearchHoldoutOverlap,
 } from './evolutionEngine.js';
 import { findEligibleStartTimeframes, getNextCandleOpenMs } from './tradingClock.js';
-import { getForexMarketState, getSessionFromTimestamp, isForexMarketIntervalOpen, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
+import { getForexMarketState, getReportingSessionFromTimestamp, isForexMarketIntervalOpen, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -155,15 +155,19 @@ export async function runAllVerificationTests(): Promise<{
       ['2026-11-02T19:00:00.000Z', 'LATE_NEW_YORK'], // Monday 14:00 EST
     ];
     for (const [timestamp, expected] of cases) {
-      const actual = getSessionFromTimestamp(timestamp).id;
+      const actual = getReportingSessionFromTimestamp(timestamp).id;
       if (actual !== expected) {
         throw new Error(`${timestamp}: expected ${expected}, received ${actual}.`);
       }
     }
-    const summerOverlap = getSessionFromTimestamp('2026-07-06T12:00:00.000Z');
-    const winterOverlap = getSessionFromTimestamp('2026-11-02T13:00:00.000Z');
+    const summerOverlap = getReportingSessionFromTimestamp('2026-07-06T12:00:00.000Z');
+    const winterOverlap = getReportingSessionFromTimestamp('2026-11-02T13:00:00.000Z');
     if (summerOverlap.utcRange !== '12:00–16:00 UTC' || winterOverlap.utcRange !== '13:00–17:00 UTC') {
       throw new Error('Session UTC labels must follow the New York DST offset rather than a fixed UTC schedule.');
+    }
+    // Preserve the old classifier consumed by strategy sessionAffinity and regime logic.
+    if (getSessionFromTimestamp('2026-11-02T19:00:00.000Z').id !== 'NEW_YORK') {
+      throw new Error('Reporting-only session buckets must not change existing trading session-affinity semantics.');
     }
   });
 
