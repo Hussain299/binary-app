@@ -13,6 +13,7 @@ import { calculateBinarySettlement } from './binarySettlement.js';
 import {
   assessNearestNeighbors,
   bayesianUcbScore,
+  selectEvolutionParents,
   classifyMarketRegime,
   inferGenomeStyle,
   isStrategyRegimeCompatible,
@@ -236,6 +237,37 @@ export async function runAllVerificationTests(): Promise<{
     }
     if (!isStrategyRegimeCompatible('TREND', 'UNKNOWN').allowed) {
       throw new Error('Unknown regime must not invent a directional classification.');
+    }
+  });
+
+  await runTest('ML', 'Evolutionary parent selection never uses holdout results', () => {
+    const genome = {
+      version: 1 as const,
+      expression: { kind: 'feature' as const, feature: 'return_1' as const },
+      activationThreshold: 0.7,
+      signature: 'test',
+      complexity: 1,
+    };
+    const candidate = (id: string, validationRate: number, validationEv: number, testEv: number) => ({
+      id,
+      genome: { ...genome, signature: id },
+      discoveryMetrics: {
+        trainScoredTrades: 200,
+        validationScoredTrades: 200,
+        trainWinRate: 0.72,
+        validationWinRate: validationRate,
+        validationExpectedValueUnits: validationEv,
+        validationProfitFactor: 1.2,
+        minimumPayoutPct: 80,
+      },
+      // This field must have no effect on selection. It represents an untouched holdout.
+      backtestMetrics: { expectedValueUnits: testEv },
+    });
+    const validationWinner = candidate('validation-winner', 0.74, 0.18, -9);
+    const holdoutWinner = candidate('holdout-only-winner', 0.61, -0.10, 12);
+    const selected = selectEvolutionParents([holdoutWinner, validationWinner], 30);
+    if (selected.length !== 1 || selected[0].id !== 'validation-winner') {
+      throw new Error('Only candidates passing train/validation evidence may become evolutionary parents; holdout results must be ignored.');
     }
   });
 
