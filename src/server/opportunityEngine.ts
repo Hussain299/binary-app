@@ -80,6 +80,7 @@ interface PairContext {
 
 interface Analogue {
   index: number;
+  entryIndex: number;
   distance: number;
 }
 
@@ -294,33 +295,35 @@ function makeForecast(
   if (!selected) {
     const eligible: Analogue[] = [];
     const candles = context.candles;
-    const entryOffset = 1;
 
     for (const row of context.historicalFeatureRows) {
       const index = row.index;
       // Graph analogues are restricted to the older archive partition.
       // Their full outcome interval must end before the sealed holdout begins.
-      if (index + horizon >= context.trainEndIndex) continue;
-      const entryIndex = index + entryOffset;
-      const exitIndex = index + horizon;
-      if (exitIndex >= candles.length) continue;
-
-      const entryTime = candles[entryIndex].timestampMs;
-      const expiryTime = entryTime + horizon * M1_MS;
-      if (candles[exitIndex].timestampMs !== expiryTime - M1_MS) continue;
-      if (!isForexMarketIntervalOpen(entryTime, expiryTime)) continue;
+      if (index >= context.trainEndIndex) continue;
+      const decisionTimeMs = candles[index].timestampMs + M1_MS;
+      const entryTimeMs = getNextCandleOpenMs(decisionTimeMs, horizon);
+      if (entryTimeMs - decisionTimeMs !== ADVANCE_NOTICE_MS) continue;
+      const expiryTimeMs = entryTimeMs + horizon * M1_MS;
+      const entryIndex = context.timestampIndex.get(entryTimeMs);
+      const exitIndex = context.timestampIndex.get(expiryTimeMs - M1_MS);
+      if (entryIndex === undefined || exitIndex === undefined ||
+          exitIndex >= context.trainEndIndex || exitIndex <= entryIndex) continue;
+      if (!isForexMarketIntervalOpen(entryTimeMs, expiryTimeMs)) continue;
 
       const candidateDistance = distance(currentFeatures, row.vector);
-      if (Number.isFinite(candidateDistance)) eligible.push({ index, distance: candidateDistance });
+      if (Number.isFinite(candidateDistance)) {
+        eligible.push({ index, entryIndex, distance: candidateDistance });
+      }
     }
 
     eligible.sort((a, b) => a.distance - b.distance);
     selected = [];
     const separationMs = horizon * M1_MS;
     for (const candidate of eligible) {
-      const entryTime = candles[candidate.index + entryOffset].timestampMs;
+      const entryTime = candles[candidate.entryIndex].timestampMs;
       if (selected.some(item =>
-        Math.abs(candles[item.index + entryOffset].timestampMs - entryTime) < separationMs
+        Math.abs(candles[item.entryIndex].timestampMs - entryTime) < separationMs
       )) continue;
       selected.push(candidate);
       if (selected.length >= MAX_ANALOGUES) break;
@@ -350,7 +353,7 @@ function makeForecast(
   let wins = 0;
   let decisive = 0;
   for (const analogue of selected) {
-    const entryIndex = analogue.index + 1;
+    const entryIndex = analogue.entryIndex;
     const entryPrice = context.candles[entryIndex].open;
     const path = [context.currentPrice];
     for (let minute = 1; minute <= horizon; minute++) {
