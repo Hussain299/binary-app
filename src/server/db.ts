@@ -31,6 +31,7 @@ import {
   updateBetaPosterior,
   bayesianUcbScore,
   doesResearchHoldoutOverlap,
+  hasSufficientHistoricalApprovalEvidence,
 } from './evolutionEngine.js';
 
 interface DatabaseSchema {
@@ -625,21 +626,11 @@ class DatabaseService {
   }
 
   private hasHistoricalApprovalEvidence(gene: SynthesizedStrategyGene): boolean {
-    const metrics = gene.backtestMetrics;
-    return !!metrics &&
-      gene.accuracyStatus === 'BACKTESTED' &&
-      gene.sampleCount >= 300 &&
-      metrics.testScoredSampleSize >= 300 &&
-      metrics.trainScoredSampleSize >= 150 &&
-      metrics.validationScoredSampleSize >= 150 &&
-      metrics.testWinRate >= 0.70 &&
-      metrics.validationWinRate >= 0.70 &&
-      metrics.testBlockWinRates?.length === 3 &&
-      metrics.testBlockWinRates.every(rate => rate >= 0.70) &&
-      metrics.binaryPayoutPct >= 80 &&
-      metrics.expectedValueUnits > 0 &&
-      metrics.profitFactor >= 1.15 &&
-      metrics.confidenceInterval95[0] >= 0.60;
+    return hasSufficientHistoricalApprovalEvidence(
+      gene.backtestMetrics,
+      gene.accuracyStatus,
+      gene.sampleCount
+    );
   }
 
   private hasForwardApprovalEvidence(gene: SynthesizedStrategyGene): boolean {
