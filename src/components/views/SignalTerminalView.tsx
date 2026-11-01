@@ -30,6 +30,45 @@ import {
 import { AutopilotLog, MarketSessionInfo, ResearchSignal, SynthesizedStrategyGene, LossAutopsy, FOREX_PAIRS, StrategyPerformanceRecord } from '../../types/index.js';
 import { AutopilotStream } from '../AutopilotStream.tsx';
 
+interface EvolutionTelemetry {
+  timestamp: string;
+  learning: {
+    posterior: string;
+    selection: string;
+    decisiveUpdates: number;
+    strategyCount: number;
+  };
+  episodicMemory: {
+    storedTrades: number;
+    featureDimensions: number;
+    nearestNeighbors: number;
+    futureOutcomesExcluded: boolean;
+  };
+  regimes: Array<{
+    symbol: string;
+    session: string;
+    regime: string;
+    directionalEfficiency: number | null;
+    atrRatio: number | null;
+    observationCount: number;
+    reason: string;
+    assessedAt: string;
+  }>;
+  strategies: Array<{
+    strategyId: string;
+    alpha: number;
+    beta: number;
+    posteriorWinRate: number;
+    decisiveOutcomes: number;
+    bayesianUcbScore: number;
+    wins: number;
+    losses: number;
+    scratches: number;
+    netReturnUnits: number;
+    updatedAt: string;
+  }>;
+}
+
 interface SignalTerminalViewProps {
   signals: ResearchSignal[];
   autopilotLogs?: AutopilotLog[];
@@ -56,6 +95,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const [sessionData, setSessionData] = useState<MarketSessionInfo[]>([]);
   const [synthesizedStrategies, setSynthesizedStrategies] = useState<SynthesizedStrategyGene[]>([]);
   const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformanceRecord[]>([]);
+  const [evolutionTelemetry, setEvolutionTelemetry] = useState<EvolutionTelemetry | null>(null);
+  const [evolutionTelemetryError, setEvolutionTelemetryError] = useState<string>('');
   const [isEvolvingStrategy, setIsEvolvingStrategy] = useState<boolean>(false);
   const [historyImportPair, setHistoryImportPair] = useState<string>('EUR/USD');
   const [isImportingHistory, setIsImportingHistory] = useState<boolean>(false);
@@ -107,6 +148,18 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     }
   };
 
+  const fetchEvolutionTelemetry = async () => {
+    try {
+      const res = await fetch('/api/evolution/state');
+      if (!res.ok) throw new Error('Evolution telemetry endpoint returned ' + res.status);
+      const data = await res.json();
+      setEvolutionTelemetry(data);
+      setEvolutionTelemetryError('');
+    } catch (e: any) {
+      setEvolutionTelemetryError(e?.message || 'Could not load persisted learning state.');
+    }
+  };
+
   const getForwardPerformance = (strategyId?: string) =>
     strategyPerformance.find(item => item.strategyId === (strategyId || '')) || null;
 
@@ -114,6 +167,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     fetchSessions();
     fetchSynthesizedStrategies();
     fetchStrategyPerformance();
+    fetchEvolutionTelemetry();
   }, [signals]);
 
   const handleEvolveStrategy = async () => {
@@ -516,7 +570,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           </button>
 
           <button
-            onClick={() => setShowLearningModal(true)}
+            onClick={() => { setShowLearningModal(true); fetchEvolutionTelemetry(); }}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs text-neutral-300 font-medium transition-colors"
           >
             <Brain className="w-3.5 h-3.5 text-cyan-400" />
@@ -940,8 +994,80 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   3. Every Closed Trade Is Forward Paper Evidence
                 </span>
                 <p>
-                  When a trade finishes, its observed result is stored in a per-strategy forward outcome ledger and tagged as a single live-trade record. One trade does not update historical accuracy or qualify a strategy for promotion; performance is reported with its accumulated sample count.
+                  Each decisive WIN or LOSS updates that strategy's persisted Beta posterior exactly once. SCRATCH results do not change the win/loss posterior. The prediction-time 19-feature vector is stored with its settled outcome in a separate episodic memory bank; later signals compare the ten closest earlier trades and are vetoed only when a sufficiently similar neighborhood has non-positive payout-adjusted return.
                 </p>
+              </div>
+
+              <div className="bg-neutral-950 p-3.5 rounded-xl border border-emerald-800/80 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-bold text-emerald-300 block text-sm flex items-center gap-1.5">
+                    <Brain className="w-4 h-4" />
+                    Persisted learning state
+                  </span>
+                  <span className="text-[10px] text-neutral-500">
+                    {evolutionTelemetry ? new Date(evolutionTelemetry.timestamp).toLocaleTimeString() : 'Not loaded'}
+                  </span>
+                </div>
+                {evolutionTelemetry ? (
+                  <>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      <div className="bg-neutral-900 rounded-lg p-2">
+                        <div className="text-[10px] text-neutral-500">Decisive outcomes</div>
+                        <div className="text-lg font-bold text-white font-mono">{evolutionTelemetry.learning.decisiveUpdates.toLocaleString()}</div>
+                      </div>
+                      <div className="bg-neutral-900 rounded-lg p-2">
+                        <div className="text-[10px] text-neutral-500">Episodic memories</div>
+                        <div className="text-lg font-bold text-white font-mono">{evolutionTelemetry.episodicMemory.storedTrades.toLocaleString()}</div>
+                      </div>
+                      <div className="bg-neutral-900 rounded-lg p-2">
+                        <div className="text-[10px] text-neutral-500">Tracked strategies</div>
+                        <div className="text-lg font-bold text-white font-mono">{evolutionTelemetry.learning.strategyCount.toLocaleString()}</div>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-neutral-400">
+                      {evolutionTelemetry.learning.posterior} posterior · {evolutionTelemetry.learning.selection} selection.
+                      Memory uses {evolutionTelemetry.episodicMemory.featureDimensions} normalized features and checks the {evolutionTelemetry.episodicMemory.nearestNeighbors} closest earlier trades.
+                    </p>
+                    {evolutionTelemetry.strategies.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="text-[10px] uppercase tracking-wider text-neutral-500">Highest current selection scores</div>
+                        {[...evolutionTelemetry.strategies]
+                          .sort((a, b) => b.bayesianUcbScore - a.bayesianUcbScore)
+                          .slice(0, 5)
+                          .map(item => (
+                            <div key={item.strategyId} className="flex items-center justify-between gap-3 text-[11px] border-t border-neutral-800 pt-1.5">
+                              <span className="text-neutral-300 truncate">{item.strategyId}</span>
+                              <span className="text-right font-mono text-neutral-400 shrink-0">
+                                Beta({item.alpha.toFixed(1)}, {item.beta.toFixed(1)}) · n={item.decisiveOutcomes}
+                              </span>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                    {evolutionTelemetry.regimes.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="text-[10px] uppercase tracking-wider text-neutral-500">Last measured market regimes</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {evolutionTelemetry.regimes.slice(0, 8).map(item => (
+                            <div key={item.symbol} className="bg-neutral-900 rounded-lg px-2 py-1.5 text-[11px]">
+                              <div className="flex justify-between gap-2">
+                                <span className="text-neutral-300">{item.symbol}</span>
+                                <span className="text-cyan-300 font-mono">{item.regime}</span>
+                              </div>
+                              <div className="text-[10px] text-neutral-500">
+                                {item.session} · ER {item.directionalEfficiency?.toFixed(2) ?? 'n/a'} · ATR× {item.atrRatio?.toFixed(2) ?? 'n/a'}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-neutral-400">
+                    {evolutionTelemetryError || 'No persisted learning telemetry has been returned yet.'}
+                  </p>
+                )}
               </div>
 
               <div className="bg-neutral-950 p-3.5 rounded-xl border border-amber-800/80 space-y-2">
