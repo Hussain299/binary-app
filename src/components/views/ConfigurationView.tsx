@@ -64,7 +64,7 @@ export const ConfigurationView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-y-auto bg-neutral-950 p-6 space-y-6">
+    <div className="sf-page">
       <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-neutral-800">
         <div>
           <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
