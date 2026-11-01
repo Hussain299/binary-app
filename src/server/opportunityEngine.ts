@@ -670,8 +670,8 @@ export class OpportunityEngine {
     opportunity: TradeOpportunity,
     direction: "BUY" | "SELL"
   ): TradeOpportunity {
-    if (opportunity.forecast.status !== "AVAILABLE" || opportunity.forecast.terminalPrices.length < MIN_ANALOGUES_FOR_FORECAST) {
-      throw new Error("This opportunity has insufficient historical paths to recalculate a direction.");
+    if (opportunity.forecast.status !== "AVAILABLE" || opportunity.forecast.terminalPrices.length < MIN_ANALOGUES_FOR_SHORTLIST) {
+      throw new Error("This opportunity has fewer than the required 100 historical paths to recalculate a direction safely.");
     }
     const wins = opportunity.forecast.terminalPrices.filter(price =>
       direction === "BUY" ? price > opportunity.proposedEntryPrice : price < opportunity.proposedEntryPrice
@@ -680,7 +680,7 @@ export class OpportunityEngine {
       Math.abs(price - opportunity.proposedEntryPrice) > 1e-12
     ).length;
     const winRate = decisive ? wins / decisive : null;
-    const lower = decisive >= MIN_ANALOGUES_FOR_FORECAST ? wilson(wins, decisive) : null;
+    const lower = decisive >= MIN_ANALOGUES_FOR_SHORTLIST ? wilson(wins, decisive) : null;
     const breakEven = opportunity.forecast.payoutBreakEvenProbability;
     const expectedValue = lower === null ? null : lower * (PAYOUT_FLOOR / 100) - (1 - lower);
     const counterEvidence = [
@@ -689,9 +689,11 @@ export class OpportunityEngine {
     const reasons = lower !== null && lower > breakEven
       ? ["Human-modified direction clears the historical analogue lower-bound check; it still requires paper-forward validation."]
       : ["The human-modified direction does not clear the payout-adjusted conservative lower-bound check."];
-    const status: OpportunityAudit["status"] = lower !== null && lower > breakEven
-      ? "SHORTLISTED"
-      : "REJECTED";
+    const status: OpportunityAudit["status"] = lower === null
+      ? "INSUFFICIENT_EVIDENCE"
+      : lower > breakEven
+        ? "SHORTLISTED"
+        : "REJECTED";
     const revisedAt = new Date().toISOString();
     const id = `opp_rev_${stableHash(opportunity.id + "|" + direction + "|" + revisedAt).slice(0, 16)}`;
     return {
