@@ -192,6 +192,7 @@ export interface OpportunityHumanDecision {
   status: OpportunityHumanStatus;
   direction?: SignalDirection;
   horizonMinutes?: 5 | 10 | 15 | 20 | 25 | 30;
+  entryPrice?: number;
   decidedAt: string;
   notes?: string;
   parentOpportunityId?: string;
