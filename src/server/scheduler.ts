@@ -298,7 +298,7 @@ export class AutonomousScheduler {
               ema21,
               rsi14
             );
-            if (evalResult.shouldTrigger && evalResult.conviction >= 0.80) {
+            if (evalResult.shouldTrigger) {
               const memoryAssessment = db.assessEpisodicMemory({
                 symbol,
                 direction: evalResult.direction,
