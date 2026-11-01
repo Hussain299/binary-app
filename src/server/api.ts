@@ -5,11 +5,12 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { EvolutionGeneration, EvolutionSubGenerationMetrics, FOREX_PAIRS, ForexSymbol, RuleFamily, SynthesizedStrategyGene } from '../types/index.js';
+import { EvolutionGeneration, EvolutionSubGenerationMetrics, FOREX_PAIRS, ForexSymbol, OpportunityDirection, OpportunityHumanStatus, RuleFamily, SynthesizedStrategyGene } from '../types/index.js';
 import { dataFeedEngine } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
+import { opportunityEngine } from './opportunityEngine.js';
 import { autonomousScheduler } from './scheduler.js';
 import { runAllVerificationTests } from './tests.js';
 import { historicalDataStore } from './historicalData.js';
@@ -200,6 +201,136 @@ apiRouter.get('/sessions/accuracy', (_req: Request, res: Response) => {
     sessions: db.getSessionAccuracyBreakdown(),
     marketTime: dataFeedEngine.getMarketSessions(),
   });
+});
+
+// Pre-trade opportunity discovery. This creates hypotheses and forecast cards only;
+// it does not create a ResearchSignal, trigger an entry, or contact a broker.
+apiRouter.post('/opportunities/generate', async (req: Request, res: Response) => {
+  try {
+    const requested = req.body?.symbols;
+    if (requested !== undefined && (!Array.isArray(requested) || requested.length === 0 ||
+        requested.some((value: unknown) => typeof value !== 'string'))) {
+      return res.status(400).json({ error: 'symbols must be a non-empty array of supported currency-pair strings.' });
+    }
+    const symbols = requested
+      ? requested.map((value: string) => FOREX_PAIRS.find(pair => pair.replace('/', '') === value.toUpperCase().replace('/', '')))
+      : FOREX_PAIRS;
+    if (symbols.some((symbol: ForexSymbol | undefined) => !symbol)) {
+      return res.status(400).json({ error: 'One or more currency pairs are unsupported.' });
+    }
+    const result = await opportunityEngine.generateBatch(symbols as ForexSymbol[]);
+    return res.json({
+      success: true,
+      mode: 'PRE_TRADE_RESEARCH_ONLY',
+      executionEnabled: false,
+      ...result,
+    });
+  } catch (err: any) {
+    return res.status(409).json({ error: err.message || 'Opportunity generation failed.' });
+  }
+});
+
+// GET /api/opportunities — Persisted opportunity cards and forecasts.
+apiRouter.get('/opportunities', (req: Request, res: Response) => {
+  const limit = Math.min(3000, Math.max(1, Number(req.query.limit) || 1000));
+  let opportunities = db.getOpportunities(limit);
+  const batchId = typeof req.query.batchId === 'string' ? req.query.batchId : undefined;
+  const rawSymbol = typeof req.query.symbol === 'string' ? req.query.symbol.toUpperCase().replace('/', '') : undefined;
+  const status = typeof req.query.status === 'string' ? req.query.status.toUpperCase() : undefined;
+  if (batchId) opportunities = opportunities.filter(item => item.batchId === batchId);
+  if (rawSymbol) opportunities = opportunities.filter(item => item.symbol.replace('/', '') === rawSymbol);
+  if (status) opportunities = opportunities.filter(item =>
+    item.audit.status === status || item.humanDecision.status === status
+  );
+  return res.json({
+    opportunities,
+    totalCount: opportunities.length,
+    shortlistCount: opportunities.filter(item => item.audit.status === 'SHORTLISTED' &&
+      item.humanDecision.status === 'PENDING').length,
+    timestamp: new Date().toISOString(),
+    executionEnabled: false,
+  });
+});
+
+// Human review never creates an order. Approval means only "keep this on the paper-review list".
+apiRouter.post('/opportunities/:id/decision', (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  const opportunity = db.getOpportunityById(id);
+  if (!opportunity) return res.status(404).json({ error: 'Opportunity was not found.' });
+  if (Date.parse(opportunity.staleAfter) <= Date.now()) {
+    return res.status(409).json({ error: 'This opportunity is stale. Generate a fresh market snapshot before reviewing it.' });
+  }
+  const decision = String(req.body?.decision || '').toUpperCase();
+  if (decision !== 'APPROVE_FOR_PAPER_REVIEW' && decision !== 'REJECT') {
+    return res.status(400).json({ error: 'decision must be APPROVE_FOR_PAPER_REVIEW or REJECT.' });
+  }
+  if (decision === 'APPROVE_FOR_PAPER_REVIEW' && opportunity.audit.status !== 'SHORTLISTED') {
+    return res.status(409).json({ error: 'Only independently shortlisted opportunities can be approved for paper review.' });
+  }
+  const humanStatus: OpportunityHumanStatus = decision === 'REJECT'
+    ? 'REJECTED_BY_HUMAN'
+    : 'APPROVED_FOR_PAPER_REVIEW';
+  const updated = {
+    ...opportunity,
+    humanDecision: {
+      ...opportunity.humanDecision,
+      status: humanStatus,
+      decidedAt: new Date().toISOString(),
+      notes: typeof req.body?.notes === 'string' ? req.body.notes.slice(0, 500) : undefined,
+    },
+  };
+  db.updateOpportunity(updated);
+  return res.json({
+    success: true,
+    opportunity: updated,
+    message: decision === 'REJECT'
+      ? 'Human rejection recorded. No trade was placed.'
+      : 'Approved for paper review only. No signal or broker order was created.',
+    executionEnabled: false,
+  });
+});
+
+// Human revisions create a new hypothesis record linked to the original; original remains immutable.
+apiRouter.post('/opportunities/:id/revise', (req: Request, res: Response) => {
+  const original = db.getOpportunityById(String(req.params.id));
+  if (!original) return res.status(404).json({ error: 'Opportunity was not found.' });
+  if (Date.parse(original.staleAfter) <= Date.now()) {
+    return res.status(409).json({ error: 'This opportunity is stale. Generate a fresh batch before revising it.' });
+  }
+  const direction = String(req.body?.direction || '').toUpperCase() as OpportunityDirection;
+  if (direction !== 'BUY' && direction !== 'SELL') {
+    return res.status(400).json({ error: 'direction must be BUY or SELL.' });
+  }
+  const requestedHorizon = Number(req.body?.horizonMinutes || original.horizonMinutes);
+  if (![5, 10, 15, 20, 25, 30].includes(requestedHorizon)) {
+    return res.status(400).json({ error: 'horizonMinutes must be one of 5, 10, 15, 20, 25 or 30.' });
+  }
+  const source = requestedHorizon === original.horizonMinutes
+    ? original
+    : db.getOpportunities(3000).find(item =>
+        item.batchId === original.batchId &&
+        item.symbol === original.symbol &&
+        item.hypothesisType === original.hypothesisType &&
+        item.strategyGeneId === original.strategyGeneId &&
+        item.horizonMinutes === requestedHorizon
+      );
+  if (!source) {
+    return res.status(409).json({ error: 'No same-snapshot forecast exists for the requested horizon. Generate a fresh batch rather than extrapolating an unmeasured path.' });
+  }
+  try {
+    const revised = opportunityEngine.reviseDirection(source, direction);
+    revised.humanDecision.notes = typeof req.body?.notes === 'string' ? req.body.notes.slice(0, 500) : 'Human revised direction and/or horizon.';
+    db.storeOpportunities([revised]);
+    return res.json({
+      success: true,
+      originalOpportunityId: original.id,
+      opportunity: revised,
+      message: 'A separate human-modified hypothesis was created and re-audited. The original remains unchanged; no trade was placed.',
+      executionEnabled: false,
+    });
+  } catch (err: any) {
+    return res.status(409).json({ error: err.message });
+  }
 });
 
 // GET /api/strategies/synthesized — Candidate, paper-trading and forward-approved strategy pool
