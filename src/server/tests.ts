@@ -95,6 +95,19 @@ export async function runAllVerificationTests(): Promise<{
     if (closed.isOpen || closed.status !== 'WEEKEND_CLOSED') {
       throw new Error('Saturday must report the explicit weekend-closed state.');
     }
+    const winterReopen = getForexMarketState('2026-11-01T21:59:00.000Z');
+    if (!winterReopen.message.includes('Monday at 3:30 AM IST') || /UTC|New York|ET/.test(winterReopen.message)) {
+      throw new Error(`Weekend reopen must be displayed in IST only; received: ${winterReopen.message}`);
+    }
+    const summerReopen = getForexMarketState('2026-07-05T20:59:00.000Z');
+    if (!summerReopen.message.includes('Monday at 2:30 AM IST') || /UTC|New York|ET/.test(summerReopen.message)) {
+      throw new Error(`DST-adjusted summer reopen must be displayed in IST only; received: ${summerReopen.message}`);
+    }
+    const session = getReportingSessionFromTimestamp('2026-11-02T19:00:00.000Z');
+    if (!session.istRange.endsWith('IST') || !/AM|PM/.test(session.istRange) ||
+        /UTC|ET/.test(session.hoursLabel)) {
+      throw new Error('Session reporting labels must be readable IST-only times.');
+    }
   });
 
   await runTest('MARKET_HOURS', 'Entry-to-expiry interval cannot cross the weekly FX close', () => {
