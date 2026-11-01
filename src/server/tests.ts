@@ -379,6 +379,39 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
+  await runTest('ENTRY_EXIT', 'Signal factory rejects misaligned or late advance schedules', () => {
+    const signalCandle: Candle = {
+      symbol: 'EUR/USD',
+      timestamp: '2026-10-29T10:11:00.000Z',
+      timestampMs: Date.parse('2026-10-29T10:11:00.000Z'),
+      open: 1.0850,
+      high: 1.0860,
+      low: 1.0840,
+      close: 1.0855,
+      volume: 100,
+      source: 'test_fixture',
+    };
+    let rejected = false;
+    try {
+      entryExitEngine.createResearchSignal({
+        symbol: 'EUR/USD',
+        direction: 'BUY',
+        signalCandle,
+        ruleFamily: 'clock_guard_probe',
+        expiryMinutes: 15,
+        entryTimeframeMinutes: 15,
+        candleOpenTimeUtc: '2030-01-01T00:15:00.000Z',
+        confidence: 0.7,
+        modelVersion: 'clock-guard-test',
+      });
+    } catch (error: any) {
+      rejected = String(error.message).includes('exactly three minutes');
+    }
+    if (!rejected) {
+      throw new Error('The signal factory must independently reject a timestamp that is not exactly T-3m.');
+    }
+  });
+
   await runTest('ENTRY_EXIT', 'Exact three-minute schedule across 5–30 minute entry candles', () => {
     const entryOpen = Date.parse('2026-10-29T10:30:00.000Z');
     const decisionClose = entryOpen - 3 * 60_000;
