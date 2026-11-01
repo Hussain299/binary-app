@@ -4,7 +4,7 @@
  * Research Trinity Audits, and System State.
  */
 
-import { Candle, ForexSymbol, ResearchSignal, SynthesizedStrategyGene, VerificationTestResult } from '../types/index.js';
+import { Candle, ForexSymbol, LossAutopsy, ResearchSignal, SynthesizedStrategyGene, TradeOpportunity, VerificationTestResult } from '../types/index.js';
 import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
@@ -31,6 +31,20 @@ import {
 } from './evolutionEngine.js';
 import { findEligibleStartTimeframes, getNextCandleOpenMs } from './tradingClock.js';
 import { getForexMarketState, getReportingSessionFromTimestamp, isForexMarketIntervalOpen, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
+import {
+  createSeededRandom,
+  deriveResearchSeed,
+  fingerprintCandles,
+  stableHash,
+} from './researchReproducibility.js';
+import { sanitizeLossAutopsy, OBSERVATION_ONLY_LESSONS } from './researchGovernance.js';
+import { calibratePredictionScore } from './predictionCalibration.js';
+import { opportunityEngine, evaluateOpportunityHoldout, buildOpportunitySchedule } from './opportunityEngine.js';
+import {
+  assessPaperCapitalRisk,
+  CONSERVATIVE_PAPER_RISK_POLICY,
+  payoutBreakEvenProbability,
+} from './capitalRisk.js';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -76,6 +90,455 @@ export async function runAllVerificationTests(): Promise<{
       });
     }
   };
+
+  await runTest('RESEARCH', 'Seeded evolutionary search is deterministic and dataset-bound', () => {
+    const seed = 'reproducibility-test-seed';
+    const first = createSeededRandom(seed);
+    const second = createSeededRandom(seed);
+    const sequenceA = Array.from({ length: 32 }, () => first());
+    const sequenceB = Array.from({ length: 32 }, () => second());
+    if (JSON.stringify(sequenceA) !== JSON.stringify(sequenceB)) {
+      throw new Error('Identical seeds must produce identical random streams.');
+    }
+    if (sequenceA.some(value => value < 0 || value >= 1)) {
+      throw new Error('Seeded random values must remain in [0, 1).');
+    }
+    const otherRandom = createSeededRandom('different-seed');
+    const other = Array.from({ length: 32 }, () => otherRandom());
+    if (JSON.stringify(sequenceA) === JSON.stringify(other)) {
+      throw new Error('Different seeds should not produce the same random stream.');
+    }
+
+    const candles = makeM1TestCandles('EUR/USD', 120);
+    const fingerprintA = fingerprintCandles(candles);
+    const fingerprintB = fingerprintCandles(candles.map(candle => ({ ...candle })));
+    if (fingerprintA !== fingerprintB) {
+      throw new Error('Cloned identical candle streams must have identical fingerprints.');
+    }
+    const changed = candles.map((candle, index) =>
+      index === 60 ? { ...candle, close: candle.close + 0.00001 } : candle
+    );
+    if (fingerprintA === fingerprintCandles(changed)) {
+      throw new Error('A changed market price must change the dataset fingerprint.');
+    }
+    const derivedA = deriveResearchSeed('batch-1', 'EUR/USD', fingerprintA);
+    const derivedB = deriveResearchSeed('batch-1', 'EUR/USD', fingerprintA);
+    const derivedDifferentData = deriveResearchSeed('batch-1', 'EUR/USD', fingerprintCandles(changed));
+    if (derivedA !== derivedB || derivedA === derivedDifferentData) {
+      throw new Error('Research seeds must be stable for an exact run and change with its dataset.');
+    }
+    if (stableHash('signalforge') === stableHash('a-different-value')) {
+      throw new Error('Distinct experiment metadata should not share the same stable hash.');
+    }
+
+    const candidateA = researchEngine.synthesizeInfiniteNovelStrategy(
+      candles, 'EUR/USD', 7, [], 'repeatable-batch',
+      false, createSeededRandom(derivedA),
+      { researchSeed: derivedA, datasetFingerprint: fingerprintA }
+    );
+    const candidateB = researchEngine.synthesizeInfiniteNovelStrategy(
+      candles, 'EUR/USD', 7, [], 'repeatable-batch',
+      false, createSeededRandom(derivedA),
+      { researchSeed: derivedA, datasetFingerprint: fingerprintA }
+    );
+    if (
+      candidateA.genome?.signature !== candidateB.genome?.signature ||
+      candidateA.optimalHorizonMinutes !== candidateB.optimalHorizonMinutes ||
+      candidateA.sessionAffinity !== candidateB.sessionAffinity ||
+      candidateA.id !== candidateB.id
+    ) {
+      throw new Error('The same search seed must reproduce the same genome, traits, and candidate identity.');
+    }
+    if (candidateA.researchSeed !== derivedA ||
+        candidateA.datasetFingerprint !== fingerprintA ||
+        candidateA.featureSchemaVersion !== 'causal-market-features-v1') {
+      throw new Error('Generated candidates must carry their reproduction manifest.');
+    }
+  });
+
+  await runTest('ML', 'Raw strategy scores become probabilities only after sufficient forward evidence', () => {
+    const observations: Array<{ rawScore: number; outcome: 'WIN' | 'LOSS' }> = [];
+    for (let bin = 0; bin < 10; bin++) {
+      const rawScore = 0.50 + bin * 0.05;
+      const winsInBin = 3 + bin;
+      for (let sample = 0; sample < 20; sample++) {
+        observations.push({
+          rawScore,
+          outcome: sample < winsInBin ? 'WIN' : 'LOSS',
+        });
+      }
+    }
+
+    const insufficient = calibratePredictionScore(0.8, observations.slice(0, 80));
+    if (insufficient.status !== 'UNCALIBRATED' ||
+        insufficient.probability !== null ||
+        insufficient.sampleSize !== 80) {
+      throw new Error('Calibration must abstain when fewer than 100 earlier outcomes are available.');
+    }
+
+    const lowScore = calibratePredictionScore(0.5, observations);
+    const highScore = calibratePredictionScore(0.95, observations);
+    if (lowScore.probability === null || highScore.probability === null) {
+      throw new Error('A sufficiently large forward sample should produce calibrated probabilities.');
+    }
+    if (!(highScore.probability > lowScore.probability)) {
+      throw new Error('Isotonic calibration must preserve monotonic score ordering.');
+    }
+    if (highScore.status !== 'OVERCONFIDENT' || highScore.probability >= 0.95) {
+      throw new Error('A raw score materially above observed performance must be flagged as overconfident.');
+    }
+    if (
+      lowScore.brierScore === null || highScore.brierScore === null ||
+      lowScore.expectedCalibrationError === null ||
+      highScore.expectedCalibrationError === null ||
+      !Number.isFinite(lowScore.brierScore) ||
+      !Number.isFinite(highScore.expectedCalibrationError)
+    ) {
+      throw new Error('Calibration diagnostics must include finite Brier and calibration-error values.');
+    }
+
+    let rejectedInvalidScore = false;
+    try {
+      calibratePredictionScore(1.2, observations);
+    } catch {
+      rejectedInvalidScore = true;
+    }
+    if (!rejectedInvalidScore) {
+      throw new Error('Out-of-range raw scores must be rejected rather than silently calibrated.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Paper capital governor prioritizes survival over trade frequency', () => {
+    const base = {
+      currentEquity: 100,
+      peakEquity: 100,
+      dayStartingEquity: 100,
+      openPositions: [],
+      candidate: {
+        symbol: 'EUR/USD',
+        direction: 'BUY' as const,
+        payoutPct: 80,
+        winProbabilityLowerBound: 0.65,
+        calibrationSampleSize: 200,
+      },
+    };
+
+    const safe = assessPaperCapitalRisk(base);
+    if (!safe.permitted || safe.reason !== 'ALLOCATED') {
+      throw new Error('A sufficiently evidenced positive conservative edge should receive a tiny paper allocation.');
+    }
+    if (safe.suggestedStakeFraction > CONSERVATIVE_PAPER_RISK_POLICY.maximumStakeFractionPerTrade ||
+        safe.suggestedStakeFraction > 0.0025) {
+      throw new Error('Paper stake suggestion exceeded the strict per-contract capital cap.');
+    }
+    if (safe.projectedTotalOpenStakeFraction > CONSERVATIVE_PAPER_RISK_POLICY.maximumTotalOpenStakeFraction) {
+      throw new Error('Paper portfolio risk exceeded its total open-stake ceiling.');
+    }
+    if (safe.conservativeWinProbability !== 0.65 ||
+        safe.breakEvenWinProbability !== Number(payoutBreakEvenProbability(80).toFixed(4))) {
+      throw new Error('Risk sizing must report the conservative probability and payout-adjusted break-even rate.');
+    }
+
+    const noEdge = assessPaperCapitalRisk({
+      ...base,
+      candidate: { ...base.candidate, winProbabilityLowerBound: 0.54 },
+    });
+    if (noEdge.permitted || noEdge.suggestedStakeFraction !== 0 || noEdge.reason !== 'NO_CONSERVATIVE_EDGE') {
+      throw new Error('A conservative probability below payout break-even must produce zero stake.');
+    }
+
+    const immature = assessPaperCapitalRisk({
+      ...base,
+      candidate: { ...base.candidate, calibrationSampleSize: 99 },
+    });
+    if (immature.permitted || immature.suggestedStakeFraction !== 0 ||
+        immature.reason !== 'INSUFFICIENT_CALIBRATION_EVIDENCE') {
+      throw new Error('Insufficient calibrated history must abstain rather than guess.');
+    }
+
+    const badPayout = assessPaperCapitalRisk({
+      ...base,
+      candidate: { ...base.candidate, payoutPct: 79 },
+    });
+    if (badPayout.permitted || badPayout.reason !== 'PAYOUT_BELOW_FLOOR') {
+      throw new Error('The capital governor must not relax the payout floor to chase returns.');
+    }
+
+    const drawdownStop = assessPaperCapitalRisk({
+      ...base,
+      currentEquity: 94,
+      peakEquity: 100,
+    });
+    if (drawdownStop.permitted || drawdownStop.reason !== 'DRAWDOWN_LIMIT_REACHED') {
+      throw new Error('A five-percent peak-to-equity drawdown must stop new paper allocations.');
+    }
+
+    const dailyStop = assessPaperCapitalRisk({
+      ...base,
+      currentEquity: 98,
+      dayStartingEquity: 100,
+    });
+    if (dailyStop.permitted || dailyStop.reason !== 'DAILY_LOSS_LIMIT_REACHED') {
+      throw new Error('The daily loss stop must prevent additional paper allocations.');
+    }
+
+    const correlated = assessPaperCapitalRisk({
+      ...base,
+      openPositions: [
+        { symbol: 'EUR/USD', direction: 'BUY', stakeFraction: 0.0025 },
+        { symbol: 'GBP/USD', direction: 'BUY', stakeFraction: 0.0025 },
+      ],
+      candidate: { ...base.candidate, symbol: 'AUD/USD' },
+    });
+    if (correlated.permitted || correlated.reason !== 'CURRENCY_CONCENTRATION_LIMIT_REACHED') {
+      throw new Error('Highly correlated USD exposure must be rejected even when individual strategies look attractive.');
+    }
+
+    const alreadyFull = assessPaperCapitalRisk({
+      ...base,
+      openPositions: [
+        { symbol: 'EUR/USD', direction: 'BUY', stakeFraction: 0.0025 },
+        { symbol: 'GBP/JPY', direction: 'BUY', stakeFraction: 0.0025 },
+        { symbol: 'AUD/CAD', direction: 'BUY', stakeFraction: 0.0025 },
+      ],
+    });
+    if (alreadyFull.permitted || alreadyFull.reason !== 'OPEN_RISK_LIMIT_REACHED') {
+      throw new Error('The portfolio open-risk ceiling must stop another position.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Opportunity schedules obey exact fresh T-3 timing and never defer the decision into the future', () => {
+    const snapshotMs = Date.parse('2026-10-29T10:27:00.000Z');
+    const nowMs = snapshotMs + 20_000;
+    const valid = buildOpportunitySchedule(snapshotMs, 5, nowMs);
+    if (!valid.valid || !valid.exactAdvanceWindow || !valid.withinProcessingWindow) {
+      throw new Error('An eligible snapshot exactly three minutes before the 5m boundary should pass.');
+    }
+    if (valid.decisionTimeMs !== snapshotMs || valid.entryTimeMs !== Date.parse('2026-10-29T10:30:00.000Z')) {
+      throw new Error('The opportunity schedule must use the observed candle close as its decision timestamp.');
+    }
+    const misaligned = buildOpportunitySchedule(Date.parse('2026-10-29T10:28:00.000Z'), 5, nowMs + 60_000);
+    if (misaligned.valid || misaligned.exactAdvanceWindow || !misaligned.reason?.includes('exact T')) {
+      throw new Error('A non-T-3 snapshot must not be shifted forward to manufacture a valid schedule.');
+    }
+    const late = buildOpportunitySchedule(snapshotMs, 5, snapshotMs + 25_000);
+    if (late.valid || late.withinProcessingWindow) {
+      throw new Error('A snapshot processed at or after the strict 25-second deadline must be rejected.');
+    }
+    const future = buildOpportunitySchedule(snapshotMs, 5, snapshotMs - 1);
+    if (future.valid || future.withinProcessingWindow) {
+      throw new Error('A decision cannot be marked fresh before its candle snapshot exists.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Opportunity holdout is later, embargoed, non-overlapping and multiple-testing adjusted', () => {
+    const startMs = Date.parse('2026-11-02T00:00:00.000Z');
+    const candles: Candle[] = Array.from({ length: 1200 }, (_, index) => {
+      const open = 1.1 + index * 0.00001;
+      const close = open + 0.00001;
+      const timestampMs = startMs + index * 60_000;
+      return {
+        symbol: 'EUR/USD',
+        timestampMs,
+        timestamp: new Date(timestampMs).toISOString(),
+        open,
+        high: close + 0.000002,
+        low: open - 0.000002,
+        close,
+        volume: 100,
+        source: 'imported',
+      };
+    });
+    const holdoutStartIndex = 500;
+    const rows = Array.from({ length: 1100 }, (_, offset) => ({
+      index: 60 + offset,
+      vector: Array.from({ length: 19 }, () => 0.1),
+    }));
+    const visited: number[] = [];
+    const result = evaluateOpportunityHoldout(
+      candles,
+      rows,
+      holdoutStartIndex,
+      5,
+      row => {
+        visited.push(row.index);
+        return 'BUY';
+      }
+    );
+
+    if (!visited.length || visited.some(index => index < holdoutStartIndex)) {
+      throw new Error('The holdout evaluator read a feature row from before its reserved chronological boundary.');
+    }
+    if (visited.length > 1 && visited.some((index, position) =>
+      position > 0 && index - visited[position - 1] < 5
+    )) {
+      throw new Error('Holdout trades must not overlap within the selected expiry horizon.');
+    }
+    if (result.sampleSize < 100 || result.wins !== result.sampleSize || result.losses !== 0) {
+      throw new Error('The independent holdout should count only the later, exact-expiry directional outcomes.');
+    }
+    if (result.lowerConfidenceBound === null ||
+        result.lowerConfidenceBound <= binaryBreakEvenWinRate(80) ||
+        result.expectedValueLowerBound === null ||
+        result.expectedValueLowerBound <= 0) {
+      throw new Error('The multiple-testing-adjusted lower bound must be used for any claimed edge.');
+    }
+
+    const noSignals = evaluateOpportunityHoldout(
+      candles,
+      rows,
+      holdoutStartIndex,
+      5,
+      () => null
+    );
+    if (noSignals.sampleSize !== 0 || noSignals.lowerConfidenceBound !== null) {
+      throw new Error('A candidate with no test triggers must remain unvalidated, not inherit the analogue sample.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Human direction revisions are separately audited and never overwrite the AI hypothesis', () => {
+    // Simulate the exact candle-close moment deterministically; wall-clock test timing is irrelevant.
+    let snapshotMs = Math.ceil((Date.now() + 60_000) / 60_000) * 60_000;
+    let schedule = buildOpportunitySchedule(snapshotMs, 10, snapshotMs + 1_000);
+    let scheduleSearchAttempts = 0;
+    while ((!schedule.exactAdvanceWindow || !schedule.marketIntervalOpen) && scheduleSearchAttempts < 4320) {
+      snapshotMs += 60_000;
+      schedule = buildOpportunitySchedule(snapshotMs, 10, snapshotMs + 1_000);
+      scheduleSearchAttempts++;
+    }
+    if (scheduleSearchAttempts >= 4320 || !schedule.valid) {
+      throw new Error('Test could not locate a fresh exact T-3 open-FX decision window.');
+    }
+    const fixtureNowMs = snapshotMs + 1_000;
+    const now = new Date(fixtureNowMs).toISOString();
+    const validEntryMs = schedule.entryTimeMs;
+    const terminalPrices = Array.from({ length: 120 }, (_, index) =>
+      index < 80 ? 1.10100 + (index % 5) * 0.00001 : 1.09900 - (index % 5) * 0.00001
+    );
+    const original: TradeOpportunity = {
+      id: 'opportunity-parent-test',
+      batchId: 'opportunity-batch-test',
+      symbol: 'EUR/USD',
+      hypothesisType: 'TREND_CONTINUATION',
+      hypothesisName: 'Test trend hypothesis',
+      hypothesis: 'Test-only opportunity to exercise the human revision audit.',
+      sourceKind: 'EXPLORATORY_HEURISTIC',
+      direction: 'BUY',
+      rawHypothesisScore: 0.4,
+      activationThreshold: 0.16,
+      horizonMinutes: 10,
+      generatedAt: now,
+      snapshotAt: new Date(snapshotMs).toISOString(),
+      staleAfter: new Date(snapshotMs + 25_000).toISOString(),
+      entryTimeUtc: new Date(validEntryMs).toISOString(),
+      expiryTimeUtc: new Date(validEntryMs + 10 * 60_000).toISOString(),
+      snapshotPrice: 1.10000,
+      proposedEntryPrice: 1.10000,
+      dataSource: 'imported',
+      marketDataQuality: 95,
+      datasetFingerprint: 'sha256:test',
+      featureSchemaVersion: 'causal-market-features-v1',
+      modelVersion: 'opportunity-research-test',
+      marketFeatureVector: Array.from({ length: 19 }, () => 0),
+      recentPriceHistory: [],
+      forecast: {
+        status: 'AVAILABLE',
+        points: [],
+        terminalPrices,
+        analogueCount: 120,
+        meanDistance: 0.12,
+        winRate: 0.6667,
+        lowerConfidenceBound: 0.59,
+        payoutBreakEvenProbability: binaryBreakEvenWinRate(80),
+        expectedValueLowerBound: 0.262,
+      },
+      audit: {
+        status: 'SHORTLISTED',
+        rankScore: 80,
+        holdoutSampleSize: 120,
+        holdoutWins: 112,
+        holdoutLosses: 8,
+        holdoutScratches: 0,
+        holdoutWinRate: 112 / 120,
+        holdoutLowerConfidenceBound: 0.70,
+        holdoutExpectedValueLowerBound: 0.26,
+        holdoutWindowStatus: 'FRESH',
+        holdoutWindowStartUtc: new Date(validEntryMs - 10 * 60 * 1000).toISOString(),
+        holdoutWindowEndUtc: new Date(validEntryMs).toISOString(),
+        reasons: ['Test fixture'],
+        counterEvidence: [],
+        auditedAt: now,
+      },
+      humanDecision: { status: 'PENDING', decidedAt: now },
+    };
+
+    const revisedBuy = opportunityEngine.reviseDirection(original, 'BUY', original.proposedEntryPrice, fixtureNowMs);
+    if (revisedBuy.id === original.id ||
+        revisedBuy.direction !== 'BUY' ||
+        revisedBuy.humanDecision.parentOpportunityId !== original.id) {
+      throw new Error('A human revision must create a linked, separate opportunity record.');
+    }
+    if (revisedBuy.audit.status !== 'SHORTLISTED') {
+      throw new Error('A direction with sufficient conservative historical evidence should remain shortlist-eligible.');
+    }
+
+    const revisedSell = opportunityEngine.reviseDirection(original, 'SELL', original.proposedEntryPrice, fixtureNowMs);
+    if (revisedSell.audit.status !== 'INSUFFICIENT_EVIDENCE' ||
+        revisedSell.audit.holdoutSampleSize !== 0 ||
+        revisedSell.forecast.lowerConfidenceBound === null ||
+        revisedSell.forecast.lowerConfidenceBound >= revisedBuy.forecast.lowerConfidenceBound!) {
+      throw new Error('A human direction override must not reuse the original model direction\'s holdout approval.');
+    }
+    const changedEntry = opportunityEngine.reviseDirection(original, 'BUY', original.proposedEntryPrice + 0.00002, fixtureNowMs);
+    if (changedEntry.audit.status !== 'INSUFFICIENT_EVIDENCE' ||
+        changedEntry.audit.holdoutSampleSize !== 0) {
+      throw new Error('A changed manual entry reference must receive fresh independent validation before shortlisting.');
+    }
+    if (original.direction !== 'BUY' || original.audit.status !== 'SHORTLISTED' ||
+        original.humanDecision.status !== 'PENDING') {
+      throw new Error('Human revision must never mutate the original AI hypothesis.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Loss forensics never promotes heuristic causes into facts', () => {
+    const legacy: LossAutopsy = {
+      id: 'autopsy_legacy-test',
+      signalId: 'legacy-test',
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      strategyName: 'Legacy heuristic strategy',
+      entryPrice: 1.1,
+      exitPrice: 1.099,
+      marketSession: 'London',
+      rootCause: 'SPREAD_EXPANSION_SLIPPAGE',
+      rootCauseExplanation: 'Old heuristic asserted spread expansion caused the loss.',
+      lessonsLearned: ['Reject all trades during this session.'],
+      antidoteStrategyGeneId: 'fake-antidote',
+      antidoteStrategyName: 'Unverified antidote',
+      antidoteFormula: 'invented_formula(x)',
+      antidoteOperator: 'tanh_polynomial',
+      timestamp: '2026-01-01T00:00:00.000Z',
+    };
+    const safe = sanitizeLossAutopsy(legacy);
+    if (safe.rootCause !== 'OBSERVED_ADVERSE_SETTLEMENT' ||
+        safe.evidenceStatus !== 'OBSERVATION_ONLY') {
+      throw new Error('A legacy heuristic cause must be downgraded to an observation.');
+    }
+    if (!safe.legacyUnverifiedExplanation?.includes('spread expansion caused the loss')) {
+      throw new Error('The old explanation should be retained only as explicitly unverified audit history.');
+    }
+    if (safe.antidoteStrategyGeneId || safe.antidoteStrategyName || safe.antidoteFormula || safe.antidoteOperator) {
+      throw new Error('Unverified antidote artifacts must not remain active.');
+    }
+    if (JSON.stringify(safe.lessonsLearned) !== JSON.stringify(OBSERVATION_ONLY_LESSONS)) {
+      throw new Error('An individual loss must not be converted into validated lessons.');
+    }
+    const repeated = sanitizeLossAutopsy(safe);
+    if (repeated.legacyUnverifiedExplanation !== safe.legacyUnverifiedExplanation ||
+        JSON.stringify(repeated.lessonsLearned) !== JSON.stringify(safe.lessonsLearned)) {
+      throw new Error('Loss-evidence sanitization must be idempotent across restarts.');
+    }
+  });
 
   await runTest('MARKET_HOURS', 'Spot FX weekend closure follows New York time and DST', () => {
     const cases: Array<[string, boolean]> = [

@@ -26,6 +26,7 @@ import {
   isStrategyRegimeCompatible,
 } from './evolutionEngine.js';
 import { findEligibleStartTimeframes } from './tradingClock.js';
+import { FEATURE_SCHEMA_VERSION, RESEARCH_ENGINE_VERSION } from './researchReproducibility.js';
 
 export class AutonomousScheduler {
   private isRunningCycle = false;
@@ -279,6 +280,10 @@ export class AutonomousScheduler {
             'Only candidates passing payout-aware train/validation and multiple-comparison-adjusted holdout checks may enter forward paper trading. No broker execution is enabled.',
           ],
           researchBatchId: batchId,
+          researchSeed: results[0]?.researchSeed,
+          datasetFingerprint: results[0]?.datasetFingerprint,
+          featureSchemaVersion: results[0]?.featureSchemaVersion ?? FEATURE_SCHEMA_VERSION,
+          researchEngineVersion: results[0]?.researchEngineVersion ?? RESEARCH_ENGINE_VERSION,
           status: 'COMPLETED',
           symbol,
           bestValidationExpectedValueUnits: bestValidation?.discoveryMetrics?.validationExpectedValueUnits ?? 0,

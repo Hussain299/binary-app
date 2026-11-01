@@ -20,7 +20,10 @@ import {
   SynthesizedStrategyGene,
   LossAutopsy,
   StrategyPerformanceRecord,
+  TradeOpportunity,
 } from '../types/index.js';
+import { sanitizeLossAutopsy } from './researchGovernance.js';
+import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.js';
 import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
 import {
   assessNearestNeighbors,
@@ -43,6 +46,8 @@ interface DatabaseSchema {
   generations: EvolutionGeneration[];
   autopilotLogs: AutopilotLog[];
   synthesizedStrategies: SynthesizedStrategyGene[];
+  /** Persisted pre-trade hypotheses, forecasts and human decision records. */
+  opportunities: TradeOpportunity[];
   lossAutopsies: LossAutopsy[];
   strategyPerformance: Record<string, StrategyPerformanceRecord>;
   /** Durable, prediction-time market contexts for settled WIN/LOSS observations. */
@@ -53,6 +58,15 @@ interface DatabaseSchema {
   processedOutcomeIds: string[];
   /** Holdout time ranges already inspected by candidate searches; prevents reuse. */
   researchHoldoutWindows: Array<{ symbol: ForexSymbol; batchId: string; startUtc: string; endUtc: string; reservedAt: string }>;
+  /** Per-hypothesis opportunity holdouts; stops overlapping rescans from inflating evidence. */
+  opportunityHoldoutWindows: Array<{
+    symbol: ForexSymbol;
+    candidateKey: string;
+    batchId: string;
+    startUtc: string;
+    endUtc: string;
+    reservedAt: string;
+  }>;
   cronState: {
     lastRun: string | null;
     nextRun: string | null;
@@ -86,12 +100,17 @@ class DatabaseService {
         const parsed = JSON.parse(raw);
         if (!parsed.autopilotLogs) parsed.autopilotLogs = [];
         if (!Array.isArray(parsed.synthesizedStrategies)) parsed.synthesizedStrategies = [];
+        if (!Array.isArray(parsed.opportunities)) parsed.opportunities = [];
         if (!Array.isArray(parsed.lossAutopsies)) parsed.lossAutopsies = [];
+        // Quarantine every legacy autopsy, including orphaned records outside the
+        // retained signal window, before exposing any forensic history.
+        parsed.lossAutopsies = parsed.lossAutopsies.map((item: LossAutopsy) => sanitizeLossAutopsy(item));
         if (!parsed.strategyPerformance || typeof parsed.strategyPerformance !== 'object') parsed.strategyPerformance = {};
         if (!Array.isArray(parsed.episodicMemory)) parsed.episodicMemory = [];
         if (!parsed.marketRegimes || typeof parsed.marketRegimes !== 'object') parsed.marketRegimes = {};
         if (!Array.isArray(parsed.processedOutcomeIds)) parsed.processedOutcomeIds = [];
         if (!Array.isArray(parsed.researchHoldoutWindows)) parsed.researchHoldoutWindows = [];
+        if (!Array.isArray(parsed.opportunityHoldoutWindows)) parsed.opportunityHoldoutWindows = [];
         // Historical versions wrote fabricated strategy accuracy values. Never trust them
         // without stored untouched-test evidence; quarantine all such legacy candidates.
         if (Array.isArray(parsed.synthesizedStrategies)) {
@@ -148,71 +167,40 @@ class DatabaseService {
             if (s.ruleFamily?.startsWith('test_')) return false;
             return true;
           });
-          // Backfill forensic autopsy on historical losses if missing
-          for (const s of parsed.signals) {
-            if (s.outcomeResult === 'LOSS' && !s.lossAutopsy) {
-              const spread = s.estimatedSpreadPips || 1.5;
-              const gross = s.grossReturnPips || -1.2;
-              const net = s.netReturnPips || -2.7;
-              const rootCause: LossAutopsy['rootCause'] = Math.abs(gross) <= spread * 1.2
-                ? 'SPREAD_EXPANSION_SLIPPAGE'
-                : (s.expiryMinutes || 5) >= 15
-                ? 'SESSION_BOUNDARY_LIQUIDITY_VACUUM'
-                : 'MICRO_WICK_FALSE_ABSORPTION';
-
-              const lessons = rootCause === 'SPREAD_EXPANSION_SLIPPAGE'
-                ? [
-                    'Enforce strict Dynamic Spread Gate: Reject signals when spread exceeds 25% of expected ATR move.',
-                    'Prioritize high-liquidity overlap sessions where spreads compress to sub-pip levels.',
-                    'Buffer entry trigger by minimum +0.5 pips to overcome execution friction.',
-                  ]
-                : rootCause === 'SESSION_BOUNDARY_LIQUIDITY_VACUUM'
-                ? [
-                    `Dynamically compress expiry duration to 5m/10m when trading near sub-session handovers.`,
-                    'Evaluate session turnover timer: reject >15m expiries within 30 minutes of session transitions.',
-                    'Align time-horizon directly to ATR velocity curves.',
-                  ]
-                : [
-                    'Increase polynomial wick exponent threshold to demand deeper liquidity absorption confirmation.',
-                    'Incorporate tick volume delta verification: require volume expansion on the rejection wick.',
-                    'Require second-derivative RSI confirmation before fading structural swing highs.',
-                  ];
-
-              const antidoteName = `Antidote-${s.symbol}: Adaptive Damping + ${rootCause.replace(/_/g, ' ')}`;
-              const antidoteFormula = rootCause === 'SPREAD_EXPANSION_SLIPPAGE'
-                ? `f(x) = (Δ_TickEntropy / √(1 + ${spread.toFixed(1)}·Spread)) · cos(π·WickRatio) + 1.15·OrderFlow_Z`
-                : rootCause === 'SESSION_BOUNDARY_LIQUIDITY_VACUUM'
-                ? `f(x) = σ(2.80·EMA_Curvature × Vol_Elasticity) - 0.55·ln(1 + ATR_harmonic)`
-                : `f(x) = tanh(1.85·Z_Entropy) + 0.92·(LowerWickRatio)^2.30 - 0.45·Δ_20SMA`;
-
-              const autopsy: LossAutopsy = {
-                id: `autopsy_${s.id}`,
-                signalId: s.id,
-                symbol: s.symbol,
-                direction: s.direction,
-                strategyName: s.strategyName || 'Stacked Strategy',
-                mathematicalFormula: s.mathematicalFormula,
-                entryPrice: s.actualEntryPrice || s.triggerPrice,
-                exitPrice: s.actualExitPrice || s.triggerPrice,
-                grossReturnPips: gross,
-                netReturnPips: net,
-                spreadPips: spread,
-                marketSession: s.marketSessionName || 'Market Session',
-                rootCause,
-                rootCauseExplanation: `Forensic autopsy revealed that the loss was driven by ${rootCause.replace(/_/g, ' ').toLowerCase()}. The trade was initiated with high statistical confluence, but adverse microstructure dynamics invalidated the horizon edge.`,
-                lessonsLearned: lessons,
-                antidoteStrategyGeneId: `synth_antidote_${s.id}`,
-                antidoteStrategyName: antidoteName,
-                antidoteFormula,
-                antidoteOperator: rootCause === 'SESSION_BOUNDARY_LIQUIDITY_VACUUM' ? 'exponential_decay' : 'tanh_polynomial',
-                timestamp: s.plannedExitTimeUtc || s.predictionTimeUtc || new Date().toISOString(),
-              };
-
-              s.lossAutopsy = autopsy;
-              if (!parsed.lossAutopsies.some((a: any) => a.signalId === s.id)) {
-                parsed.lossAutopsies.unshift(autopsy);
-              }
-            }
+          // Migrate legacy loss records to an observation-only state.
+          // Older versions inferred causes and generated antidotes from OHLC heuristics;
+          // those claims are retained as explicitly unverified archive fields only.
+          for (const signal of parsed.signals) {
+            if (signal.outcomeResult !== 'LOSS') continue;
+            const stored = signal.lossAutopsy ||
+              parsed.lossAutopsies.find((item: any) => item.signalId === signal.id);
+            const baseAutopsy: LossAutopsy = stored || {
+              id: `autopsy_${signal.id}`,
+              signalId: signal.id,
+              symbol: signal.symbol,
+              direction: signal.direction,
+              strategyName: signal.strategyName || 'Unclassified strategy',
+              mathematicalFormula: signal.mathematicalFormula,
+              entryPrice: signal.actualEntryPrice ?? signal.triggerPrice,
+              exitPrice: signal.actualExitPrice ?? signal.triggerPrice,
+              grossReturnPips: signal.grossReturnPips ?? undefined,
+              netReturnPips: signal.netReturnPips ?? undefined,
+              spreadPips: signal.estimatedSpreadPips ?? undefined,
+              netReturnUnits: signal.netReturnUnits ?? undefined,
+              marketSession: signal.marketSessionName || 'Unknown session',
+              strategyGeneId: signal.synthesizedGeneId,
+              rootCause: 'OBSERVED_ADVERSE_SETTLEMENT',
+              rootCauseExplanation: 'A loss was observed. Its causal mechanism has not been established.',
+              lessonsLearned: [],
+              timestamp: signal.plannedExitTimeUtc || signal.predictionTimeUtc || new Date().toISOString(),
+            };
+            const observationOnly = sanitizeLossAutopsy(baseAutopsy);
+            signal.lossAutopsy = observationOnly;
+            const existingIndex = parsed.lossAutopsies.findIndex(
+              (item: any) => item.signalId === signal.id
+            );
+            if (existingIndex >= 0) parsed.lossAutopsies[existingIndex] = observationOnly;
+            else parsed.lossAutopsies.unshift(observationOnly);
           }
           // Cap history at 1000 records
           if (parsed.signals.length > 1000) {
@@ -238,12 +226,14 @@ class DatabaseService {
       generations: [],
       autopilotLogs: [],
       synthesizedStrategies: [],
+      opportunities: [],
       lossAutopsies: [],
       strategyPerformance: {},
       episodicMemory: [],
       marketRegimes: {},
       processedOutcomeIds: [],
       researchHoldoutWindows: [],
+      opportunityHoldoutWindows: [],
       cronState: {
         lastRun: null,
         nextRun: null,
@@ -317,6 +307,60 @@ class DatabaseService {
     return true;
   }
 
+  /**
+   * Reserve per-hypothesis opportunity holdout windows before evaluating them.
+   * Any overlapping interval for the same pair and candidate identity is rejected.
+   * Failed or interrupted runs still consume the reservation to prevent retry leakage.
+   */
+  public claimOpportunityHoldoutWindows(
+    windows: Array<{
+      symbol: ForexSymbol;
+      candidateKey: string;
+      batchId: string;
+      startUtc: string;
+      endUtc: string;
+    }>
+  ): Set<string> {
+    if (!Array.isArray(this.state.opportunityHoldoutWindows)) {
+      this.state.opportunityHoldoutWindows = [];
+    }
+    const claimed = new Set<string>();
+    const reservations = this.state.opportunityHoldoutWindows;
+
+    for (const window of windows) {
+      const startMs = Date.parse(window.startUtc);
+      const endMs = Date.parse(window.endUtc);
+      if (
+        !window.batchId ||
+        !window.candidateKey ||
+        !Number.isFinite(startMs) ||
+        !Number.isFinite(endMs) ||
+        endMs <= startMs
+      ) {
+        throw new Error("Opportunity holdout reservation requires a candidate identity and valid chronological interval.");
+      }
+      const identity = `${window.symbol}|${window.candidateKey}`;
+      if (claimed.has(identity)) continue;
+      const overlaps = reservations.some(existing => {
+        if (existing.symbol !== window.symbol || existing.candidateKey !== window.candidateKey) return false;
+        const existingStart = Date.parse(existing.startUtc);
+        const existingEnd = Date.parse(existing.endUtc);
+        return Number.isFinite(existingStart) && Number.isFinite(existingEnd) &&
+          startMs < existingEnd && existingStart < endMs;
+      });
+      if (overlaps) continue;
+
+      reservations.push({
+        ...window,
+        reservedAt: new Date().toISOString(),
+      });
+      claimed.add(identity);
+    }
+
+    if (claimed.size) this.saveStateSync();
+    return claimed;
+  }
+
   // Candle Storage
   public storeCandles(symbol: ForexSymbol, newCandles: Candle[]) {
     if (!this.state.candles[symbol]) {
@@ -349,6 +393,36 @@ class DatabaseService {
       count += this.state.candles[key].length;
     }
     return count;
+  }
+
+  // Pre-trade opportunity research
+  public storeOpportunities(opportunities: TradeOpportunity[]): void {
+    if (!Array.isArray(this.state.opportunities)) this.state.opportunities = [];
+    if (!opportunities.length) return;
+    const incomingIds = new Set(opportunities.map(item => item.id));
+    const existing = this.state.opportunities.filter(item => !incomingIds.has(item.id));
+    this.state.opportunities = [
+      ...opportunities,
+      ...existing,
+    ].slice(0, 3000);
+    this.scheduleSave();
+  }
+
+  public getOpportunities(limit = 1000): TradeOpportunity[] {
+    return (this.state.opportunities || []).slice(0, Math.max(1, Math.min(3000, limit)));
+  }
+
+  public getOpportunityById(id: string): TradeOpportunity | undefined {
+    return (this.state.opportunities || []).find(item => item.id === id);
+  }
+
+  public updateOpportunity(opportunity: TradeOpportunity): boolean {
+    if (!Array.isArray(this.state.opportunities)) this.state.opportunities = [];
+    const index = this.state.opportunities.findIndex(item => item.id === opportunity.id);
+    if (index < 0) return false;
+    this.state.opportunities[index] = opportunity;
+    this.scheduleSave();
+    return true;
   }
 
   // Provider Health
@@ -786,7 +860,12 @@ class DatabaseService {
       existing.binaryWins += 1;
       existing.wins += 1;
       existing.positiveReturnUnits = Number((existing.positiveReturnUnits + Math.max(0, netUnits)).toFixed(4));
-      existing.scoredOutcomes.push({ result: 'WIN', netReturnUnits: netUnits, payoutPct });
+      existing.scoredOutcomes.push({
+        result: 'WIN',
+        netReturnUnits: netUnits,
+        payoutPct,
+        rawScore: Number.isFinite(signal.confidence) ? signal.confidence : undefined,
+      });
     } else if (signal.outcomeResult === 'LOSS') {
       const posterior = updateBetaPosterior(
         { alpha: existing.bayesAlpha!, beta: existing.bayesBeta! }, 'LOSS'
@@ -796,7 +875,12 @@ class DatabaseService {
       existing.binaryLosses += 1;
       existing.losses += 1;
       existing.negativeReturnUnits = Number((existing.negativeReturnUnits + Math.abs(Math.min(0, netUnits))).toFixed(4));
-      existing.scoredOutcomes.push({ result: 'LOSS', netReturnUnits: netUnits, payoutPct });
+      existing.scoredOutcomes.push({
+        result: 'LOSS',
+        netReturnUnits: netUnits,
+        payoutPct,
+        rawScore: Number.isFinite(signal.confidence) ? signal.confidence : undefined,
+      });
     } else {
       existing.binaryPushes += 1;
       existing.scratches += 1;
@@ -898,6 +982,21 @@ class DatabaseService {
     return bayesianUcbScore(posterior, totalObserved);
   }
 
+  /**
+   * Calibrate a raw strategy score using only earlier settled observations.
+   * Legacy outcomes without stored raw scores are deliberately excluded.
+   */
+  public calibratePredictionScore(strategyId: string, rawScore: number) {
+    const observations = this.state.strategyPerformance?.[strategyId]?.scoredOutcomes || [];
+    return fitPredictionCalibration(
+      rawScore,
+      observations.map(item => ({
+        rawScore: item.rawScore ?? Number.NaN,
+        outcome: item.result,
+      }))
+    );
+  }
+
   public assessEpisodicMemory(query: {
     symbol: string;
     direction: 'BUY' | 'SELL';
@@ -930,7 +1029,12 @@ class DatabaseService {
   // Autonomous Forensic Loss Autopsies & Self-Learning
   public addLossAutopsy(autopsy: LossAutopsy) {
     if (!this.state.lossAutopsies) this.state.lossAutopsies = [];
-    this.state.lossAutopsies.unshift(autopsy);
+    const observationOnly = sanitizeLossAutopsy(autopsy);
+    const existingIndex = this.state.lossAutopsies.findIndex(
+      item => item.signalId === observationOnly.signalId
+    );
+    if (existingIndex >= 0) this.state.lossAutopsies[existingIndex] = observationOnly;
+    else this.state.lossAutopsies.unshift(observationOnly);
     if (this.state.lossAutopsies.length > 200) {
       this.state.lossAutopsies = this.state.lossAutopsies.slice(0, 200);
     }

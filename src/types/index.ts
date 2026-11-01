@@ -129,6 +129,118 @@ export interface SignalLifecycleEvent {
   price?: number;
 }
 
+export type OpportunityHypothesisType =
+  | 'TREND_CONTINUATION'
+  | 'MEAN_REVERSION'
+  | 'WICK_REJECTION'
+  | 'MOMENTUM_BREAKOUT'
+  | 'VOLATILITY_EXPANSION'
+  | 'EVOLVED_GENOME';
+
+export type OpportunityDirection = SignalDirection | 'NO_TRADE';
+export type OpportunityAuditStatus =
+  | 'SHORTLISTED'
+  | 'REJECTED'
+  | 'INSUFFICIENT_EVIDENCE'
+  | 'NO_TRADE';
+export type OpportunityHumanStatus =
+  | 'PENDING'
+  | 'APPROVED_FOR_PAPER_REVIEW'
+  | 'REJECTED_BY_HUMAN'
+  | 'SUPERSEDED';
+
+export interface OpportunityForecastPoint {
+  minute: number;
+  q10: number;
+  q25: number;
+  median: number;
+  q75: number;
+  q90: number;
+}
+
+export interface OpportunityHistoricalCandle {
+  /** Completed one-minute candle offset from the snapshot; the latest candle is minute 0. */
+  minuteOffset: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+export interface OpportunityForecast {
+  status: 'AVAILABLE' | 'INSUFFICIENT_HISTORY';
+  points: OpportunityForecastPoint[];
+  /** Historical analogue terminal prices are retained for human direction revisions. */
+  terminalPrices: number[];
+  analogueCount: number;
+  meanDistance: number | null;
+  winRate: number | null;
+  lowerConfidenceBound: number | null;
+  payoutBreakEvenProbability: number;
+  expectedValueLowerBound: number | null;
+}
+
+export interface OpportunityAudit {
+  status: OpportunityAuditStatus;
+  rankScore: number;
+  /** Later chronological holdout metrics; separated from the analogue library used for the graph. */
+  holdoutSampleSize: number;
+  holdoutWins: number;
+  holdoutLosses: number;
+  holdoutScratches: number;
+  holdoutWinRate: number | null;
+  holdoutLowerConfidenceBound: number | null;
+  holdoutExpectedValueLowerBound: number | null;
+  holdoutWindowStatus: 'FRESH' | 'ALREADY_INSPECTED' | 'REVISION_NOT_TESTED';
+  holdoutWindowStartUtc: string;
+  holdoutWindowEndUtc: string;
+  reasons: string[];
+  counterEvidence: string[];
+  auditedAt: string;
+}
+
+export interface OpportunityHumanDecision {
+  status: OpportunityHumanStatus;
+  direction?: SignalDirection;
+  horizonMinutes?: 5 | 10 | 15 | 20 | 25 | 30;
+  entryPrice?: number;
+  decidedAt: string;
+  notes?: string;
+  parentOpportunityId?: string;
+}
+
+export interface TradeOpportunity {
+  id: string;
+  batchId: string;
+  symbol: ForexSymbol;
+  hypothesisType: OpportunityHypothesisType;
+  hypothesisName: string;
+  hypothesis: string;
+  sourceKind: 'EXPLORATORY_HEURISTIC' | 'HISTORICALLY_VALIDATED_GENOME';
+  strategyGeneId?: string;
+  direction: OpportunityDirection;
+  rawHypothesisScore: number;
+  activationThreshold: number;
+  horizonMinutes: 5 | 10 | 15 | 20 | 25 | 30;
+  generatedAt: string;
+  snapshotAt: string;
+  staleAfter: string;
+  entryTimeUtc: string;
+  expiryTimeUtc: string;
+  snapshotPrice: number;
+  proposedEntryPrice: number;
+  dataSource: string;
+  marketDataQuality: number;
+  datasetFingerprint: string;
+  featureSchemaVersion: string;
+  modelVersion: string;
+  marketFeatureVector: number[];
+  recentPriceHistory: OpportunityHistoricalCandle[];
+  forecast: OpportunityForecast;
+  audit: OpportunityAudit;
+  humanDecision: OpportunityHumanDecision;
+}
+
 export interface ResearchSignal {
   id: string;
   symbol: ForexSymbol;
@@ -156,8 +268,14 @@ export interface ResearchSignal {
   actualExitPrice: number | null;
   
   // Confidence & Verification
-  confidence: number; // 0.0 - 1.0
+  /** Raw model/strategy activation score; never present this as a win probability. */
+  confidence: number;
   calibrationStatus: 'CALIBRATED' | 'UNCALIBRATED' | 'OVERCONFIDENT';
+  /** Empirical probability calibrated only from earlier settled outcomes; absent until sample suffices. */
+  calibratedProbability?: number;
+  calibratedProbabilityLowerBound?: number;
+  calibrationSampleSize?: number;
+  calibrationBrierScore?: number;
   lifecycleState: SignalLifecycleState;
   lifecycleHistory: SignalLifecycleEvent[];
   
@@ -232,8 +350,13 @@ export interface LossAutopsy {
     | 'MOMENTUM_EXHAUSTION_DIVERGENCE'
     | 'SESSION_BOUNDARY_LIQUIDITY_VACUUM'
     | 'NON_LINEAR_OPERATOR_OVERFITTING';
+  /** Evidence state prevents old heuristic labels from being mistaken for proven causes. */
+  evidenceStatus?: 'OBSERVATION_ONLY' | 'HYPOTHESIS' | 'SUPPORTED';
   rootCauseExplanation: string;
   lessonsLearned: string[];
+  /** Historical heuristic claims are retained for audit but never treated as evidence. */
+  legacyUnverifiedExplanation?: string;
+  legacyUnverifiedLessons?: string[];
   /** Deprecated legacy fields; new observations never fabricate antidote genomes. */
   antidoteStrategyGeneId?: string;
   antidoteStrategyName?: string;
@@ -323,8 +446,13 @@ export interface StrategyPerformanceRecord {
   binaryPushes?: number;
   minimumPayoutPct?: number;
   negativeReturnUnits?: number;
-  /** Recent unique completed outcomes used to calculate a rolling 300-trade approval window. */
-  scoredOutcomes?: Array<{ result: 'WIN' | 'LOSS'; netReturnUnits: number; payoutPct: number }>;
+  /** Recent unique completed outcomes; rawScore enables strictly historical score calibration. */
+  scoredOutcomes?: Array<{
+    result: 'WIN' | 'LOSS';
+    netReturnUnits: number;
+    payoutPct: number;
+    rawScore?: number;
+  }>;
   /** Recent signal IDs prevent the same outcome from being counted more than once. */
   signalIds?: string[];
   /** Beta(1,1) posterior updated exactly once per decisive forward outcome. */
@@ -369,6 +497,11 @@ export interface SynthesizedStrategyGene {
   genome?: StrategyGenome;
   /** Candidate belongs to a 300-strategy search run. */
   searchBatchId?: string;
+  /** Exact reproduction metadata for the evolutionary search that produced this candidate. */
+  researchSeed?: string;
+  datasetFingerprint?: string;
+  featureSchemaVersion?: string;
+  researchEngineVersion?: string;
   validationFailureReason?: string;
   /** Train/validation-only metrics used to select finalists before the untouched test is opened. */
   discoveryMetrics?: StrategyDiscoveryMetrics;
@@ -492,6 +625,11 @@ export interface EvolutionGeneration {
   lessonsLearned: string[];
   /** Present only for real 300-candidate symbolic search batches. */
   researchBatchId?: string;
+  /** Exact reproduction manifest for this evolutionary batch. */
+  researchSeed?: string;
+  datasetFingerprint?: string;
+  featureSchemaVersion?: string;
+  researchEngineVersion?: string;
   status?: 'COMPLETED' | 'FAILED';
   symbol?: ForexSymbol;
   bestValidationExpectedValueUnits?: number;

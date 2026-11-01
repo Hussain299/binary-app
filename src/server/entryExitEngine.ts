@@ -229,6 +229,10 @@ export class EntryExitEngine {
 
     // Never invent a historical win rate for a rule without measured backtest evidence.
     const defaultWinRate = params.strategyWinRate;
+    // Keep the raw activation score separate from any empirical probability estimate.
+    // Calibration uses only earlier settled outcomes for this exact strategy identity.
+    const strategyId = params.strategyId || `rule:${params.ruleFamily}`;
+    const probabilityCalibration = db.calibratePredictionScore(strategyId, params.confidence);
 
     const signal: ResearchSignal = {
       id: `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -250,8 +254,11 @@ export class EntryExitEngine {
       actualExitTimeUtc: null,
       actualExitPrice: null,
       confidence: params.confidence,
-      // Confidence is currently a heuristic signal-strength score, not a calibrated probability.
-      calibrationStatus: 'UNCALIBRATED',
+      calibrationStatus: probabilityCalibration.status,
+      calibratedProbability: probabilityCalibration.probability ?? undefined,
+      calibratedProbabilityLowerBound: probabilityCalibration.lowerConfidenceProbability ?? undefined,
+      calibrationSampleSize: probabilityCalibration.sampleSize,
+      calibrationBrierScore: probabilityCalibration.brierScore ?? undefined,
       lifecycleState: 'WAITING_FOR_ENTRY',
       lifecycleHistory: initialHistory,
       grossReturnPips: null,
@@ -269,7 +276,7 @@ export class EntryExitEngine {
       strategyHistoricalSampleSize: params.strategyHistoricalSampleSize,
       strategyEvidenceStatus: params.strategyEvidenceStatus,
       strategyForwardApproved: params.strategyForwardApproved ?? false,
-      strategyId: params.strategyId || `rule:${params.ruleFamily}`,
+      strategyId,
       advanceNoticeMinutes: 3,
       candleOpenTimeUtc,
       candleCloseTimeUtc,

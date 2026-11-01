@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header.tsx';
 import { Sidebar, ViewTab } from './components/Sidebar.tsx';
 import { SignalTerminalView } from './components/views/SignalTerminalView.tsx';
+import { OpportunityResearchView } from './components/views/OpportunityResearchView.tsx';
 import { MarketExplorerView } from './components/views/MarketExplorerView.tsx';
 import { ModelLabView } from './components/views/ModelLabView.tsx';
 import { StrategyDiscoveryView } from './components/views/StrategyDiscoveryView.tsx';
@@ -12,7 +13,7 @@ import { EntryExitMonitorView } from './components/views/EntryExitMonitorView.ts
 import { PerformanceAnalyticsView } from './components/views/PerformanceAnalyticsView.tsx';
 import { SystemHealthView } from './components/views/SystemHealthView.tsx';
 import { ConfigurationView } from './components/views/ConfigurationView.tsx';
-import { LineChart, Menu, Zap, Lightbulb } from 'lucide-react';
+import { LineChart, Menu, Zap, Lightbulb, BrainCircuit } from 'lucide-react';
 import { soundNotificationService } from './utils/notifications.ts';
 import { NotificationBanner } from './components/NotificationBanner.tsx';
 import {
@@ -138,7 +139,7 @@ export default function App() {
   ).length;
 
   return (
-    <div className="app-shell flex h-[100dvh] w-full min-w-0 flex-col overflow-hidden bg-[#080d14] text-neutral-100 antialiased font-sans relative">
+    <div className="app-shell sf-app-shell relative flex h-[100dvh] w-full min-w-0 flex-col overflow-hidden text-neutral-100 antialiased font-sans">
       {/* Real-time In-App Signal Alert Banner */}
       <NotificationBanner
         notification={activeNotification}
@@ -172,7 +173,8 @@ export default function App() {
         />
 
         {/* Dynamic View Viewport */}
-        <main className="app-main min-w-0 flex-1 flex flex-col h-full overflow-hidden bg-transparent">
+        <main className="app-main min-w-0 flex h-full flex-1 flex-col overflow-hidden bg-transparent">
+          <div key={activeTab} className="sf-view-stage">
           {activeTab === 'terminal' && (
             <SignalTerminalView
               signals={signals}
@@ -181,6 +183,7 @@ export default function App() {
               isEvaluating={isEvaluating}
             />
           )}
+          {activeTab === 'opportunities' && <OpportunityResearchView />}
           {activeTab === 'explorer' && <MarketExplorerView providers={providers} />}
           {activeTab === 'modellab' && (
             <ModelLabView
@@ -202,6 +205,7 @@ export default function App() {
           )}
           {activeTab === 'health' && <SystemHealthView />}
           {activeTab === 'config' && <ConfigurationView />}
+          </div>
         </main>
       </div>
 
@@ -218,6 +222,19 @@ export default function App() {
         >
           <Zap className="w-4 h-4" />
           <span className="text-[10px]">Signals</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('opportunities');
+            setIsMobileMenuOpen(false);
+          }}
+          className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 transition-colors ${
+            activeTab === 'opportunities' ? 'text-emerald-400 font-bold' : 'text-neutral-400 hover:text-neutral-200'
+          }`}
+        >
+          <BrainCircuit className="w-4 h-4" />
+          <span className="text-[10px]">Ideas</span>
         </button>
 
         <button
