@@ -27,7 +27,7 @@ import {
   wilsonLowerBound,
 } from "./evolutionEngine.js";
 import { isForexMarketIntervalOpen, isForexMarketOpenAt } from "./marketHours.js";
-import { ADVANCE_NOTICE_MS, getNextCandleOpenMs } from "./tradingClock.js";
+import { ADVANCE_NOTICE_MS, MAX_DECISION_PROCESSING_DELAY_MS, getNextCandleOpenMs } from "./tradingClock.js";
 
 const REAL_SOURCES = new Set(["biquote", "dukascopy", "yahoo", "imported"]);
 const M1_MS = 60_000;
@@ -51,6 +51,56 @@ const FEATURE_NAMES = [
 ] as const;
 
 type Horizon = 5 | 10 | 15 | 20 | 25 | 30;
+
+export interface OpportunitySchedule {
+  decisionTimeMs: number;
+  entryTimeMs: number;
+  expiryTimeMs: number;
+  exactAdvanceWindow: boolean;
+  withinProcessingWindow: boolean;
+  marketIntervalOpen: boolean;
+  valid: boolean;
+  reason: string | null;
+}
+
+/**
+ * The current snapshot itself must be the bot's decision candle close.
+ * Never move the decision point forward just to manufacture a future T−3 entry.
+ */
+export function buildOpportunitySchedule(
+  snapshotMs: number,
+  horizon: Horizon,
+  nowMs = Date.now()
+): OpportunitySchedule {
+  if (!Number.isFinite(snapshotMs) || !Number.isFinite(nowMs)) {
+    throw new Error("A finite candle snapshot and current time are required.");
+  }
+  const decisionTimeMs = snapshotMs;
+  const entryTimeMs = getNextCandleOpenMs(decisionTimeMs, horizon);
+  const expiryTimeMs = entryTimeMs + horizon * M1_MS;
+  const exactAdvanceWindow = entryTimeMs - decisionTimeMs === ADVANCE_NOTICE_MS;
+  const withinProcessingWindow = nowMs >= decisionTimeMs &&
+    nowMs < decisionTimeMs + MAX_DECISION_PROCESSING_DELAY_MS;
+  const marketIntervalOpen = isForexMarketIntervalOpen(entryTimeMs, expiryTimeMs);
+  const valid = exactAdvanceWindow && withinProcessingWindow && marketIntervalOpen;
+  const reason = !exactAdvanceWindow
+    ? "This snapshot is not an exact T−3-minute decision point for the selected entry timeframe."
+    : !withinProcessingWindow
+      ? "The snapshot is outside the live 25-second decision-processing window."
+      : !marketIntervalOpen
+        ? "The proposed entry-to-expiry interval crosses a spot-FX market closure."
+        : null;
+  return {
+    decisionTimeMs,
+    entryTimeMs,
+    expiryTimeMs,
+    exactAdvanceWindow,
+    withinProcessingWindow,
+    marketIntervalOpen,
+    valid,
+    reason,
+  };
+}
 
 interface HistoricalFeatureRow {
   index: number;
@@ -434,7 +484,8 @@ function auditOpportunity(
   forecast: OpportunityForecast,
   holdout: HoldoutMetrics,
   marketDataQuality: number,
-  scheduleValid: boolean
+  scheduleValid: boolean,
+  scheduleFailureReason: string | null = null
 ): OpportunityAudit {
   const reasons: string[] = [];
   const counterEvidence: string[] = [];
@@ -469,7 +520,7 @@ function auditOpportunity(
   // The analogue archive is descriptive and supplies the graph only. Selection is
   // exclusively based on a later, embargoed holdout with multiple-testing correction.
   if (!scheduleValid) {
-    reasons.push("The proposed entry-to-expiry interval crosses a spot-FX market closure.");
+    reasons.push(scheduleFailureReason || "The proposed entry-to-expiry interval crosses a spot-FX market closure.");
   }
   if (forecast.status !== "AVAILABLE" || forecast.analogueCount < MIN_ANALOGUES_FOR_FORECAST) {
     reasons.push("Insufficient older real-market analogues to draw a reliable forecast distribution.");
@@ -675,10 +726,9 @@ export class OpportunityEngine {
       ? "NO_TRADE"
       : rawScore >= 0 ? "BUY" : "SELL";
     const forecast = makeForecast(context, context.currentFeatures, horizon, direction);
-    // Keep a full three-minute decision lead before the proposed aligned entry.
-    const entryTimeMs = getNextCandleOpenMs(Date.now() + 3 * M1_MS, horizon);
-    const expiryTimeMs = entryTimeMs + horizon * M1_MS;
-    const scheduleValid = isForexMarketIntervalOpen(entryTimeMs, expiryTimeMs);
+    const schedule = buildOpportunitySchedule(context.snapshotMs, horizon, Date.now());
+    const { entryTimeMs, expiryTimeMs } = schedule;
+    const scheduleValid = schedule.valid;
     const audit = auditOpportunity(
       direction,
       rawScore,
@@ -686,7 +736,8 @@ export class OpportunityEngine {
       forecast,
       holdout,
       context.marketDataQuality,
-      scheduleValid
+      scheduleValid,
+      schedule.reason
     );
     const id = `opp_${stableHash([
       batchId,
@@ -711,7 +762,7 @@ export class OpportunityEngine {
       horizonMinutes: horizon,
       generatedAt,
       snapshotAt: context.snapshotAt,
-      staleAfter: new Date(Date.now() + 180_000).toISOString(),
+      staleAfter: new Date(context.snapshotMs + MAX_DECISION_PROCESSING_DELAY_MS).toISOString(),
       entryTimeUtc: new Date(entryTimeMs).toISOString(),
       expiryTimeUtc: new Date(expiryTimeMs).toISOString(),
       snapshotPrice: context.currentPrice,
@@ -968,9 +1019,15 @@ export class OpportunityEngine {
     const breakEven = opportunity.forecast.payoutBreakEvenProbability;
     const entryMs = Date.parse(opportunity.entryTimeUtc);
     const expiryMs = Date.parse(opportunity.expiryTimeUtc);
-    const scheduleValid = Number.isFinite(entryMs) &&
-      Number.isFinite(expiryMs) &&
-      isForexMarketIntervalOpen(entryMs, expiryMs);
+    const schedule = buildOpportunitySchedule(
+      Date.parse(opportunity.snapshotAt),
+      opportunity.horizonMinutes as Horizon,
+      Date.now()
+    );
+    const scheduleMatchesStored = schedule.valid &&
+      schedule.entryTimeMs === entryMs &&
+      schedule.expiryTimeMs === expiryMs;
+    const scheduleValid = Number.isFinite(entryMs) && Number.isFinite(expiryMs) && scheduleMatchesStored;
     const dataAndSimilarityGate = opportunity.marketDataQuality >= 70 &&
       (opportunity.forecast.meanDistance ?? Infinity) <= 0.45 &&
       scheduleValid;
@@ -980,8 +1037,10 @@ export class OpportunityEngine {
       ? ["The human changed direction or entry reference. The original model's holdout cannot validate a different human hypothesis; a new independent test is required."]
       : holdoutSampleSize < MIN_ANALOGUES_FOR_SHORTLIST || holdoutLower === null
         ? ["The original later chronological holdout did not contain the required 100 decisive outcomes."]
-        : !dataAndSimilarityGate
-          ? ["The revised hypothesis failed the original data-quality, analogue-similarity or market-hours gate."]
+        : !scheduleValid
+          ? [schedule.reason || "The stored entry schedule no longer satisfies the exact T−3-minute timing contract."]
+          : !dataAndSimilarityGate
+            ? ["The revised hypothesis failed the original data-quality or analogue-similarity gate."]
           : !activationGate
             ? ["The original hypothesis activation score did not clear its threshold."]
             : holdoutLower > breakEven

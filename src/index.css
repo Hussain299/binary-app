@@ -141,6 +141,7 @@
   background:radial-gradient(ellipse at 80% -30%,rgba(89,194,146,.13),transparent 47%),linear-gradient(110deg,rgba(15,25,35,.98),rgba(10,17,25,.94));
   padding:clamp(22px,2.8vw,34px) clamp(18px,2.8vw,38px);
 }
+.sf-opportunity-hero > * { position:relative;z-index:1; }
 .sf-opportunity-hero::after {
   position:absolute;right:-105px;bottom:-220px;width:390px;height:390px;border:1px solid rgba(159,239,195,.065);
   border-radius:50%;box-shadow:0 0 0 34px rgba(159,239,195,.018),0 0 0 72px rgba(159,239,195,.012);pointer-events:none;content:"";

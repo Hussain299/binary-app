@@ -123,7 +123,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   onClick={() => handleSelect(item.id)}
                   className={`sf-nav-item group relative flex h-10 w-full items-center gap-3 text-left text-[13px] font-medium ${compact ? 'is-compact justify-center px-0' : ''} ${isActive ? 'is-active' : ''}`}
                 >
-                  {isActive && <span className="absolute bottom-2 left-0 top-2 w-[2px] rounded-full bg-emerald-400" />}
                   <Icon className="sf-nav-icon" />
                   {!compact && <span className="min-w-0 flex-1 truncate">{item.label}</span>}
                   {!compact && count > 0 && (

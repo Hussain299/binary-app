@@ -39,7 +39,7 @@ import {
 } from './researchReproducibility.js';
 import { sanitizeLossAutopsy, OBSERVATION_ONLY_LESSONS } from './researchGovernance.js';
 import { calibratePredictionScore } from './predictionCalibration.js';
-import { opportunityEngine, evaluateOpportunityHoldout } from './opportunityEngine.js';
+import { opportunityEngine, evaluateOpportunityHoldout, buildOpportunitySchedule } from './opportunityEngine.js';
 import {
   assessPaperCapitalRisk,
   CONSERVATIVE_PAPER_RISK_POLICY,
@@ -304,6 +304,30 @@ export async function runAllVerificationTests(): Promise<{
     });
     if (alreadyFull.permitted || alreadyFull.reason !== 'OPEN_RISK_LIMIT_REACHED') {
       throw new Error('The portfolio open-risk ceiling must stop another position.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Opportunity schedules obey exact fresh T-3 timing and never defer the decision into the future', () => {
+    const snapshotMs = Date.parse('2026-10-29T10:27:00.000Z');
+    const nowMs = snapshotMs + 20_000;
+    const valid = buildOpportunitySchedule(snapshotMs, 5, nowMs);
+    if (!valid.valid || !valid.exactAdvanceWindow || !valid.withinProcessingWindow) {
+      throw new Error('An eligible snapshot exactly three minutes before the 5m boundary should pass.');
+    }
+    if (valid.decisionTimeMs !== snapshotMs || valid.entryTimeMs !== Date.parse('2026-10-29T10:30:00.000Z')) {
+      throw new Error('The opportunity schedule must use the observed candle close as its decision timestamp.');
+    }
+    const misaligned = buildOpportunitySchedule(Date.parse('2026-10-29T10:28:00.000Z'), 5, nowMs + 60_000);
+    if (misaligned.valid || misaligned.exactAdvanceWindow || !misaligned.reason?.includes('exact T')) {
+      throw new Error('A non-T-3 snapshot must not be shifted forward to manufacture a valid schedule.');
+    }
+    const late = buildOpportunitySchedule(snapshotMs, 5, snapshotMs + 25_000);
+    if (late.valid || late.withinProcessingWindow) {
+      throw new Error('A snapshot processed at or after the strict 25-second deadline must be rejected.');
+    }
+    const future = buildOpportunitySchedule(snapshotMs, 5, snapshotMs - 1);
+    if (future.valid || future.withinProcessingWindow) {
+      throw new Error('A decision cannot be marked fresh before its candle snapshot exists.');
     }
   });
 
