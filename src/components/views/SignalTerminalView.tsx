@@ -1226,71 +1226,71 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             </div>
 
             <div className="space-y-3">
-              {/* Strategy 1 */}
-              <div className="bg-neutral-950 p-4 rounded-xl border border-emerald-800/80 space-y-2">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h4 className="font-bold text-white text-sm">1. 5-Minute Momentum Breakout</h4>
-                    <span className="text-[11px] text-neutral-400">Expiry: 5 Minutes · Best Pairs: EUR/USD, GBP/USD, EUR/JPY</span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-bold">
-                    Not validated
-                  </span>
+              {synthesizedStrategies.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-neutral-700 p-5 text-center text-xs text-neutral-400">
+                  No strategy candidates have been generated. Import at least 30,000 genuine one-minute candles for a pair, then run the 300-candidate evolutionary research batch.
                 </div>
-                <p className="text-xs text-neutral-300 leading-relaxed">
-                  Enters at the exact opening of the next 5-minute candle when the setup candle closed with high directional volume and a body filling &gt;60% of total candle range. Exits at 5m candle close.
-                </p>
-              </div>
-
-              {/* Strategy 2 */}
-              <div className="bg-neutral-950 p-4 rounded-xl border border-neutral-800 space-y-2">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h4 className="font-bold text-white text-sm">2. 10-Minute Liquidity Wick Reversal</h4>
-                    <span className="text-[11px] text-neutral-400">Expiry: 10 Minutes · Best Pairs: USD/JPY, AUD/USD, AUD/CAD</span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-mono font-bold">
-                    Not validated
-                  </span>
-                </div>
-                <p className="text-xs text-neutral-300 leading-relaxed">
-                  Candidate hypothesis: a long rejection wick (more than half the candle range) near a recent high or low may precede a short-term reversal. The configured 5M-open entry and 10-minute expiry are test settings, not proof of an edge.
-                </p>
-              </div>
-
-              {/* Strategy 3 */}
-              <div className="bg-neutral-950 p-4 rounded-xl border border-cyan-800/80 space-y-2">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h4 className="font-bold text-white text-sm">3. 15-Minute Statistical Mean Reversion</h4>
-                    <span className="text-[11px] text-neutral-400">Expiry: 15 Minutes · Best Pairs: EUR/GBP, USD/CAD</span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-xs font-mono font-bold">
-                    Not validated
-                  </span>
-                </div>
-                <p className="text-xs text-neutral-300 leading-relaxed">
-                  Candidate hypothesis: price more than 8 pips from its 20-period moving average may revert toward the average. This needs historical and forward testing with the configured 5M-open entry and 15-minute expiry.
-                </p>
-              </div>
-
-              {/* Strategy 4 */}
-              <div className="bg-neutral-950 p-4 rounded-xl border border-purple-800/80 space-y-2">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h4 className="font-bold text-white text-sm">4. 20-to-30 Minute Volatility Breakout</h4>
-                    <span className="text-[11px] text-neutral-400">Expiry: 20–30 Minutes · Best Pairs: GBP/USD, EUR/JPY</span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40 text-xs font-mono font-bold">
-                    Not validated
-                  </span>
-                </div>
-                <p className="text-xs text-neutral-300 leading-relaxed">
-                  Candidate hypothesis: a break beyond a multi-candle consolidation may continue. It must pass a purged historical test and forward paper observation before it can be approved; configured expiry options are 20 or 30 minutes.
-                </p>
-              </div>
+              ) : (
+                [...synthesizedStrategies]
+                  .sort((a, b) =>
+                    Number(b.status === 'PROMOTED_ACTIVE') - Number(a.status === 'PROMOTED_ACTIVE') ||
+                    Number(b.status === 'PAPER_TRADING') - Number(a.status === 'PAPER_TRADING') ||
+                    (b.discoveryMetrics?.validationExpectedValueUnits ?? -Infinity) -
+                      (a.discoveryMetrics?.validationExpectedValueUnits ?? -Infinity)
+                  )
+                  .slice(0, 10)
+                  .map(gene => {
+                    const forward = strategyPerformance.find(item => item.strategyId === gene.id);
+                    const measuredTest = gene.accuracyStatus === 'BACKTESTED' && !!gene.backtestMetrics;
+                    const statusLabel = gene.status === 'PROMOTED_ACTIVE'
+                      ? 'FORWARD APPROVED'
+                      : gene.status === 'PAPER_TRADING'
+                        ? 'PAPER TRADING'
+                        : gene.status === 'REJECTED'
+                          ? 'REJECTED'
+                          : 'UNVALIDATED';
+                    return (
+                      <div key={gene.id} className="bg-neutral-950 p-4 rounded-xl border border-neutral-800 space-y-2">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <h4 className="font-bold text-white text-sm">{gene.name}</h4>
+                            <span className="text-[11px] text-neutral-400">
+                              {gene.symbol || 'Unassigned pair'} · {gene.optimalHorizonMinutes}M entry / expiry · {gene.sessionAffinity}
+                            </span>
+                          </div>
+                          <span className="px-2 py-0.5 rounded bg-neutral-800 text-neutral-300 text-[10px] font-mono">
+                            {statusLabel}
+                          </span>
+                        </div>
+                        <div className="font-mono text-[11px] text-cyan-200 break-all">{gene.mathematicalFormula}</div>
+                        {gene.discoveryMetrics && (
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono">
+                            <div><span className="text-neutral-500 block">Train WR · n</span><strong>{(gene.discoveryMetrics.trainWinRate * 100).toFixed(1)}% · {gene.discoveryMetrics.trainScoredTrades}</strong></div>
+                            <div><span className="text-neutral-500 block">Validation WR · n</span><strong>{(gene.discoveryMetrics.validationWinRate * 100).toFixed(1)}% · {gene.discoveryMetrics.validationScoredTrades}</strong></div>
+                            <div><span className="text-neutral-500 block">Validation EV</span><strong>{gene.discoveryMetrics.validationExpectedValueUnits.toFixed(4)} units</strong></div>
+                            <div><span className="text-neutral-500 block">Mutation pressure</span><strong>{(gene.mutationRate * 100).toFixed(1)}%</strong></div>
+                          </div>
+                        )}
+                        {measuredTest && gene.backtestMetrics ? (
+                          <div className="text-[11px] text-emerald-300 font-mono">
+                            Untouched-test result: {(gene.backtestMetrics.testWinRate * 100).toFixed(1)}% · scored n={gene.backtestMetrics.testScoredSampleSize} · 95% Wilson lower bound {(gene.backtestMetrics.confidenceInterval95[0] * 100).toFixed(1)}%.
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-neutral-500">No untouched-test accuracy has been recorded for this candidate.</div>
+                        )}
+                        {forward && (
+                          <div className="text-[11px] text-neutral-300 font-mono">
+                            Forward paper: {forward.wins}W / {forward.losses}L / {forward.scratches} scratches · {(forward.netReturnUnits ?? 0) > 0 ? '+' : ''}{(forward.netReturnUnits ?? 0).toFixed(3)} stake units.
+                          </div>
+                        )}
+                        {gene.validationFailureReason && (
+                          <div className="text-[10px] text-rose-300">{gene.validationFailureReason}</div>
+                        )}
+                      </div>
+                    );
+                  })
+              )}
             </div>
-
             <button
               onClick={() => setShowStrategiesModal(false)}
               className="w-full py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white font-bold rounded-xl transition-colors text-xs"
@@ -1642,7 +1642,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     </span>
                   </h3>
                   <p className="text-xs text-neutral-400">
-                    Randomized formula candidates with historical validation and forward paper-trading evidence
+                    Executable symbolic candidates with measured historical and forward-paper evidence
                   </p>
                 </div>
               </div>
@@ -1659,10 +1659,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="space-y-0.5">
                   <span className="text-xs font-bold text-white uppercase tracking-wider block">
-                    Candidate Formula Generator
+                    Evolutionary Research Run
                   </span>
                   <p className="text-[11px] text-neutral-400">
-                    Generates candidate formulas. Validation and promotion require out-of-sample evidence from uploaded historical candles.
+                    Runs 300 candidates through train/validation ranking. Only pre-registered finalists access the untouched test; later promotion requires independent forward paper evidence.
                   </p>
                 </div>
                 <button
@@ -1671,7 +1671,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   className="flex items-center gap-2 px-4 py-2 rounded-xl bg-linear-to-r from-cyan-600 to-emerald-600 hover:from-cyan-500 hover:to-emerald-500 text-neutral-950 font-black text-xs transition-all shadow-lg shadow-cyan-950/50 disabled:opacity-50"
                 >
                   <Sparkles className={`w-4 h-4 ${isEvolvingStrategy ? 'animate-spin' : ''}`} />
-                  <span>{isEvolvingStrategy ? 'Evolving Next Generation...' : '🧬 Evolve New Strategy Now'}</span>
+                  <span>{isEvolvingStrategy ? 'Evolving Next Generation...' : '🧬 Run 300-Candidate Evolution'}</span>
                 </button>
               </div>
 
@@ -1824,17 +1824,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       </div>
                     )}
                     {gene.accuracyStatus !== 'BACKTESTED' && (
-                      gene.operatorParameters ? (
-                        <button
-                          onClick={() => handleValidateGene(gene.id, gene.symbol)}
-                          disabled={validatingGeneId === gene.id}
-                          className="px-3 py-2 rounded-lg bg-cyan-900/60 border border-cyan-700 text-cyan-200 text-[11px] font-semibold disabled:opacity-50"
-                        >
-                          {validatingGeneId === gene.id ? 'Validating against imported history…' : `Validate against ${gene.symbol || historyImportPair} history`}
-                        </button>
-                      ) : (
-                        <span className="text-[10px] text-neutral-500">Legacy candidate has no stored executable coefficients. Generate a new candidate to validate it.</span>
-                      )
+                      <span className="text-[10px] text-neutral-500">Candidate remains unvalidated until the next pre-registered batch test.</span>
                     )}
 
                     {/* Parents & Lineage */}
