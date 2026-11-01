@@ -4,14 +4,11 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   CalendarDays,
-  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Clock3,
   RefreshCw,
   ShieldAlert,
-  XCircle,
 } from 'lucide-react';
 import type { ResearchSignal } from '../../types/index.js';
 
@@ -54,10 +51,12 @@ function activityTime(signal: ResearchSignal): string {
 }
 
 function expiryTime(signal: ResearchSignal): string | null {
-  return signal.actualExitTimeUtc ||
-    signal.plannedExitTimeUtc ||
+  // plannedExitTimeUtc is the contract expiry boundary. actualExitTimeUtc stores
+  // the timestamp of the exact M1 bar used to verify that boundary.
+  return signal.plannedExitTimeUtc ||
     signal.candleCloseTimeUtc ||
     signal.entryWindowEndUtc ||
+    signal.actualExitTimeUtc ||
     null;
 }
 
@@ -428,6 +427,7 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
                               <div><span>Decision recorded</span><strong>{formatIST(signal.predictionTimeUtc, true)}</strong></div>
                               <div><span>Entry timestamp</span><strong>{formatIST(signal.actualEntryTimeUtc || signal.candleOpenTimeUtc, true)}</strong></div>
                               <div><span>Entry source</span><strong>{signal.entrySource || 'Not recorded'}</strong></div>
+                              <div><span>Exact expiry candle</span><strong>{formatIST(signal.actualExitTimeUtc, true)}</strong></div>
                               <div><span>Expiry price</span><strong>{formatPrice(signal.actualExitPrice, signal.symbol)}</strong></div>
                               <div><span>Recorded payout</span><strong>{signal.payoutPct === undefined ? 'Not recorded' : signal.payoutPct + '% · ' + (signal.payoutSource === 'BROKER_OBSERVED' ? 'observed' : 'assumed')}</strong></div>
                               <div><span>Outcome evidence</span><strong>{settled ? 'Exact candle-based settlement' : bucket === 'PENDING' ? 'Awaiting lifecycle reconciliation' : 'No decisive outcome recorded'}</strong></div>
