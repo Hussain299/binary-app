@@ -88,6 +88,28 @@ export function isForexMarketOpenAt(value: string | Date | number = Date.now()):
   return true; // Monday–Thursday
 }
 
+function nextSundayReopenMs(parts: NewYorkParts): number {
+  const daysUntilSunday = (7 - parts.weekday) % 7;
+  const targetDate = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + daysUntilSunday));
+  return newYorkWallClockToUtcMs(
+    targetDate.getUTCFullYear(),
+    targetDate.getUTCMonth() + 1,
+    targetDate.getUTCDate(),
+    17,
+    0
+  );
+}
+
+function formatIstDateTime(value: number): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    weekday: 'long',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(new Date(value));
+}
+
 export function getForexMarketState(value: string | Date | number = Date.now()): {
   isOpen: boolean;
   status: 'OPEN' | 'WEEKEND_CLOSED' | 'INVALID_TIME';
@@ -95,22 +117,16 @@ export function getForexMarketState(value: string | Date | number = Date.now()):
 } {
   const parts = newYorkParts(value);
   if (!parts) {
-    return { isOpen: false, status: 'INVALID_TIME', message: 'Market clock unavailable: invalid timestamp.' };
+    return { isOpen: false, status: 'INVALID_TIME', message: 'Market clock unavailable.' };
   }
   if (isForexMarketOpenAt(value)) {
-    return { isOpen: true, status: 'OPEN', message: 'Spot FX market open.' };
+    return { isOpen: true, status: 'OPEN', message: 'Forex market open.' };
   }
-  if (parts.weekday === 5 || parts.weekday === 6) {
-    return {
-      isOpen: false,
-      status: 'WEEKEND_CLOSED',
-      message: 'Weekend closure: spot FX reopens Sunday at 5:00 PM New York time.',
-    };
-  }
+  const reopenIst = formatIstDateTime(nextSundayReopenMs(parts));
   return {
     isOpen: false,
     status: 'WEEKEND_CLOSED',
-    message: 'Weekend closure: spot FX opens today at 5:00 PM New York time.',
+    message: `Forex market closed. Reopens ${reopenIst} IST.`,
   };
 }
 
@@ -180,6 +196,14 @@ function formatClock(minutes: number): string {
   return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(normalized % 60).padStart(2, '0')}`;
 }
 
+function formatIstClock(minutes: number): string {
+  const normalized = ((minutes % 1440) + 1440) % 1440;
+  const hour = Math.floor(normalized / 60);
+  const minute = normalized % 60;
+  const hour12 = hour % 12 || 12;
+  return `${hour12}:${String(minute).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`;
+}
+
 function describeSession(definition: SessionDefinition, value: string | Date | number) {
   const offset = newYorkUtcOffsetMinutes(value);
   const istDelta = 330 - offset; // IST is UTC+05:30; New York offset is DST-aware.
@@ -187,9 +211,9 @@ function describeSession(definition: SessionDefinition, value: string | Date | n
     id: definition.id,
     name: definition.name,
     shortName: definition.shortName,
-    hoursLabel: `${definition.hoursLabel} (DST-aware)`,
+    hoursLabel: 'India Standard Time (IST)',
     utcRange: `${formatClock(definition.startMinute - offset)}–${formatClock(definition.endMinute - offset)} UTC`,
-    istRange: `${formatClock(definition.startMinute + istDelta)}–${formatClock(definition.endMinute + istDelta)} IST`,
+    istRange: `${formatIstClock(definition.startMinute + istDelta)}–${formatIstClock(definition.endMinute + istDelta)} IST`,
   };
 }
 
