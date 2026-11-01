@@ -319,6 +319,8 @@ apiRouter.post('/opportunities/:id/revise', (req: Request, res: Response) => {
   }
   try {
     const revised = opportunityEngine.reviseDirection(source, direction);
+    revised.humanDecision.parentOpportunityId = original.id;
+    revised.humanDecision.horizonMinutes = requestedHorizon as 5 | 10 | 15 | 20 | 25 | 30;
     revised.humanDecision.notes = typeof req.body?.notes === 'string' ? req.body.notes.slice(0, 500) : 'Human revised direction and/or horizon.';
     db.storeOpportunities([revised]);
     return res.json({
