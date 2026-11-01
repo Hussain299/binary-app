@@ -668,3 +668,233 @@ export interface VerificationTestResult {
   details: string;
   error?: string;
 }
+
+
+/* Research intelligence platform: immutable forward evidence and human-governed evolution. */
+export type ResearchPredictionSource = 'SIGNAL' | 'OPPORTUNITY';
+export type ResearchOutcomeResult = 'WIN' | 'LOSS' | 'SCRATCH';
+export type ResearchOutcomeSource = 'SIGNAL_SETTLEMENT_RECORD' | 'MARKET_DATA_REPLAY';
+export type ResearchEvidenceStream = 'SIGNAL_FORWARD' | 'OPPORTUNITY_FORWARD';
+
+export interface ResearchPredictionRecord {
+  id: string;
+  source: ResearchPredictionSource;
+  sourceId: string;
+  symbol: ForexSymbol;
+  direction: OpportunityDirection;
+  modelVersion: string;
+  family: string;
+  decisionTimeUtc: string;
+  entryTimeUtc: string;
+  expiryTimeUtc: string;
+  horizonMinutes: number;
+  snapshotPrice: number | null;
+  proposedEntryPrice: number | null;
+  rawScore: number | null;
+  /** Only a probability calibrated before this prediction may be placed here. */
+  calibratedProbability: number | null;
+  forecastPoints: OpportunityForecastPoint[];
+  marketFeatureVector: number[];
+  marketRegimeAtPrediction: ResearchMarketRegime;
+  marketDataQuality: number | null;
+  dataSource: string;
+  datasetFingerprint: string | null;
+  payoutPct: number | null;
+  payoutBasis: 'BROKER_OBSERVED' | 'ASSUMED_MINIMUM' | 'NOT_APPLICABLE' | 'UNKNOWN';
+  paperOnly: true;
+  snapshotHash: string;
+  recordedAtUtc: string;
+}
+
+export interface ResearchOutcomeRecord {
+  id: string;
+  predictionId: string;
+  source: ResearchOutcomeSource;
+  result: ResearchOutcomeResult;
+  settledAtUtc: string;
+  entryPrice: number;
+  expiryPrice: number;
+  payoutPct: number | null;
+  payoutBasis: ResearchPredictionRecord['payoutBasis'];
+  /** Return measured in stake units. Null means payout-adjusted EV is not measurable. */
+  returnUnits: number | null;
+  entryEvidence: string;
+  expiryEvidence: string;
+  /** Actual replayed close path, only available for real-market opportunity replays. */
+  actualPath: Array<{ minute: number; price: number }>;
+  immutableHash: string;
+}
+
+export type ResearchRegimeLabel =
+  | 'TRENDING_UP'
+  | 'TRENDING_DOWN'
+  | 'RANGING'
+  | 'HIGH_VOLATILITY'
+  | 'MIXED'
+  | 'UNKNOWN';
+
+export interface ResearchMarketRegime {
+  symbol: ForexSymbol;
+  label: ResearchRegimeLabel;
+  directionalEfficiency: number | null;
+  volatilityRatio: number | null;
+  confidence: number;
+  observationCount: number;
+  latestCandleUtc: string | null;
+  evaluatedAtUtc: string;
+  staleAfterUtc: string | null;
+  dataFreshness: 'FRESH' | 'STALE' | 'INSUFFICIENT_DATA';
+  source: string;
+  reason: string;
+}
+
+export type ModelPromotionStatus =
+  | 'INSUFFICIENT_EVIDENCE'
+  | 'REJECTED'
+  | 'DOES_NOT_BEAT_CHAMPION'
+  | 'REVIEW_READY'
+  | 'CURRENT_CHAMPION';
+
+export interface ModelEvidenceSummary {
+  stream: ResearchEvidenceStream;
+  modelVersion: string;
+  predictionCount: number;
+  settledCount: number;
+  decisiveCount: number;
+  wins: number;
+  losses: number;
+  scratches: number;
+  winRate: number | null;
+  minimumPayoutPct: number | null;
+  breakEvenWinRate: number | null;
+  adjustedLowerBound: number | null;
+  meanReturnUnits: number | null;
+  profitFactor: number | null;
+  lastThreeHundredBlockWinRates: number[];
+  promotionStatus: ModelPromotionStatus;
+  promotionReasons: string[];
+  lastOutcomeAtUtc: string | null;
+}
+
+export interface CalibrationDiagnostics {
+  status: 'COLLECTING' | 'MEASURED' | 'CALIBRATION_WARNING';
+  sampleSize: number;
+  validationSampleSize: number;
+  brierScore: number | null;
+  expectedCalibrationError: number | null;
+  meanPredictedProbability: number | null;
+  observedWinRate: number | null;
+  calibrationGap: number | null;
+  evaluatedAtUtc: string;
+}
+
+export interface ForecastPathDiagnostics {
+  status: 'COLLECTING' | 'MEASURED';
+  sampleSize: number;
+  matchedPoints: number;
+  q10ToQ90Coverage: number | null;
+  medianAbsoluteErrorPips: number | null;
+  evaluatedAtUtc: string;
+}
+
+export interface RegimeEvidenceSummary {
+  stream: ResearchEvidenceStream;
+  regime: ResearchRegimeLabel;
+  sampleSize: number;
+  wins: number;
+  losses: number;
+  scratches: number;
+  winRate: number | null;
+  meanReturnUnits: number | null;
+}
+
+export interface ResearchFailureCluster {
+  stream: ResearchEvidenceStream;
+  family: string;
+  regime: ResearchRegimeLabel;
+  sampleSize: number;
+  losses: number;
+  observedLossShare: number;
+  note: string;
+}
+
+export interface ResearchChampionRecord {
+  stream: ResearchEvidenceStream;
+  modelVersion: string;
+  promotedAtUtc: string;
+  approvedBy: string;
+  reason: string;
+  evidenceSnapshot: {
+    decisiveCount: number;
+    winRate: number;
+    adjustedLowerBound: number;
+    meanReturnUnits: number;
+  };
+}
+
+export interface ResearchChampionChange {
+  id: string;
+  stream: ResearchEvidenceStream;
+  previousModelVersion: string | null;
+  nextModelVersion: string;
+  changedAtUtc: string;
+  approvedBy: string;
+  reason: string;
+}
+
+export interface PaperExecutionSimulationInput {
+  symbol: ForexSymbol;
+  direction: SignalDirection;
+  referenceEntryPrice: number;
+  expiryPrice: number;
+  payoutPct: number;
+  stakeUnits: number;
+  spreadPips: number;
+  slippagePips: number;
+  maximumSlippagePips: number;
+  entryLatencyMs: number;
+  maximumDecisionDelayMs: number;
+  assetAvailable: boolean;
+  brokerRejected: boolean;
+}
+
+export interface PaperExecutionSimulationResult {
+  id: string;
+  input: PaperExecutionSimulationInput;
+  status:
+    | 'SETTLED'
+    | 'ASSET_UNAVAILABLE'
+    | 'BROKER_REJECTED'
+    | 'MISSED_DECISION_WINDOW'
+    | 'SLIPPAGE_LIMIT';
+  simulatedEntryPrice: number | null;
+  frictionPips: number;
+  result: ResearchOutcomeResult | null;
+  returnUnits: number | null;
+  pnlUnits: number | null;
+  assumptions: string[];
+  simulatedAtUtc: string;
+  executionEnabled: false;
+}
+
+export interface ResearchIntelligenceDashboard {
+  predictionCount: number;
+  settledCount: number;
+  pendingCount: number;
+  signalPredictionCount: number;
+  opportunityPredictionCount: number;
+  signalOutcomeCount: number;
+  opportunityOutcomeCount: number;
+  calibration: CalibrationDiagnostics;
+  forecastDiagnostics: ForecastPathDiagnostics;
+  modelEvidence: ModelEvidenceSummary[];
+  regimeEvidence: RegimeEvidenceSummary[];
+  failureClusters: ResearchFailureCluster[];
+  regimes: ResearchMarketRegime[];
+  champions: ResearchChampionRecord[];
+  championHistory: ResearchChampionChange[];
+  recentPredictions: ResearchPredictionRecord[];
+  recentOutcomes: ResearchOutcomeRecord[];
+  simulations: PaperExecutionSimulationResult[];
+  generatedAtUtc: string;
+}

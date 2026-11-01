@@ -3,6 +3,7 @@ import { Header } from './components/Header.tsx';
 import { Sidebar, ViewTab } from './components/Sidebar.tsx';
 import { SignalTerminalView } from './components/views/SignalTerminalView.tsx';
 import { OpportunityResearchView } from './components/views/OpportunityResearchView.tsx';
+import { ResearchIntelligenceView } from './components/views/ResearchIntelligenceView.tsx';
 import { MarketExplorerView } from './components/views/MarketExplorerView.tsx';
 import { ModelLabView } from './components/views/ModelLabView.tsx';
 import { StrategyDiscoveryView } from './components/views/StrategyDiscoveryView.tsx';
@@ -184,6 +185,7 @@ export default function App() {
             />
           )}
           {activeTab === 'opportunities' && <OpportunityResearchView />}
+          {activeTab === 'intelligence' && <ResearchIntelligenceView />}
           {activeTab === 'explorer' && <MarketExplorerView providers={providers} />}
           {activeTab === 'modellab' && (
             <ModelLabView

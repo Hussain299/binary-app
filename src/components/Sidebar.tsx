@@ -10,6 +10,7 @@ import {
   Dna,
   History,
   Lightbulb,
+  Gauge,
   LineChart,
   Settings,
   ShieldCheck,
@@ -20,6 +21,7 @@ import {
 export type ViewTab =
   | 'terminal'
   | 'opportunities'
+  | 'intelligence'
   | 'explorer'
   | 'modellab'
   | 'strategy'
@@ -56,6 +58,7 @@ const groups: Array<{
     items: [
       { id: 'terminal', label: 'Signals', icon: Zap, count: 'signals' },
       { id: 'opportunities', label: 'Opportunities', icon: BrainCircuit },
+      { id: 'intelligence', label: 'Intelligence', icon: Gauge },
       { id: 'explorer', label: 'Markets', icon: LineChart },
       { id: 'strategy', label: 'Strategies', icon: Lightbulb },
       { id: 'analytics', label: 'Performance', icon: BarChart3 },

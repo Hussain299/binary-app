@@ -21,10 +21,19 @@ import {
   LossAutopsy,
   StrategyPerformanceRecord,
   TradeOpportunity,
+  ResearchPredictionRecord,
+  ResearchOutcomeRecord,
+  ResearchMarketRegime,
+  ResearchEvidenceStream,
+  ResearchChampionRecord,
+  ResearchChampionChange,
+  PaperExecutionSimulationResult,
 } from '../types/index.js';
 import { sanitizeLossAutopsy } from './researchGovernance.js';
 import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.js';
-import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
+import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid, isForexMarketIntervalOpen } from './marketHours.js';
+import { classifyResearchRegime, RESEARCH_REAL_DATA_SOURCES } from './researchPlatform.js';
+import { stableHash } from './researchReproducibility.js';
 import {
   assessNearestNeighbors,
   EpisodicTradeMemory,
@@ -67,6 +76,14 @@ interface DatabaseSchema {
     endUtc: string;
     reservedAt: string;
   }>;
+  /** Append-only prediction-time snapshots; never overwritten by later outcomes. */
+  researchPredictions: ResearchPredictionRecord[];
+  /** One immutable settlement record per prediction ID. */
+  researchOutcomes: ResearchOutcomeRecord[];
+  researchRegimes: Record<string, ResearchMarketRegime>;
+  researchChampions: ResearchChampionRecord[];
+  researchChampionHistory: ResearchChampionChange[];
+  paperSimulations: PaperExecutionSimulationResult[];
   cronState: {
     lastRun: string | null;
     nextRun: string | null;
@@ -111,6 +128,12 @@ class DatabaseService {
         if (!Array.isArray(parsed.processedOutcomeIds)) parsed.processedOutcomeIds = [];
         if (!Array.isArray(parsed.researchHoldoutWindows)) parsed.researchHoldoutWindows = [];
         if (!Array.isArray(parsed.opportunityHoldoutWindows)) parsed.opportunityHoldoutWindows = [];
+        if (!Array.isArray(parsed.researchPredictions)) parsed.researchPredictions = [];
+        if (!Array.isArray(parsed.researchOutcomes)) parsed.researchOutcomes = [];
+        if (!parsed.researchRegimes || typeof parsed.researchRegimes !== 'object') parsed.researchRegimes = {};
+        if (!Array.isArray(parsed.researchChampions)) parsed.researchChampions = [];
+        if (!Array.isArray(parsed.researchChampionHistory)) parsed.researchChampionHistory = [];
+        if (!Array.isArray(parsed.paperSimulations)) parsed.paperSimulations = [];
         // Historical versions wrote fabricated strategy accuracy values. Never trust them
         // without stored untouched-test evidence; quarantine all such legacy candidates.
         if (Array.isArray(parsed.synthesizedStrategies)) {
@@ -234,6 +257,12 @@ class DatabaseService {
       processedOutcomeIds: [],
       researchHoldoutWindows: [],
       opportunityHoldoutWindows: [],
+      researchPredictions: [],
+      researchOutcomes: [],
+      researchRegimes: {},
+      researchChampions: [],
+      researchChampionHistory: [],
+      paperSimulations: [],
       cronState: {
         lastRun: null,
         nextRun: null,
@@ -405,6 +434,48 @@ class DatabaseService {
       ...opportunities,
       ...existing,
     ].slice(0, 3000);
+    for (const opportunity of opportunities) {
+      // Human revisions are audited separately; never mix them into the model's forward ledger.
+      if (opportunity.humanDecision?.parentOpportunityId) continue;
+      const id = 'pred_opportunity_' + stableHash(opportunity.id);
+      if ((this.state.researchPredictions || []).some(item => item.id === id)) continue;
+      const decisionMs = Date.parse(opportunity.snapshotAt);
+      const candlesAtDecision = (this.state.candles[opportunity.symbol] || []).filter(candle =>
+        Number.isFinite(decisionMs) && candle.timestampMs + 60_000 <= decisionMs
+      );
+      const regime = classifyResearchRegime(candlesAtDecision, Number.isFinite(decisionMs) ? decisionMs : Date.now());
+      const base: Omit<ResearchPredictionRecord, 'id' | 'snapshotHash'> = {
+        source: 'OPPORTUNITY',
+        sourceId: opportunity.id,
+        symbol: opportunity.symbol,
+        direction: opportunity.direction,
+        modelVersion: opportunity.modelVersion,
+        family: opportunity.hypothesisType,
+        decisionTimeUtc: opportunity.snapshotAt,
+        entryTimeUtc: opportunity.entryTimeUtc,
+        expiryTimeUtc: opportunity.expiryTimeUtc,
+        horizonMinutes: opportunity.horizonMinutes,
+        snapshotPrice: opportunity.snapshotPrice,
+        proposedEntryPrice: opportunity.proposedEntryPrice,
+        rawScore: opportunity.rawHypothesisScore,
+        calibratedProbability: null,
+        forecastPoints: opportunity.forecast.points.slice(0, 31),
+        marketFeatureVector: opportunity.marketFeatureVector.slice(0, 64),
+        marketRegimeAtPrediction: regime.label,
+        marketDataQuality: opportunity.marketDataQuality,
+        dataSource: opportunity.dataSource,
+        datasetFingerprint: opportunity.datasetFingerprint,
+        payoutPct: 80,
+        payoutBasis: 'ASSUMED_MINIMUM',
+        paperOnly: true,
+        recordedAtUtc: new Date().toISOString(),
+      };
+      this.appendResearchPrediction({
+        ...base,
+        id,
+        snapshotHash: stableHash(JSON.stringify(base)),
+      });
+    }
     this.scheduleSave();
   }
 
@@ -423,6 +494,258 @@ class DatabaseService {
     this.state.opportunities[index] = opportunity;
     this.scheduleSave();
     return true;
+  }
+
+  private appendResearchPrediction(record: ResearchPredictionRecord): boolean {
+    if (!Array.isArray(this.state.researchPredictions)) this.state.researchPredictions = [];
+    if (this.state.researchPredictions.some(item => item.id === record.id || item.sourceId === record.sourceId)) {
+      return false;
+    }
+    this.state.researchPredictions.unshift(record);
+    this.state.researchPredictions = this.state.researchPredictions.slice(0, 20_000);
+    return true;
+  }
+
+  private appendResearchOutcome(record: ResearchOutcomeRecord): boolean {
+    if (!Array.isArray(this.state.researchOutcomes)) this.state.researchOutcomes = [];
+    if (!this.state.researchPredictions.some(item => item.id === record.predictionId)) return false;
+    if (this.state.researchOutcomes.some(item => item.predictionId === record.predictionId)) return false;
+    this.state.researchOutcomes.unshift(record);
+    this.state.researchOutcomes = this.state.researchOutcomes.slice(0, 20_000);
+    return true;
+  }
+
+  private captureSignalPrediction(signal: ResearchSignal): void {
+    if (signal.ruleFamily?.startsWith('test_')) return;
+    const id = 'pred_signal_' + stableHash(signal.id);
+    if ((this.state.researchPredictions || []).some(item => item.id === id)) return;
+    const decisionMs = Date.parse(signal.predictionTimeUtc);
+    const entryUtc = signal.candleOpenTimeUtc || signal.entryWindowStartUtc || signal.predictionTimeUtc;
+    const entryMs = Date.parse(entryUtc);
+    const expiryUtc = signal.plannedExitTimeUtc ||
+      (Number.isFinite(entryMs) ? new Date(entryMs + signal.expiryMinutes * 60_000).toISOString() : signal.predictionTimeUtc);
+    const candlesAtDecision = (this.state.candles[signal.symbol] || []).filter(candle =>
+      Number.isFinite(decisionMs) && candle.timestampMs + 60_000 <= decisionMs
+    );
+    const regime = classifyResearchRegime(candlesAtDecision, Number.isFinite(decisionMs) ? decisionMs : Date.now());
+    const payoutBasis: ResearchPredictionRecord['payoutBasis'] = signal.payoutSource === 'BROKER_OBSERVED'
+      ? 'BROKER_OBSERVED'
+      : signal.payoutSource === 'ASSUMED_MINIMUM'
+        ? 'ASSUMED_MINIMUM'
+        : signal.payoutPct !== undefined ? 'ASSUMED_MINIMUM' : 'UNKNOWN';
+    const base: Omit<ResearchPredictionRecord, 'id' | 'snapshotHash'> = {
+      source: 'SIGNAL',
+      sourceId: signal.id,
+      symbol: signal.symbol,
+      direction: signal.direction,
+      modelVersion: signal.modelVersion || 'UNKNOWN',
+      family: signal.ruleFamily || 'UNCLASSIFIED',
+      decisionTimeUtc: signal.predictionTimeUtc,
+      entryTimeUtc: entryUtc,
+      expiryTimeUtc: expiryUtc,
+      horizonMinutes: signal.expiryMinutes,
+      snapshotPrice: Number.isFinite(signal.triggerPrice) ? signal.triggerPrice : null,
+      proposedEntryPrice: Number.isFinite(signal.triggerPrice) ? signal.triggerPrice : null,
+      rawScore: Number.isFinite(signal.confidence) ? signal.confidence : null,
+      calibratedProbability: Number.isFinite(signal.calibratedProbability)
+        ? signal.calibratedProbability as number
+        : null,
+      forecastPoints: [],
+      marketFeatureVector: Array.isArray(signal.marketFeatureVector) ? signal.marketFeatureVector.slice(0, 64) : [],
+      marketRegimeAtPrediction: regime.label,
+      marketDataQuality: null,
+      dataSource: signal.entrySource || 'SIGNAL_ENGINE_OBSERVATION',
+      datasetFingerprint: null,
+      payoutPct: Number.isFinite(signal.payoutPct) ? signal.payoutPct as number : null,
+      payoutBasis,
+      paperOnly: true,
+      recordedAtUtc: new Date().toISOString(),
+    };
+    this.appendResearchPrediction({
+      ...base,
+      id,
+      snapshotHash: stableHash(JSON.stringify(base)),
+    });
+  }
+
+  private recordSignalResearchOutcome(signal: ResearchSignal): void {
+    if (signal.ruleFamily?.startsWith('test_') ||
+        !['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult)) return;
+    const prediction = (this.state.researchPredictions || []).find(item =>
+      item.source === 'SIGNAL' && item.sourceId === signal.id
+    );
+    if (!prediction || !Number.isFinite(signal.actualEntryPrice) || !Number.isFinite(signal.actualExitPrice) ||
+        !signal.actualEntryTimeUtc || !signal.actualExitTimeUtc) return;
+    const result = signal.outcomeResult as ResearchOutcomeRecord['result'];
+    const payoutPct = Number.isFinite(signal.payoutPct) ? signal.payoutPct as number : null;
+    const returnUnits = Number.isFinite(signal.netReturnUnits)
+      ? signal.netReturnUnits as number
+      : result === 'SCRATCH'
+        ? 0
+        : payoutPct === null ? null : result === 'WIN' ? payoutPct / 100 : -1;
+    const base = {
+      predictionId: prediction.id,
+      source: 'SIGNAL_SETTLEMENT_RECORD' as const,
+      result,
+      settledAtUtc: signal.actualExitTimeUtc,
+      entryPrice: signal.actualEntryPrice as number,
+      expiryPrice: signal.actualExitPrice as number,
+      payoutPct,
+      payoutBasis: signal.payoutSource === 'BROKER_OBSERVED'
+        ? 'BROKER_OBSERVED' as const
+        : payoutPct === null ? 'UNKNOWN' as const : 'ASSUMED_MINIMUM' as const,
+      returnUnits,
+      entryEvidence: signal.entrySource || 'Signal lifecycle actual-entry record',
+      expiryEvidence: 'Signal lifecycle exact-expiry record',
+      actualPath: [],
+    };
+    this.appendResearchOutcome({
+      ...base,
+      id: 'outcome_' + stableHash(prediction.id),
+      immutableHash: stableHash(JSON.stringify(base)),
+    });
+  }
+
+  public getResearchPredictions(limit = 20_000): ResearchPredictionRecord[] {
+    return (this.state.researchPredictions || []).slice(0, Math.max(1, Math.min(20_000, limit)));
+  }
+
+  public getResearchOutcomes(limit = 20_000): ResearchOutcomeRecord[] {
+    return (this.state.researchOutcomes || []).slice(0, Math.max(1, Math.min(20_000, limit)));
+  }
+
+  /** Replay matured opportunity snapshots only when every exact M1 candle is present and real. */
+  public reconcileOpportunityResearchOutcomes(nowMs = Date.now()): { settled: number; waitingForData: number; skipped: number } {
+    const existingOutcomeIds = new Set((this.state.researchOutcomes || []).map(item => item.predictionId));
+    let settled = 0;
+    let waitingForData = 0;
+    let skipped = 0;
+    for (const prediction of this.state.researchPredictions || []) {
+      if (prediction.source !== 'OPPORTUNITY' || prediction.direction === 'NO_TRADE' ||
+          existingOutcomeIds.has(prediction.id)) continue;
+      const entryMs = Date.parse(prediction.entryTimeUtc);
+      const expiryMs = Date.parse(prediction.expiryTimeUtc);
+      if (!Number.isFinite(entryMs) || !Number.isFinite(expiryMs) || expiryMs <= entryMs ||
+          expiryMs > nowMs) continue;
+      if (entryMs - Date.parse(prediction.decisionTimeUtc) !== 180_000 ||
+          !isForexMarketIntervalOpen(entryMs, expiryMs)) {
+        skipped++;
+        continue;
+      }
+      const horizonMinutes = Math.round((expiryMs - entryMs) / 60_000);
+      if (![5, 10, 15, 20, 25, 30].includes(horizonMinutes)) {
+        skipped++;
+        continue;
+      }
+      const candles = this.state.candles[prediction.symbol] || [];
+      const byTime = new Map(candles.map(candle => [candle.timestampMs, candle]));
+      const entryCandle = byTime.get(entryMs);
+      const path: Array<{ minute: number; price: number }> = [];
+      let valid = !!entryCandle;
+      for (let minute = 1; minute <= horizonMinutes; minute++) {
+        const candle = byTime.get(entryMs + (minute - 1) * 60_000);
+        if (!candle || !RESEARCH_REAL_DATA_SOURCES.has(candle.source) ||
+            !Number.isFinite(candle.open) || !Number.isFinite(candle.high) ||
+            !Number.isFinite(candle.low) || !Number.isFinite(candle.close) ||
+            candle.high < Math.max(candle.open, candle.close) ||
+            candle.low > Math.min(candle.open, candle.close)) {
+          valid = false;
+          break;
+        }
+        path.push({ minute, price: candle.close });
+      }
+      if (!entryCandle || !RESEARCH_REAL_DATA_SOURCES.has(entryCandle.source) || !valid) {
+        waitingForData++;
+        continue;
+      }
+      const entryPrice = entryCandle.open;
+      const expiryPrice = path[path.length - 1]?.price;
+      if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(expiryPrice) || expiryPrice <= 0) {
+        skipped++;
+        continue;
+      }
+      const result = prediction.direction === 'BUY'
+        ? expiryPrice > entryPrice ? 'WIN' : expiryPrice < entryPrice ? 'LOSS' : 'SCRATCH'
+        : expiryPrice < entryPrice ? 'WIN' : expiryPrice > entryPrice ? 'LOSS' : 'SCRATCH';
+      const payoutPct = 80;
+      const returnUnits = result === 'WIN' ? payoutPct / 100 : result === 'LOSS' ? -1 : 0;
+      const base = {
+        predictionId: prediction.id,
+        source: 'MARKET_DATA_REPLAY' as const,
+        result: result as ResearchOutcomeRecord['result'],
+        settledAtUtc: new Date(expiryMs).toISOString(),
+        entryPrice,
+        expiryPrice,
+        payoutPct,
+        payoutBasis: 'ASSUMED_MINIMUM' as const,
+        returnUnits,
+        entryEvidence: `Real M1 candle open replay (${entryCandle.source}); no broker fill assumed.`,
+        expiryEvidence: 'Exact scheduled expiry-minute M1 close; no later candle substituted.',
+        actualPath: path,
+      };
+      const inserted = this.appendResearchOutcome({
+        ...base,
+        id: 'outcome_' + stableHash(prediction.id),
+        immutableHash: stableHash(JSON.stringify(base)),
+      });
+      if (inserted) settled++;
+    }
+    if (settled > 0) this.scheduleSave();
+    return { settled, waitingForData, skipped };
+  }
+
+  public refreshResearchRegimes(nowMs = Date.now()): ResearchMarketRegime[] {
+    if (!this.state.researchRegimes) this.state.researchRegimes = {};
+    for (const symbol of Object.keys(this.state.candles) as ForexSymbol[]) {
+      const regime = classifyResearchRegime(this.state.candles[symbol] || [], nowMs);
+      this.state.researchRegimes[symbol] = regime;
+    }
+    this.scheduleSave();
+    return this.getResearchRegimes();
+  }
+
+  public getResearchRegimes(): ResearchMarketRegime[] {
+    return Object.values(this.state.researchRegimes || {}).sort((a, b) => a.symbol.localeCompare(b.symbol));
+  }
+
+  public getResearchChampions(): ResearchChampionRecord[] {
+    return (this.state.researchChampions || []).slice();
+  }
+
+  public getResearchChampionHistory(): ResearchChampionChange[] {
+    return (this.state.researchChampionHistory || []).slice(0, 100);
+  }
+
+  public setResearchChampion(champion: ResearchChampionRecord): ResearchChampionChange {
+    if (!Array.isArray(this.state.researchChampions)) this.state.researchChampions = [];
+    const previous = this.state.researchChampions.find(item => item.stream === champion.stream)?.modelVersion || null;
+    const existingIndex = this.state.researchChampions.findIndex(item => item.stream === champion.stream);
+    if (existingIndex >= 0) this.state.researchChampions[existingIndex] = champion;
+    else this.state.researchChampions.push(champion);
+    const change: ResearchChampionChange = {
+      id: 'champion_' + stableHash([champion.stream, previous || 'NONE', champion.modelVersion, champion.promotedAtUtc].join('|')),
+      stream: champion.stream,
+      previousModelVersion: previous,
+      nextModelVersion: champion.modelVersion,
+      changedAtUtc: champion.promotedAtUtc,
+      approvedBy: champion.approvedBy,
+      reason: champion.reason,
+    };
+    this.state.researchChampionHistory = [change, ...(this.state.researchChampionHistory || [])].slice(0, 100);
+    this.scheduleSave();
+    return change;
+  }
+
+  public recordPaperSimulation(simulation: PaperExecutionSimulationResult): void {
+    if (!Array.isArray(this.state.paperSimulations)) this.state.paperSimulations = [];
+    if (this.state.paperSimulations.some(item => item.id === simulation.id)) return;
+    this.state.paperSimulations.unshift(simulation);
+    this.state.paperSimulations = this.state.paperSimulations.slice(0, 250);
+    this.scheduleSave();
+  }
+
+  public getPaperSimulations(): PaperExecutionSimulationResult[] {
+    return (this.state.paperSimulations || []).slice(0, 250);
   }
 
   // Provider Health
@@ -478,6 +801,7 @@ class DatabaseService {
     if (this.state.signals.length > 1000) {
       this.state.signals = this.state.signals.slice(0, 1000);
     }
+    if (!isTest) this.captureSignalPrediction(signal);
     this.scheduleSave();
     return signal;
   }
@@ -486,6 +810,7 @@ class DatabaseService {
     const idx = this.state.signals.findIndex(s => s.id === signal.id);
     if (idx !== -1) {
       this.state.signals[idx] = signal;
+      this.recordSignalResearchOutcome(signal);
       this.scheduleSave();
     }
   }
@@ -524,6 +849,8 @@ class DatabaseService {
    * independently validate a strategy or train model weights.
    */
   public recordForwardObservation(sig: ResearchSignal): ResearchExperiment {
+    // Idempotent fallback: append-only outcome ledger remains independent from experiment history.
+    this.recordSignalResearchOutcome(sig);
     const netPips = sig.netReturnPips ?? 0;
     const netReturnUnits = sig.netReturnUnits ?? 0;
     const sessionName = sig.marketSessionName || 'Market Session';

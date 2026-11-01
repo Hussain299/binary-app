@@ -5,7 +5,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { EvolutionGeneration, EvolutionSubGenerationMetrics, FOREX_PAIRS, ForexSymbol, OpportunityDirection, OpportunityHumanStatus, RuleFamily, SynthesizedStrategyGene } from '../types/index.js';
+import { EvolutionGeneration, EvolutionSubGenerationMetrics, FOREX_PAIRS, ForexSymbol, OpportunityDirection, OpportunityHumanStatus, RuleFamily, SynthesizedStrategyGene, ResearchEvidenceStream, ResearchChampionRecord, PaperExecutionSimulationInput } from '../types/index.js';
 import { dataFeedEngine } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
@@ -15,6 +15,8 @@ import { autonomousScheduler } from './scheduler.js';
 import { runAllVerificationTests } from './tests.js';
 import { historicalDataStore } from './historicalData.js';
 import { binaryBreakEvenWinRate, genomeSpeciesKey, hasSufficientForwardParentEvidence, wilsonLowerBound } from './evolutionEngine.js';
+import { buildResearchIntelligenceDashboard, simulatePaperExecution } from './researchPlatform.js';
+import { timingSafeEqual } from 'node:crypto';
 
 interface StrategySearchJob {
   jobId: string;
@@ -341,6 +343,154 @@ apiRouter.post('/opportunities/:id/revise', (req: Request, res: Response) => {
   } catch (err: any) {
     return res.status(409).json({ error: err.message });
   }
+});
+
+
+/**
+ * Research intelligence workspace. All evidence is append-only and forward-dated.
+ * This surface never creates signals or submits broker orders.
+ */
+apiRouter.get('/intelligence/dashboard', (_req: Request, res: Response) => {
+  const dashboard = buildResearchIntelligenceDashboard({
+    predictions: db.getResearchPredictions(),
+    outcomes: db.getResearchOutcomes(),
+    regimes: db.refreshResearchRegimes(),
+    champions: db.getResearchChampions(),
+    championHistory: db.getResearchChampionHistory(),
+    simulations: db.getPaperSimulations(),
+  });
+  return res.json({
+    ...dashboard,
+    executionEnabled: false,
+    evidencePolicy: {
+      predictionSnapshotsImmutable: true,
+      outcomesAppendOnly: true,
+      opportunityReplayRequiresExactRealM1Candles: true,
+      historicBacktestsExcludedFromForwardApproval: true,
+      humanPromotionRequired: true,
+    },
+  });
+});
+
+apiRouter.post('/intelligence/reconcile', (_req: Request, res: Response) => {
+  try {
+    const reconciliation = db.reconcileOpportunityResearchOutcomes();
+    return res.json({
+      success: true,
+      reconciliation,
+      predictionCount: db.getResearchPredictions().length,
+      outcomeCount: db.getResearchOutcomes().length,
+      message: 'Mature opportunity paths were settled only where every exact scheduled real M1 candle was available.',
+      executionEnabled: false,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Forward evidence reconciliation failed.' });
+  }
+});
+
+apiRouter.post('/intelligence/simulate', (req: Request, res: Response) => {
+  try {
+    const symbol = String(req.body?.symbol || '').toUpperCase().replace('-', '/').replace('_', '/') as ForexSymbol;
+    if (!FOREX_PAIRS.includes(symbol)) {
+      return res.status(400).json({ error: 'symbol must be one of the configured forex pairs.' });
+    }
+    const direction = String(req.body?.direction || '').toUpperCase();
+    if (direction !== 'BUY' && direction !== 'SELL') {
+      return res.status(400).json({ error: 'direction must be BUY or SELL.' });
+    }
+    const input: PaperExecutionSimulationInput = {
+      symbol,
+      direction,
+      referenceEntryPrice: Number(req.body?.referenceEntryPrice),
+      expiryPrice: Number(req.body?.expiryPrice),
+      payoutPct: Number(req.body?.payoutPct),
+      stakeUnits: Number(req.body?.stakeUnits),
+      spreadPips: Number(req.body?.spreadPips),
+      slippagePips: Number(req.body?.slippagePips),
+      maximumSlippagePips: Number(req.body?.maximumSlippagePips),
+      entryLatencyMs: Number(req.body?.entryLatencyMs),
+      maximumDecisionDelayMs: Number(req.body?.maximumDecisionDelayMs),
+      assetAvailable: req.body?.assetAvailable === true,
+      brokerRejected: req.body?.brokerRejected === true,
+    };
+    const simulation = simulatePaperExecution(input);
+    db.recordPaperSimulation(simulation);
+    return res.json({
+      success: true,
+      simulation,
+      message: 'Scenario simulated from user-supplied prices and assumptions. No broker was contacted and no order was created.',
+      executionEnabled: false,
+    });
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Paper execution simulation failed.' });
+  }
+});
+
+apiRouter.post('/intelligence/champion', (req: Request, res: Response) => {
+  // Champion changes are a governance operation, not a public unauthenticated toggle.
+  const expectedToken = process.env.RESEARCH_ADMIN_TOKEN || '';
+  const providedToken = req.header('x-research-admin-token') || '';
+  const expectedBuffer = Buffer.from(expectedToken);
+  const providedBuffer = Buffer.from(providedToken);
+  if (!expectedToken || expectedBuffer.length !== providedBuffer.length ||
+      !timingSafeEqual(expectedBuffer, providedBuffer)) {
+    return res.status(403).json({
+      error: 'Champion changes are locked. Configure RESEARCH_ADMIN_TOKEN and submit it through the operator-only review control.',
+    });
+  }
+
+  const stream = String(req.body?.stream || '').toUpperCase() as ResearchEvidenceStream;
+  const modelVersion = String(req.body?.modelVersion || '').trim();
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 500) : '';
+  if (!['SIGNAL_FORWARD', 'OPPORTUNITY_FORWARD'].includes(stream) ||
+      !modelVersion || !reason || reason.length < 12) {
+    return res.status(400).json({ error: 'A valid evidence stream, model version and review reason of at least 12 characters are required.' });
+  }
+
+  const dashboard = buildResearchIntelligenceDashboard({
+    predictions: db.getResearchPredictions(),
+    outcomes: db.getResearchOutcomes(),
+    regimes: db.getResearchRegimes(),
+    champions: db.getResearchChampions(),
+    championHistory: db.getResearchChampionHistory(),
+    simulations: db.getPaperSimulations(),
+  });
+  const candidate = dashboard.modelEvidence.find(item =>
+    item.stream === stream && item.modelVersion === modelVersion
+  );
+  if (!candidate || candidate.promotionStatus !== 'REVIEW_READY' ||
+      candidate.decisiveCount < 300 ||
+      candidate.adjustedLowerBound === null ||
+      candidate.winRate === null ||
+      candidate.meanReturnUnits === null) {
+    return res.status(409).json({
+      error: 'This model has not passed the forward-evidence promotion gates. No champion state was changed.',
+      promotionStatus: candidate?.promotionStatus || 'NOT_FOUND',
+      executionEnabled: false,
+    });
+  }
+
+  const champion: ResearchChampionRecord = {
+    stream,
+    modelVersion,
+    promotedAtUtc: new Date().toISOString(),
+    approvedBy: 'OPERATOR_TOKEN',
+    reason,
+    evidenceSnapshot: {
+      decisiveCount: candidate.decisiveCount,
+      winRate: candidate.winRate,
+      adjustedLowerBound: candidate.adjustedLowerBound,
+      meanReturnUnits: candidate.meanReturnUnits,
+    },
+  };
+  const change = db.setResearchChampion(champion);
+  return res.json({
+    success: true,
+    champion,
+    change,
+    message: 'Research champion updated after authenticated human approval. This changes research governance only; it does not activate or execute trades.',
+    executionEnabled: false,
+  });
 });
 
 // GET /api/strategies/synthesized — Candidate, paper-trading and forward-approved strategy pool
