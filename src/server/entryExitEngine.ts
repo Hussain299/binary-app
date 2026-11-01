@@ -590,12 +590,13 @@ export class EntryExitEngine {
         ) {
           // Coverage has passed the exact expiry minute and the exact bar is absent.
           // This is a data-integrity failure, not a market outcome.
+          const previousState = signal.lifecycleState;
           signal.lifecycleState = 'EXPIRED';
           signal.outcomeResult = 'CANCELLED';
           signal.netReturnUnits = null;
           signal.lifecycleHistory.push({
             timestamp: new Date().toISOString(),
-            fromState: signal.lifecycleState === 'EXIT_PENDING' ? 'EXIT_PENDING' : 'ACTIVE',
+            fromState: previousState,
             toState: 'EXPIRED',
             reason: `Exact binary expiry candle was missing at ${signal.plannedExitTimeUtc}; no later candle was substituted, so no WIN/LOSS was recorded.`,
           });
