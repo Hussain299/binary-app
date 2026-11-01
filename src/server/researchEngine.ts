@@ -1491,7 +1491,17 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       expression = this.randomGenomeExpression(2);
       complexity = this.countExpressionNodes(expression);
     }
-    const activationThreshold = Number((0.64 + Math.random() * 0.20).toFixed(3));
+    // Strategy traits inherit from a randomly selected parent. Mutation pressure
+    // can alter them, so the population evolves horizon/session selection as well
+    // as the symbolic expression tree.
+    const traitParent = parentA && parentB
+      ? (Math.random() < 0.5 ? parentA : parentB)
+      : (parentA || parentB);
+    const inheritedThreshold = traitParent?.genome?.activationThreshold ?? (0.64 + Math.random() * 0.20);
+    const activationThreshold = Number(Math.max(
+      0.64,
+      Math.min(0.84, inheritedThreshold + (Math.random() - 0.5) * mutationRate * 0.30)
+    ).toFixed(3));
     const signature = JSON.stringify({ expression, activationThreshold });
     const genome: StrategyGenome = {
       version: 1,
@@ -1505,13 +1515,22 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       this.genomeFeatures.filter(feature => JSON.stringify(expression).includes(feature))
     )];
     const selectedHorizon: StrategyHorizon[] = [5, 10, 15, 20, 25, 30];
-    const horizon = selectedHorizon[Math.floor(Math.random() * selectedHorizon.length)];
     const sessions: Array<MarketSessionId | 'ALL'> = ['ASIA', 'LONDON', 'OVERLAP', 'NEW_YORK', 'ALL'];
-    const sessionAffinity = sessions[Math.floor(Math.random() * sessions.length)];
     const operatorOptions: SynthesizedStrategyGene['nonLinearOperator'][] = [
       'tanh_polynomial', 'fractal_power', 'exponential_decay', 'harmonic_dispersion',
     ];
-    const operator = operatorOptions[Math.floor(Math.random() * operatorOptions.length)];
+    const horizon = traitParent?.optimalHorizonMinutes &&
+      Math.random() >= mutationRate
+      ? traitParent.optimalHorizonMinutes
+      : selectedHorizon[Math.floor(Math.random() * selectedHorizon.length)];
+    const sessionAffinity = traitParent?.sessionAffinity &&
+      Math.random() >= mutationRate
+      ? traitParent.sessionAffinity
+      : sessions[Math.floor(Math.random() * sessions.length)];
+    const operator = traitParent?.nonLinearOperator &&
+      Math.random() >= mutationRate
+      ? traitParent.nonLinearOperator
+      : operatorOptions[Math.floor(Math.random() * operatorOptions.length)];
     const parents = [parentA, parentB]
       .filter((gene): gene is SynthesizedStrategyGene => !!gene)
       .map(gene => gene.id);
