@@ -1665,134 +1665,46 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
   }
 
   /**
-   * Rule-based loss-pattern diagnostics for a completed forward paper observation.
-   * The labels below are hypotheses derived from OHLC and modeled spread thresholds;
-   * they do not prove institutional activity, broker slippage or the true market cause.
-   * Any resulting filter candidate remains unvalidated until independently tested.
+   * Record a loss as an observation only. OHLC bars cannot prove the cause of a
+   * loss, and a single loss is never converted into a fabricated strategy.
+   * recordStrategyOutcome() has already updated posterior and episodic memory.
    */
-  public conductForensicLossAutopsy(
+  public recordLossObservation(
     signal: ResearchSignal,
     candle: Candle
-  ): { autopsy: LossAutopsy; antidoteGene: SynthesizedStrategyGene } {
-    const grossReturn = signal.grossReturnPips ?? 0;
-    const netReturn = signal.netReturnPips ?? 0;
-    const spread = signal.estimatedSpreadPips ?? 1.5;
-    const isJpy = signal.symbol.includes('JPY');
-    const pipScale = isJpy ? 0.01 : 0.0001;
-
-    let rootCause: LossAutopsy['rootCause'] = 'NON_LINEAR_OPERATOR_OVERFITTING';
-    let explanation = '';
-    let lessonsLearned: string[] = [];
-    let operator: 'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion' = 'exponential_decay';
-    let formula = '';
-    let antidoteName = '';
-
-    // 1. Root Cause Autopsy & Forensic Diagnostics
-    if (Math.abs(grossReturn) <= spread * 1.2) {
-      rootCause = 'SPREAD_EXPANSION_SLIPPAGE';
-      explanation = `The modeled net result was dominated by the configured spread assumption (${spread} pips). This is a cost-sensitivity flag, not evidence that a broker spread widened or that slippage occurred.`;
-      lessonsLearned = [
-        `Enforce strict Dynamic Spread Gate: Reject signals when current pair spread exceeds 25% of expected ATR move.`,
-        `Switch to high-liquidity session windows (London/NY Overlap) where spreads compress to sub-pip levels.`,
-        `Add spread-cost threshold buffer: Require minimum ${spread * 1.5} pip projected edge before trigger emission.`
-      ];
-      operator = 'harmonic_dispersion';
-      formula = `f(x) = (Δ_TickEntropy / √(1 + ${spread.toFixed(1)}·Spread)) · cos(π·WickRatio) + 1.15·OrderFlow_Z`;
-      antidoteName = `Antidote-${signal.symbol}: Dynamic Spread Damping + Harmonic Wavelet`;
-    } else if (signal.direction === 'BUY' && (candle.low < (signal.actualEntryPrice || signal.triggerPrice) - 3 * pipScale)) {
-      rootCause = 'MICRO_WICK_FALSE_ABSORPTION';
-      explanation = `A rule-based adverse-wick pattern was observed: price moved below the reference level by the configured threshold. OHLC candles cannot establish that stop-runs or institutional absorption occurred.`;
-      lessonsLearned = [
-        `Increase polynomial wick exponent from 1.85 to 2.30 to demand deeper liquidity absorption verification.`,
-        `Incorporate sub-tick volume delta confirmation: verify tick volume expands on the rejection wick.`,
-        `Add multi-bar confirmation: require 2 consecutive micro-wick rejections before triggering CALL/BUY.`
-      ];
-      operator = 'tanh_polynomial';
-      formula = `f(x) = tanh(1.85·Z_Entropy) + 0.92·(LowerWickRatio)^2.30 - 0.45·Δ_20SMA`;
-      antidoteName = `Antidote-${signal.symbol}: Deep Wick Exponent + Polynomial Saturation`;
-    } else if (signal.direction === 'SELL' && (candle.high > (signal.actualEntryPrice || signal.triggerPrice) + 3 * pipScale)) {
-      rootCause = 'MICRO_WICK_FALSE_ABSORPTION';
-      explanation = `A rule-based adverse-wick pattern was observed: price moved above the reference level by the configured threshold. OHLC candles cannot establish market-maker activity or a liquidity sweep.`;
-      lessonsLearned = [
-        `Increase upper wick threshold to >55% of candle range before considering bearish liquidity sweeps.`,
-        `Enforce second-derivative RSI deceleration: confirm momentum has stalled before fading the high.`,
-        `Deploy fractal power drift dampener to avoid counter-trend entries into institutional volume spikes.`
-      ];
-      operator = 'fractal_power';
-      formula = `f(x) = -1·|Δ_20MA|^1.45 + 0.65·RSI_Curvature - 0.50·(UpperWickRatio)^2.1`;
-      antidoteName = `Antidote-${signal.symbol}: Upper Squeeze Neutralizer + RSI Curvature`;
-    } else if ((signal.expiryMinutes || 5) >= 15) {
-      rootCause = 'SESSION_BOUNDARY_LIQUIDITY_VACUUM';
-      explanation = `The modeled outcome reversed over the selected ${signal.expiryMinutes}-minute horizon. The session-liquidity explanation is a hypothesis, not a verified cause.`;
-      lessonsLearned = [
-        `Dynamically compress expiry duration from ${signal.expiryMinutes}m to 5m/10m when trading in transition windows.`,
-        `Evaluate session turnover timer: reject >15m expiries within 30 minutes of London or New York close.`,
-        `Align time-horizon directly to ATR velocity: use 5m for high-volatility surges, 10m for wick rejections.`
-      ];
-      operator = 'exponential_decay';
-      formula = `f(x) = σ(2.80·EMA_Curvature × Vol_Elasticity) - 0.55·ln(1 + ATR_harmonic)`;
-      antidoteName = `Antidote-${signal.symbol}: Dynamic Expiry Compression + Wave Curvature`;
-    } else {
-      rootCause = 'MOMENTUM_EXHAUSTION_DIVERGENCE';
-      explanation = `The forward paper outcome moved against the predicted direction inside the selected horizon. This rule-based label does not establish a volume or order-flow cause.`;
-      lessonsLearned = [
-        `Filter out low-volume continuation setups where setup candle volume was < 80% of 20-period average.`,
-        `Require second-derivative EMA acceleration confirmation (d²E/dt² > 0) rather than simple linear slope.`,
-        `Cross-breed with statistical mean-reversion guard to prevent buying at local structural tops.`
-      ];
-      operator = 'tanh_polynomial';
-      formula = `f(x) = tanh(2.10·EMA_Curvature) + 0.75·Vol_Elasticity - 0.35·RSI_Distance`;
-      antidoteName = `Antidote-${signal.symbol}: Acceleration Thresholding + Exhaustion Filter`;
-    }
-
-    const antidoteGeneId = `synth_antidote_${Date.now().toString(36)}`;
-    const antidoteGene: SynthesizedStrategyGene = {
-      id: antidoteGeneId,
-      name: antidoteName,
-      code: `ANTIDOTE_${rootCause.slice(0, 4)}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
-      generation: 40 + Math.floor(Math.random() * 10),
-      mathematicalFormula: formula,
-      parents: [signal.strategyName || 'Baseline Strategy', `Rule-based Loss Pattern (${signal.symbol})`],
-      mutationRate: 0.065,
-      nonLinearOperator: operator,
-      optimalHorizonMinutes: (signal.expiryMinutes === 5 ? 10 : 5) as any,
-      sessionAffinity: (signal.marketSession || 'ALL') as any,
-      verifiedAccuracy: 0,
-      sampleCount: 0,
-      accuracyStatus: 'UNVALIDATED',
-      status: 'EXPERIMENTING',
-      scientificHypothesis: `Unvalidated filter hypothesis generated from a rule-based loss tag: ${lessonsLearned[0]}`,
-      whyHumansMissThis: `This filter hypothesis was generated from a rule-based outcome label. It has no measured predictive accuracy until separately validated on untouched historical data and forward paper outcomes.`,
-      createdAt: new Date().toISOString(),
-    };
-
-    // Store the unvalidated filter hypothesis for later research; it is not eligible for signal generation.
-    db.addSynthesizedStrategy(antidoteGene);
-
+  ): LossAutopsy {
+    const entryPrice = signal.actualEntryPrice ?? signal.triggerPrice;
+    const exitPrice = signal.actualExitPrice ?? candle.close;
+    const strategyGeneId = signal.synthesizedGeneId;
+    const outcome = signal.outcomeResult;
     const autopsy: LossAutopsy = {
       id: `autopsy_${signal.id}`,
       signalId: signal.id,
       symbol: signal.symbol,
       direction: signal.direction,
-      strategyName: signal.strategyName || 'Stacked Strategy',
+      strategyName: signal.strategyName || 'Unclassified strategy',
       mathematicalFormula: signal.mathematicalFormula,
-      entryPrice: signal.actualEntryPrice || signal.triggerPrice,
-      exitPrice: signal.actualExitPrice || candle.close,
-      grossReturnPips: grossReturn,
-      netReturnPips: netReturn,
-      spreadPips: spread,
-      marketSession: signal.marketSessionName || 'Market Session',
-      rootCause,
-      rootCauseExplanation: explanation,
-      lessonsLearned,
-      antidoteStrategyGeneId: antidoteGeneId,
-      antidoteStrategyName: antidoteName,
-      antidoteFormula: formula,
-      antidoteOperator: operator,
+      entryPrice,
+      exitPrice,
+      grossReturnPips: signal.grossReturnPips ?? undefined,
+      netReturnPips: signal.netReturnPips ?? undefined,
+      spreadPips: signal.estimatedSpreadPips ?? undefined,
+      netReturnUnits: signal.netReturnUnits ?? undefined,
+      marketSession: signal.marketSessionName || 'Unknown session',
+      strategyGeneId,
+      rootCause: 'OBSERVED_ADVERSE_SETTLEMENT',
+      rootCauseExplanation:
+        `The paper contract settled ${outcome} for ${signal.direction} on ${signal.symbol}. The recorded entry/exit prices and market features describe what was observed; they do not establish why price moved or whether spread, liquidity, news or another mechanism caused the loss.`,
+      lessonsLearned: [
+        strategyGeneId
+          ? `The loss was attached to evolved genome ${strategyGeneId} and its forward-paper outcome ledger.`
+          : 'The loss has no evolved-genome identity and cannot update genetic parent fitness.',
+        'This outcome is available to the Bayesian posterior and causal episodic-memory checks; one loss does not create or validate a new strategy.',
+        'Only mature, payout-positive forward samples with the required confidence can alter future genetic parent selection.',
+      ],
       timestamp: new Date().toISOString(),
     };
-
-    return { autopsy, antidoteGene };
+    return autopsy;
   }
 }
 
