@@ -312,6 +312,8 @@ apiRouter.post('/opportunities/:id/revise', (req: Request, res: Response) => {
         item.symbol === original.symbol &&
         item.hypothesisType === original.hypothesisType &&
         item.strategyGeneId === original.strategyGeneId &&
+        item.humanDecision.parentOpportunityId === undefined &&
+        !item.id.startsWith('opp_rev_') &&
         item.horizonMinutes === requestedHorizon
       );
   if (!source) {
