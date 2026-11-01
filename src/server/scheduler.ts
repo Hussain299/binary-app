@@ -346,7 +346,7 @@ export class AutonomousScheduler {
               strategyHistoricalSampleSize: gene.sampleCount,
               strategyEvidenceStatus: gene.accuracyStatus,
               strategyForwardApproved: gene.status === 'PROMOTED_ACTIVE',
-              confluenceStrategies: [...gene.parents, `${gene.nonLinearOperator} Activation`],
+              confluenceStrategies: [...gene.parents],
               confluenceScore: 0,
               isStackedStrategy: false,
               isNovelAiSynthesized: true,
