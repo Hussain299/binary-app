@@ -592,7 +592,7 @@ class DatabaseService {
         hoursLabel: sess.hoursLabel,
         utcRange: sess.utcRange,
         istRange: sess.istRange,
-        isActive: marketOpen && getSessionFromTimestamp(now).id === sess.id,
+        isActive: marketOpen && getReportingSessionFromTimestamp(now).id === sess.id,
         winRate,
         hasMeasuredData,
         totalTrades: sessSignals.length,
