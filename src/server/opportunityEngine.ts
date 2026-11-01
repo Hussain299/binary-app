@@ -961,6 +961,9 @@ export class OpportunityEngine {
     const holdoutExpectedValue = independentHoldoutStillApplies
       ? opportunity.audit.holdoutExpectedValueLowerBound
       : null;
+    const holdoutWindowStatus = independentHoldoutStillApplies
+      ? opportunity.audit.holdoutWindowStatus
+      : "REVISION_NOT_TESTED" as const;
 
     const breakEven = opportunity.forecast.payoutBreakEvenProbability;
     const entryMs = Date.parse(opportunity.entryTimeUtc);
@@ -1042,6 +1045,9 @@ export class OpportunityEngine {
         holdoutWinRate,
         holdoutLowerConfidenceBound: holdoutLower,
         holdoutExpectedValueLowerBound: holdoutExpectedValue,
+        holdoutWindowStatus,
+        holdoutWindowStartUtc: opportunity.audit.holdoutWindowStartUtc,
+        holdoutWindowEndUtc: opportunity.audit.holdoutWindowEndUtc,
         reasons,
         counterEvidence,
         auditedAt: revisedAt,
