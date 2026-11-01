@@ -351,7 +351,8 @@ export interface SynthesizedStrategyGene {
   mathematicalFormula: string;
   parents: string[];
   mutationRate: number;
-  nonLinearOperator: 'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion';
+  /** Legacy operator label. New symbolic genomes do not use this field. */
+  nonLinearOperator?: 'tanh_polynomial' | 'fractal_power' | 'exponential_decay' | 'harmonic_dispersion';
   /** The same coefficients used by the live evaluator and historical backtester. */
   operatorParameters?: { alpha: number; beta: number; gamma: number; exponent: number; threshold: number };
   /** Executable symbolic-expression genome shared by the historical and live evaluators. */
