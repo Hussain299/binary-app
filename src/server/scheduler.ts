@@ -13,7 +13,8 @@ import {
   ResearchExperiment,
   RuleFamily,
 } from '../types/index.js';
-import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.js';
+import { dataFeedEngine } from './dataFeeds.js';
+import { getForexMarketState, isForexMarketIntervalOpen, getSessionFromTimestamp } from './marketHours.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
@@ -396,6 +397,19 @@ export class AutonomousScheduler {
     experimentsRun: number;
     topExperiment: ResearchExperiment | null;
   }> {
+    const marketState = getForexMarketState(Date.now());
+    if (!marketState.isOpen) {
+      // Do not fetch feeds, evaluate pending contracts, or create signals outside the FX week.
+      return {
+        durationMs: 0,
+        pairsProcessed: 0,
+        signalsCreated: 0,
+        signalsUpdated: 0,
+        experimentsRun: 0,
+        topExperiment: null,
+      };
+    }
+
     if (this.isRunningCycle) {
       return {
         durationMs: 0,
@@ -524,7 +538,11 @@ export class AutonomousScheduler {
           if (candles.length < 35) continue;
 
           const c = candles[candles.length - 1];
-          const eligibleSchedules = findEligibleStartTimeframes(nowMs, c.timestampMs + 60_000);
+          const eligibleSchedules = findEligibleStartTimeframes(nowMs, c.timestampMs + 60_000)
+            .filter(schedule => isForexMarketIntervalOpen(
+              schedule.entryTimeMs,
+              schedule.entryTimeMs + schedule.timeframeMinutes * 60_000
+            ));
           if (eligibleSchedules.length === 0) continue;
           const prev = candles[candles.length - 2];
           // Technical indicators
