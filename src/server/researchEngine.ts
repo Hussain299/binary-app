@@ -497,7 +497,7 @@ export class ResearchEngine {
         featureCount,
         spreadModeledPips: modeledSpreadPips,
         algorithm: 'logistic_regression',
-        testFixture: options.allowTestFixtures === true,
+        testFixture: options.allowTestFixtures === true ? 'true' : 'false',
         epochs,
         learningRate,
         l2Penalty,
@@ -595,7 +595,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     };
 
     reviews.push(scientistReview, engineerReview, auditorReview);
-    if (exp.parameters.testFixture !== true) {
+    if (exp.parameters.testFixture !== 'true') {
       for (const review of reviews) db.addReview(review);
     }
     return reviews;
