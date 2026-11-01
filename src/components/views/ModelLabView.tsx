@@ -19,7 +19,7 @@ export const ModelLabView: React.FC<ModelLabViewProps> = ({ experiments }) => {
     .slice(0, 8);
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-y-auto bg-neutral-950 p-6 space-y-6">
+    <div className="sf-page">
       <section className="rounded-xl border border-amber-800/60 bg-amber-950/20 p-5 space-y-2">
         <div className="flex items-center gap-2 text-amber-300">
           <ShieldCheck className="w-5 h-5" />
