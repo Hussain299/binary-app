@@ -13,8 +13,8 @@ import {
   ResearchExperiment,
   RuleFamily,
 } from '../types/index.js';
-import { dataFeedEngine } from './dataFeeds.js';
-import { getForexMarketState, isForexMarketIntervalOpen, getSessionFromTimestamp } from './marketHours.js';
+import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.js';
+import { getForexMarketState, isForexMarketIntervalOpen } from './marketHours.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
