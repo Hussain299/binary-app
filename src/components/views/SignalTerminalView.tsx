@@ -69,6 +69,20 @@ interface EvolutionTelemetry {
   }>;
 }
 
+interface StrategySearchProgress {
+  jobId: string;
+  symbol: string;
+  status: 'RUNNING' | 'COMPLETED' | 'FAILED';
+  total: number;
+  completed: number;
+  passedHistorical: number;
+  insufficientSample: number;
+  rejected: number;
+  replicationFinalists: number;
+  approvedCount: number;
+  error?: string;
+}
+
 interface SignalTerminalViewProps {
   signals: ResearchSignal[];
   autopilotLogs?: AutopilotLog[];
@@ -98,6 +112,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const [evolutionTelemetry, setEvolutionTelemetry] = useState<EvolutionTelemetry | null>(null);
   const [evolutionTelemetryError, setEvolutionTelemetryError] = useState<string>('');
   const [isEvolvingStrategy, setIsEvolvingStrategy] = useState<boolean>(false);
+  const [searchJob, setSearchJob] = useState<StrategySearchProgress | null>(null);
   const [historyImportPair, setHistoryImportPair] = useState<string>('EUR/USD');
   const [isImportingHistory, setIsImportingHistory] = useState<boolean>(false);
   const [historyImportMessage, setHistoryImportMessage] = useState<string>('');
@@ -172,20 +187,68 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
   const handleEvolveStrategy = async () => {
     setIsEvolvingStrategy(true);
+    setHistoryImportMessage('');
     try {
-      const res = await fetch('/api/strategies/evolve', { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        await fetchSynthesizedStrategies();
-        await fetchStrategyPerformance();
-        onEvaluateSignals();
-      }
-    } catch (err) {
-      console.error('Failed to evolve novel strategy:', err);
-    } finally {
+      const res = await fetch('/api/strategies/search-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: historyImportPair }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Evolution search could not start.');
+      setSearchJob(data);
+      setHistoryImportMessage(
+        `Evolution started for ${data.symbol}: 300 symbolic candidates will be measured on chronological train/validation data; only preselected finalists reach the untouched test.`
+      );
+    } catch (error: any) {
+      setHistoryImportMessage(error?.message || 'Evolution search could not start.');
       setIsEvolvingStrategy(false);
     }
   };
+
+  useEffect(() => {
+    if (!searchJob?.jobId || searchJob.status !== 'RUNNING') return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/strategies/search-batch/${encodeURIComponent(searchJob.jobId)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Could not read evolution progress.');
+        if (cancelled) return;
+        setSearchJob(data);
+        if (data.status === 'RUNNING') {
+          setHistoryImportMessage(
+            `Evolution ${data.symbol}: ${data.completed}/${data.total} candidates evaluated · ${data.passedHistorical} passed the historical gates · ${data.replicationFinalists} finalists opened for untouched testing.`
+          );
+          timer = setTimeout(poll, 1500);
+          return;
+        }
+        setIsEvolvingStrategy(false);
+        if (data.status === 'COMPLETED') {
+          setHistoryImportMessage(
+            `Completed ${data.total} candidates for ${data.symbol}. Historical survivors: ${data.passedHistorical}; finalists tested on the untouched holdout: ${data.replicationFinalists}. Forward approval still requires independent paper outcomes.`
+          );
+          await fetchSynthesizedStrategies();
+          await fetchStrategyPerformance();
+          await fetchEvolutionTelemetry();
+        } else {
+          setHistoryImportMessage(data.error || 'Evolution search failed. No accuracy was assigned to unvalidated candidates.');
+        }
+      } catch (error: any) {
+        if (cancelled) return;
+        setIsEvolvingStrategy(false);
+        setHistoryImportMessage(error?.message || 'Evolution progress could not be read.');
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [searchJob?.jobId, searchJob?.status]);
 
   const parseCsvLine = (line: string): string[] => {
     const cells: string[] = [];
@@ -299,14 +362,55 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const validatedGeneCount = validatedGenes.length;
   const paperTradingGeneCount = synthesizedStrategies.filter(gene => gene.status === 'PAPER_TRADING').length;
 
-  // 5-Minute Candle Synchronization
-  const FIVE_MIN_MS = 5 * 60 * 1000;
-  const current5mOpenMs = Math.floor(nowMs / FIVE_MIN_MS) * FIVE_MIN_MS;
-  const next5mOpenMs = current5mOpenMs + FIVE_MIN_MS;
-  const secondsToNext5m = Math.max(0, Math.floor((next5mOpenMs - nowMs) / 1000));
-  const next5mMin = Math.floor(secondsToNext5m / 60);
-  const next5mSec = secondsToNext5m % 60;
-  const next5mCountdownStr = `${next5mMin.toString().padStart(2, '0')}:${next5mSec.toString().padStart(2, '0')}`;
+  // The terminal surfaces the next exact T-3m decision window for every supported start candle.
+  const START_TIMEFRAMES = [5, 10, 15, 20, 25, 30] as const;
+  const nextDecisionSchedules = START_TIMEFRAMES.map(timeframeMinutes => {
+    const intervalMs = timeframeMinutes * 60_000;
+    let entryTimeMs = (Math.floor(nowMs / intervalMs) + 1) * intervalMs;
+    let decisionTimeMs = entryTimeMs - 3 * 60_000;
+    while (decisionTimeMs + 60_000 <= nowMs) {
+      entryTimeMs += intervalMs;
+      decisionTimeMs += intervalMs;
+    }
+    return {
+      timeframeMinutes,
+      entryTimeMs,
+      decisionTimeMs,
+      windowActive: nowMs >= decisionTimeMs && nowMs < decisionTimeMs + 60_000,
+    };
+  });
+  const activeDecisionTime = nextDecisionSchedules
+    .filter(item => item.windowActive)
+    .map(item => item.decisionTimeMs)
+    .sort((a, b) => a - b)[0];
+  const nextDecisionTimeMs = activeDecisionTime ?? Math.min(...nextDecisionSchedules.map(item => item.decisionTimeMs));
+  const nextDecisionGroup = nextDecisionSchedules.filter(item => item.decisionTimeMs === nextDecisionTimeMs);
+  const nextDecisionActive = nextDecisionGroup.some(item => item.windowActive);
+  const nextEntryMs = nextDecisionGroup[0]?.entryTimeMs ?? nowMs;
+  const nextEntryIST = new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  }).format(new Date(nextEntryMs)).toUpperCase() + ' IST';
+  const formatCountdown = (milliseconds: number) => {
+    const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+    return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
+  };
+  const nextDecisionCountdown = nextDecisionActive
+    ? formatCountdown(nextDecisionTimeMs + 60_000 - nowMs)
+    : formatCountdown(nextDecisionTimeMs - nowMs);
+  const nextEntryCountdown = formatCountdown(nextEntryMs - nowMs);
+  const nextDecisionTimeframes = nextDecisionGroup.map(item => `${item.timeframeMinutes}M`).join(' / ');
+
+  const getEntryCountdown = (entryTimeUtc?: string | null) => {
+    if (!entryTimeUtc) return 'Entry time unavailable';
+    const diffMs = Date.parse(entryTimeUtc) - nowMs;
+    if (!Number.isFinite(diffMs)) return 'Entry time unavailable';
+    if (diffMs <= 0) return 'Entry boundary passed';
+    return `Opens in ${formatCountdown(diffMs)}`;
+  };
 
   const formatIST = (isoString?: string | null) => {
     if (!isoString) return 'At Candle Open';
@@ -326,14 +430,6 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     }
   };
 
-  const next5mOpenIST = new Intl.DateTimeFormat('en-IN', {
-    timeZone: 'Asia/Kolkata',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: true,
-  }).format(new Date(next5mOpenMs)).toUpperCase() + ' IST';
-
   // Overall Accuracy & Metrics
   const historySignals = signals.filter(s =>
     ['CLOSED', 'EXPIRED', 'INVALIDATED'].includes(s.lifecycleState)
@@ -348,8 +444,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     closedSignals.length > 0
       ? ((totalWins / closedSignals.length) * 100).toFixed(1)
       : 'No scored forward outcomes';
-  const totalNetPips = Number(
-    completedSignals.reduce((acc, s) => acc + (s.netReturnPips || 0), 0).toFixed(1)
+  const totalNetReturnUnits = Number(
+    completedSignals.reduce((acc, signal) => acc + (signal.netReturnUnits ?? 0), 0).toFixed(3)
   );
 
   const activeSignals = signals.filter(s =>
@@ -402,34 +498,32 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-neutral-950 font-sans text-neutral-100">
       {/* 1. TOP STATUS BAR: Zero clutter, essential numbers at a glance */}
       <div className="bg-neutral-900/90 border-b border-neutral-800 px-3 sm:px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
-        {/* Live 5M Candle Clock */}
+        {/* Shared T-3m entry schedule for all supported start candles */}
         <div className="flex items-center gap-2.5">
-          <span className="relative flex h-3 w-3">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500" />
+          <span className={`relative flex h-3 w-3 ${nextDecisionActive ? '' : 'opacity-50'}`}>
+            <span className={`absolute inline-flex h-full w-full rounded-full ${nextDecisionActive ? 'animate-ping bg-amber-400 opacity-75' : 'bg-emerald-400 opacity-30'}`} />
+            <span className={`relative inline-flex rounded-full h-3 w-3 ${nextDecisionActive ? 'bg-amber-400' : 'bg-emerald-500'}`} />
           </span>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs sm:text-sm font-bold text-white uppercase tracking-wide">
-              Next 5M Trade Open In:
+              {nextDecisionActive ? 'T−3m Decision Window:' : 'Next T−3m Decision:'}
             </span>
             <span className="text-sm sm:text-base font-extrabold font-mono text-emerald-400 tabular-nums">
-              {next5mCountdownStr}
+              {nextDecisionActive ? `closes in ${nextDecisionCountdown}` : `opens in ${nextDecisionCountdown}`}
             </span>
             <span className="text-[11px] text-neutral-400 font-mono hidden xs:inline">
-              ({next5mOpenIST})
+              {nextDecisionTimeframes} → {nextEntryIST}
             </span>
             <span
               className={`px-2 py-0.5 rounded-full text-[10px] font-bold font-mono border flex items-center gap-1 ${
-                secondsToNext5m <= 180
+                nextDecisionActive
                   ? 'bg-amber-950/80 border-amber-500/80 text-amber-300 animate-pulse'
                   : 'bg-neutral-900 border-neutral-800 text-neutral-400'
               }`}
-              title="Only generate signals strictly 3 minutes in advance of 5M candle open"
+              title="Signals are accepted only from a closed M1 candle exactly three minutes before an aligned 5–30 minute entry candle."
             >
               <Clock className="w-3 h-3 text-amber-400" />
-              {secondsToNext5m <= 180
-                ? '⚡ Strict 3M Window Active'
-                : `3M Window in ${Math.floor((secondsToNext5m - 180) / 60)}m ${((secondsToNext5m - 180) % 60).toString().padStart(2, '0')}s`}
+              {nextDecisionActive ? 'T−3m WINDOW ACTIVE' : '5–30M START CANDLES'}
             </span>
           </div>
         </div>
@@ -610,8 +704,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
             <div className="flex items-center gap-4 text-xs font-mono">
               <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
-                <span className="text-[10px] text-neutral-400 block uppercase">Total Trades</span>
-                <span className="font-bold text-white text-sm">{historySignals.length}</span>
+                <span className="text-[10px] text-neutral-400 block uppercase">Settled Contracts</span>
+                <span className="font-bold text-white text-sm">{completedSignals.length}</span>
               </div>
               <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-emerald-900/50">
                 <span className="text-[10px] text-emerald-400 block uppercase">Wins</span>
@@ -623,8 +717,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               </div>
               <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
                 <span className="text-[10px] text-neutral-400 block uppercase">Net Return</span>
-                <span className={`font-bold text-sm ${totalNetPips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {totalNetPips > 0 ? '+' : ''}{totalNetPips} Pips
+                <span className={`font-bold text-sm ${totalNetReturnUnits >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {totalNetReturnUnits > 0 ? '+' : ''}{totalNetReturnUnits.toFixed(3)} Stake Units
                 </span>
               </div>
             </div>
@@ -637,12 +731,12 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <h3 className="text-lg font-bold text-white">
               {filterState === 'CLOSED'
                 ? 'No Closed Trades in History Yet'
-                : 'Bot Is Scanning for the Next 5-Minute Setup'}
+                : 'Waiting for the next valid 5–30 minute entry window'}
             </h3>
             <p className="mt-2 text-xs sm:text-sm text-neutral-400 max-w-md leading-relaxed">
               {filterState === 'CLOSED'
-                ? 'When active 5-minute trades reach their expiry, their full trade execution, entry fill, exit fill, and win/loss pips will appear here.'
-                : 'Every trade strictly opens at the 5-minute candle opening (:00, :05, :10, :15, :20, :25, :30, :35, :40, :45, :50, :55) with dynamic expiry duration.'}
+                ? 'When paper contracts reach their scheduled expiry, the observed result and payout-adjusted stake return will appear here.'
+                : 'Every signal is decided from a fully closed M1 candle exactly three minutes before its selected 5–30 minute entry candle opens. The starting candle and expiry horizon must match.'}
             </p>
             <button
               onClick={() => setFilterState(filterState === 'CLOSED' ? 'ACTIVE' : 'ALL')}
@@ -732,12 +826,12 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                               🔔 3-MIN ADVANCE NOTICE
                             </span>
                             <span className="text-[10px] text-amber-400/90 font-mono">
-                              Entry at 5M Candle Open ({sig.candleOpenTimeIst || next5mOpenIST})
+                              Entry at {sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M Candle Open ({sig.candleOpenTimeIst || formatIST(sig.candleOpenTimeUtc)})
                             </span>
                           </div>
                         </div>
                         <span className="font-mono text-xs font-black text-white bg-amber-900/80 px-2 py-1 rounded border border-amber-600 shrink-0 ml-2">
-                          Opens in {next5mCountdownStr}
+                          {getEntryCountdown(sig.candleOpenTimeUtc)}
                         </span>
                       </div>
                     )}
@@ -837,12 +931,12 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       <div className="bg-neutral-950 p-2.5 rounded-xl border border-neutral-800 flex flex-col justify-between">
                         <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          ENTRY (5M OPEN)
+                          ENTRY ({sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M OPEN)
                         </span>
                         <div className="text-sm sm:text-base font-extrabold text-white mt-1 tabular-nums">
                           {sig.candleOpenTimeIst || formatIST(sig.actualEntryTimeUtc || sig.entryWindowStartUtc)}
                         </div>
-                        <span className="text-[10px] text-neutral-400 mt-0.5">Strict 5M Open</span>
+                        <span className="text-[10px] text-neutral-400 mt-0.5">Strict {sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M Open</span>
                       </div>
 
                       {/* EXIT / EXPIRY BOX */}
@@ -882,7 +976,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                         return (
                           <div className="text-[10px] font-mono text-neutral-400 pt-1">
                             Forward paper results: {forward && forward.trades > 0
-                              ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored outcomes` : 'No scored outcomes'} · ${forward.scratches} scratches · ${forward.netPips > 0 ? '+' : ''}${forward.netPips.toFixed(1)} modeled net pips`
+                              ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored outcomes` : 'No scored outcomes'} · ${forward.scratches} scratches · ${(forward.netReturnUnits ?? 0) > 0 ? '+' : ''}${(forward.netReturnUnits ?? 0).toFixed(3)} payout-adjusted stake units`
                               : 'No completed forward outcomes yet'}
                           </div>
                         );
@@ -1076,7 +1170,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   4. Dynamic Expiry (5m to 30m) & Strict 5M Open Entry
                 </span>
                 <p>
-                  Every trade takes entry strictly on the 5-minute candle opening (:00, :05, :10, :15, :20, :25, :30, :35, :40, :45, :50, :55) with 3 minutes advance notice. The bot selects dynamic expiries from <strong>5m to 30m</strong> based on the setup's velocity and time-horizon conviction.
+                  Each candidate is evaluated for a matching <strong>5m, 10m, 15m, 20m, 25m or 30m entry candle</strong>. The signal must use a fully closed M1 decision bar exactly three minutes before that candle opens; expiry is measured on the matching horizon and exact expiry minute.
                 </p>
               </div>
 
@@ -1236,10 +1330,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             {/* Timings */}
             <div className="bg-neutral-950 p-3.5 rounded-xl border border-neutral-800 space-y-2">
               <div className="text-neutral-400 text-[10px] uppercase font-bold tracking-wider">
-                5-MINUTE CANDLE SCHEDULE
+                {selectedSignal.entryTimeframeMinutes ?? selectedSignal.expiryMinutes ?? 5}-MINUTE ENTRY CANDLE SCHEDULE
               </div>
               <div className="flex justify-between text-neutral-200 text-xs">
-                <span>Entry Time (5M Open):</span>
+                <span>Entry Time ({selectedSignal.entryTimeframeMinutes ?? selectedSignal.expiryMinutes ?? 5}M Open):</span>
                 <strong className="text-emerald-400">
                   {selectedSignal.candleOpenTimeIst || formatIST(selectedSignal.actualEntryTimeUtc || selectedSignal.entryWindowStartUtc)}
                 </strong>
@@ -1614,7 +1708,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-4 space-y-3">
               <div>
                 <h4 className="text-sm font-bold text-white">Import externally sourced historical candles</h4>
-                <p className="text-[11px] text-neutral-400 mt-1">Upload 1-minute CSV or JSON candles. Validation requires at least 10,000 structurally valid M1 rows. Synthetic fallback candles are rejected. The app checks OHLC and timestamps but cannot independently authenticate an uploaded file's provider or contents; import only genuine broker/provider exports.</p>
+                <p className="text-[11px] text-neutral-400 mt-1">Upload 1-minute CSV or JSON candles. Candidate validation requires at least 30,000 structurally valid M1 rows. Synthetic fallback candles are rejected. The app checks OHLC and timestamps but cannot independently authenticate an uploaded file's provider or contents; import only genuine broker/provider exports.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <select
@@ -1639,7 +1733,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 How candidates become forward-approved:
               </strong>
               <p>
-                The generator samples four executable operator families and stores the exact coefficients used by the live evaluator. A generated equation is only a candidate: it starts unvalidated, must pass a chronological historical test using the scheduled entry/expiry model, and then must accumulate at least 200 scored forward paper outcomes before it can be marked forward-approved.
+                The generator evolves executable symbolic expression trees over causal market features using crossover, adaptive mutation and species-preserving parent selection. Candidate generation provides no accuracy; a candidate starts unvalidated, must pass the chronological historical gates, then must independently satisfy the 300-outcome forward paper gate before it can be marked forward-approved.
               </p>
             </div>
 
@@ -1726,7 +1820,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     )}
                     {gene.forwardPerformance && (
                       <div className="text-[11px] font-mono text-neutral-300 bg-neutral-900/60 border border-neutral-800 rounded-lg p-3">
-                        Forward paper results: {gene.forwardPerformance.wins}W / {gene.forwardPerformance.losses}L / {gene.forwardPerformance.scratches} scratches · {gene.forwardPerformance.trades} completed trades · {gene.forwardPerformance.netPips > 0 ? '+' : ''}{gene.forwardPerformance.netPips.toFixed(1)} net pips
+                        Forward paper results: {gene.forwardPerformance.wins}W / {gene.forwardPerformance.losses}L / {gene.forwardPerformance.scratches} scratches · {gene.forwardPerformance.trades} completed contracts · {(gene.forwardPerformance.netReturnUnits ?? 0) > 0 ? '+' : ''}{(gene.forwardPerformance.netReturnUnits ?? 0).toFixed(3)} stake units
                       </div>
                     )}
                     {gene.accuracyStatus !== 'BACKTESTED' && (
