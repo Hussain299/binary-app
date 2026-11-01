@@ -60,10 +60,10 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
         <div>
           <div className="flex items-center gap-2">
             <Dna className="w-5 h-5 text-cyan-300" />
-            <h2 className="text-lg sm:text-xl font-black text-white">Evolved Strategy Population</h2>
+            <h2 className="text-lg sm:text-xl font-black text-white">Strategy population</h2>
           </div>
           <p className="text-xs sm:text-sm text-neutral-300 mt-1 max-w-2xl">
-            This page shows candidates actually stored by the research engine. No preset win rates, invented strategy names or assumed profitability.
+            Stored candidates · measured evidence only
           </p>
         </div>
         <div className="flex gap-2">
@@ -79,12 +79,15 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
         </div>
       </div>
 
-      <div className="rounded-xl border border-amber-800/50 bg-amber-950/20 p-4 flex gap-3 text-xs text-neutral-300">
-        <ShieldCheck className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
-        <div>
-          <strong className="text-amber-200">Execution contract:</strong> decision from a fully closed M1 candle exactly 3 minutes before entry; starting candle and expiry match at 5, 10, 15, 20, 25 or 30 minutes. All generated signals remain paper-only.
+      <details className="rounded-xl border border-white/[0.07] bg-white/[0.025] px-4 py-3">
+        <summary className="cursor-pointer list-none text-xs font-medium text-neutral-400 hover:text-neutral-200">
+          Timing & execution rules
+        </summary>
+        <div className="mt-2 flex items-start gap-2 text-[11px] leading-relaxed text-neutral-400">
+          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+          <span>A fully closed M1 candle decides exactly 3 minutes before entry. Starting candle and expiry must match at 5, 10, 15, 20, 25 or 30 minutes. All generated signals remain paper-only.</span>
         </div>
-      </div>
+      </details>
 
       {error && <div className="rounded-lg border border-rose-800 bg-rose-950/30 p-3 text-xs text-rose-200">{error}</div>}
 
@@ -98,8 +101,8 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {ranked.slice(0, 18).map(gene => {
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+            {ranked.slice(0, 12).map(gene => {
               const active = selected?.id === gene.id;
               return (
                 <button key={gene.id} onClick={() => setSelectedId(gene.id)} className={`text-left p-4 rounded-xl border transition-colors ${active ? 'border-cyan-500 bg-neutral-900' : 'border-neutral-800 bg-neutral-900/50 hover:border-neutral-700'}`}>
@@ -109,9 +112,9 @@ export const StrategyDiscoveryView: React.FC<StrategyDiscoveryViewProps> = ({ on
                   </div>
                   <h3 className="mt-2 text-sm font-bold text-white">{gene.name}</h3>
                   <p className="mt-1 text-[10px] text-neutral-500">{gene.optimalHorizonMinutes}m entry/expiry · {gene.sessionAffinity} session</p>
-                  <p className="mt-2 font-mono text-[10px] text-cyan-200 break-all line-clamp-2">{gene.mathematicalFormula}</p>
+
                   {gene.discoveryMetrics ? (
-                    <div className="mt-3 flex gap-3 text-[10px] font-mono text-neutral-400">
+                    <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono text-neutral-400">
                       <span>VAL {(gene.discoveryMetrics.validationWinRate * 100).toFixed(1)}%</span>
                       <span>n={gene.discoveryMetrics.validationScoredTrades}</span>
                       <span>EV {gene.discoveryMetrics.validationExpectedValueUnits.toFixed(3)}</span>
