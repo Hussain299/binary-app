@@ -137,9 +137,12 @@ export async function runAllVerificationTests(): Promise<{
     if (isForexSignalScheduleValid(saturdayDecision, sundayEntry, sundayExpiry)) {
       throw new Error('A signal predicted on Saturday must remain cancelled after the Sunday reopen.');
     }
-    const fridayDecisionSundayEntry = Date.parse('2026-11-01T22:10:00.000Z');
-    if (isForexSignalScheduleValid(fridayDecisionSundayEntry, sundayEntry, sundayExpiry)) {
-      throw new Error('A prediction cannot claim validity if its decision timestamp is closed.');
+    const sundayPreOpenDecision = Date.parse('2026-11-01T21:50:00.000Z'); // Sunday 16:50 EST
+    if (isForexSignalScheduleValid(sundayPreOpenDecision, sundayEntry, sundayExpiry)) {
+      throw new Error('A decision made before the Sunday reopen cannot carry into the new trading week.');
+    }
+    if (isForexSignalScheduleValid(fridayDecision, sundayEntry, sundayExpiry)) {
+      throw new Error('A Friday decision cannot remain pending across the weekend and enter Sunday.');
     }
   });
 
