@@ -107,6 +107,7 @@ export interface HistoricalApprovalEvidence {
   expectedValueUnits: number;
   profitFactor: number;
   confidenceInterval95: [number, number];
+  multipleTestingLowerBound?: number;
 }
 
 /** Payout-aware historical paper eligibility; this is not broker execution approval. */
@@ -117,23 +118,36 @@ export function hasSufficientHistoricalApprovalEvidence(
 ): boolean {
   if (!metrics || accuracyStatus !== 'BACKTESTED') return false;
   const breakEven = binaryBreakEvenWinRate(metrics.binaryPayoutPct);
+  const validationLowerBound = wilsonLowerBound(
+    metrics.validationWinRate * metrics.validationScoredSampleSize,
+    metrics.validationScoredSampleSize
+  );
+  // The final holdout is opened only for ten pre-registered finalists.
+  // Reconstruct the one-sided Bonferroni bound for older stored records.
+  const adjustedTestLowerBound = metrics.multipleTestingLowerBound ??
+    wilsonLowerBound(
+      metrics.testWinRate * metrics.testScoredSampleSize,
+      metrics.testScoredSampleSize,
+      2.576
+    );
   return sampleCount >= 300 &&
     metrics.testScoredSampleSize >= 300 &&
     metrics.trainScoredSampleSize >= 150 &&
     metrics.validationScoredSampleSize >= 150 &&
     metrics.binaryPayoutPct >= 80 &&
     Number.isFinite(metrics.trainWinRate) && metrics.trainWinRate > breakEven &&
-    Number.isFinite(metrics.validationWinRate) && metrics.validationWinRate > breakEven &&
+    Number.isFinite(metrics.validationWinRate) && validationLowerBound > breakEven &&
     Number.isFinite(metrics.testWinRate) && metrics.testWinRate > breakEven &&
     Array.isArray(metrics.testBlockWinRates) &&
     metrics.testBlockWinRates.length === 3 &&
     metrics.testBlockWinRates.every(rate => Number.isFinite(rate) && rate > breakEven) &&
     Number.isFinite(metrics.expectedValueUnits) && metrics.expectedValueUnits > 0 &&
-    Number.isFinite(metrics.profitFactor) && metrics.profitFactor >= 1.10 &&
+    Number.isFinite(metrics.profitFactor) && metrics.profitFactor >= 1.15 &&
     Array.isArray(metrics.confidenceInterval95) &&
     metrics.confidenceInterval95.length === 2 &&
     Number.isFinite(metrics.confidenceInterval95[0]) &&
-    metrics.confidenceInterval95[0] > breakEven;
+    metrics.confidenceInterval95[0] > breakEven &&
+    adjustedTestLowerBound > breakEven;
 }
 
 const MIN_FORWARD_PARENT_SAMPLE = 100;
