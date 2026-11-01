@@ -191,6 +191,9 @@ export interface OpportunityAudit {
   holdoutWinRate: number | null;
   holdoutLowerConfidenceBound: number | null;
   holdoutExpectedValueLowerBound: number | null;
+  holdoutWindowStatus: 'FRESH' | 'ALREADY_INSPECTED' | 'REVISION_NOT_TESTED';
+  holdoutWindowStartUtc: string;
+  holdoutWindowEndUtc: string;
   reasons: string[];
   counterEvidence: string[];
   auditedAt: string;
