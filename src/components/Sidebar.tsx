@@ -2,6 +2,7 @@ import React from 'react';
 import {
   BarChart3,
   Brain,
+  BrainCircuit,
   ChevronLeft,
   ChevronRight,
   Clock3,
@@ -18,6 +19,7 @@ import {
 
 export type ViewTab =
   | 'terminal'
+  | 'opportunities'
   | 'explorer'
   | 'modellab'
   | 'strategy'
@@ -53,6 +55,7 @@ const groups: Array<{
     label: 'Workspace',
     items: [
       { id: 'terminal', label: 'Signals', icon: Zap, count: 'signals' },
+      { id: 'opportunities', label: 'Opportunities', icon: BrainCircuit },
       { id: 'explorer', label: 'Markets', icon: LineChart },
       { id: 'strategy', label: 'Strategies', icon: Lightbulb },
       { id: 'analytics', label: 'Performance', icon: BarChart3 },
