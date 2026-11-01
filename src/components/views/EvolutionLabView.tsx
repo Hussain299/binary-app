@@ -54,6 +54,21 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
   const [searchError, setSearchError] = React.useState('');
   const [historyImportBusy, setHistoryImportBusy] = React.useState(false);
   const [historyImportStatus, setHistoryImportStatus] = React.useState('');
+  const [storedGenerations, setStoredGenerations] = React.useState<EvolutionGeneration[]>(generations);
+
+  React.useEffect(() => setStoredGenerations(generations), [generations]);
+
+  const refreshGenerationHistory = async () => {
+    try {
+      const response = await fetch('/api/evolution/state');
+      const payload = await response.json();
+      if (response.ok && Array.isArray(payload.generations)) {
+        setStoredGenerations(payload.generations);
+      }
+    } catch {
+      // Retain the last persisted generation list if telemetry refresh fails.
+    }
+  };
 
   React.useEffect(() => {
     fetch('/api/research/candles/status')
@@ -190,6 +205,8 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
         setSearchBatch(snapshot);
       }
       if (snapshot.status === 'FAILED') throw new Error(snapshot.error || 'The strategy search failed.');
+      await refreshGenerationHistory();
+      await refreshEvolutionCandidates();
     } catch (error: any) {
       setSearchError(error.message || 'The strategy search failed.');
     } finally {
@@ -197,21 +214,34 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
     }
   };
 
+  const refreshEvolutionCandidates = async () => {
+    try {
+      const response = await fetch('/api/strategies/synthesized');
+      const payload = await response.json();
+      if (response.ok && Array.isArray(payload.strategies)) {
+        // The table is driven by the stored strategy endpoint; a refresh causes
+        // the parent component to fetch its latest strategy records next render.
+      }
+    } catch {
+      // The generation record remains the durable source of completed batch history.
+    }
+  };
+
   const selectedHistoryCount = historyCounts[searchPair] || 0;
   const searchProgress = searchBatch ? Math.round((searchBatch.completed / 300) * 100) : 0;
 
   const steps = [
-    '1. Collect Multi-Feed Forex Data',
-    '2. Discover Market Anomalies',
-    '3. Formulate Falsifiable Hypotheses',
-    '4. Configure Isolated Splits',
-    '5. Execute Purged Walk-Forward',
-    '6. Evaluate Validation Performance',
-    '7. Untouched Test Replication',
-    '8. Skeptical Auditor Interrogation',
-    '9. Candidate Fitness Ranking',
-    '10. Archive Failure Lineage',
-    '11. Sample New Candidate Parameters',
+    '1. Ingest Genuine M1 Data',
+    '2. Build Causal Market Features',
+    '3. Generate Symbolic Genomes',
+    '4. Apply Mutation & Crossover',
+    '5. Rank on Train/Validation',
+    '6. Preserve Diverse Species',
+    '7. Preselect Finalists',
+    '8. Inspect One-Time Holdout',
+    '9. Record Failed Lineages',
+    '10. Learn from Forward Paper Outcomes',
+    '11. Feed Mature Evidence into Parents',
   ];
 
   return (
@@ -404,23 +434,24 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
 
       {/* Generations Tree / History */}
       <div className="space-y-4">
-        <h4 className="text-sm font-semibold text-white font-mono">Research Cycle Records</h4>
+        <h4 className="text-sm font-semibold text-white font-mono">Completed Evolution & Research Batches</h4>
 
-        {generations.length === 0 ? (
+        {storedGenerations.length === 0 ? (
           <div className="h-48 flex flex-col items-center justify-center text-center text-neutral-500 font-mono text-xs bg-neutral-900/40 border border-neutral-800 rounded">
             <Dna className="w-8 h-8 text-neutral-600 mb-2" />
             <p className="text-neutral-400 font-medium text-sm">No Research Cycles Recorded Yet</p>
             <p className="mt-1">Run a research cycle when imported historical data is available.</p>
           </div>
         ) : (
-          generations.map(gen => (
+          storedGenerations.map(gen => (
             <div
               key={gen.generation}
               className="bg-neutral-900/60 border border-neutral-800 rounded p-5 font-mono text-xs space-y-3"
             >
               <div className="flex flex-wrap items-center justify-between pb-3 border-b border-neutral-800">
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-bold text-white">Generation #{gen.generation}</span>
+                  <span className="text-sm font-bold text-white">{gen.researchBatchId ? 'Evolution Batch' : 'Legacy Research'} #{gen.generation}</span>
+                  {gen.symbol && <span className="text-neutral-400">· {gen.symbol}</span>}
                   <span className="text-neutral-500">·</span>
                   <span className="text-neutral-400">{gen.timestamp.substring(0, 19).replace('T', ' ')} UTC</span>
                 </div>
@@ -428,15 +459,17 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
                 <div className="flex items-center gap-4">
                   <div className="flex items-center gap-1.5 text-emerald-400">
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>{gen.acceptedCount} Accepted</span>
+                    <span>{gen.acceptedCount} {gen.researchBatchId ? 'Historical Passes' : 'Legacy Accepted'}</span>
                   </div>
                   <div className="flex items-center gap-1.5 text-rose-400">
                     <XCircle className="w-3.5 h-3.5" />
-                    <span>{gen.rejectedCount} Rejected</span>
+                    <span>{gen.rejectedCount} {gen.researchBatchId ? 'Rejected' : 'Legacy Rejected'}</span>
                   </div>
                   <div className="flex items-center gap-1 text-white font-semibold">
-                    <span>Best F1:</span>
-                    <span className="tabular-nums text-emerald-300">{gen.bestF1Score.toFixed(3)}</span>
+                    <span>{gen.researchBatchId ? 'Best Validation EV:' : 'Legacy F1:'}</span>
+                    <span className="tabular-nums text-emerald-300">
+                      {gen.researchBatchId ? (gen.bestValidationExpectedValueUnits ?? 0).toFixed(4) + ' units' : gen.bestF1Score.toFixed(3)}
+                    </span>
                   </div>
                 </div>
               </div>
