@@ -195,6 +195,7 @@ export const OpportunityResearchView: React.FC = () => {
   const [error, setError] = useState('');
   const [revisionDirection, setRevisionDirection] = useState<'BUY' | 'SELL'>('BUY');
   const [revisionHorizon, setRevisionHorizon] = useState('5');
+  const [revisionEntryPrice, setRevisionEntryPrice] = useState('');
 
   const loadOpportunities = async () => {
     try {
@@ -233,6 +234,7 @@ export const OpportunityResearchView: React.FC = () => {
     if (!selected) return;
     setRevisionDirection(selected.direction === 'SELL' ? 'SELL' : 'BUY');
     setRevisionHorizon(String(selected.horizonMinutes));
+    setRevisionEntryPrice(selected.proposedEntryPrice.toFixed(selected.symbol.includes('JPY') ? 3 : 5));
   }, [selectedId, selected?.id]);
 
   const shortlistCount = opportunities.filter(item => item.audit.status === 'SHORTLISTED' &&
@@ -303,6 +305,7 @@ export const OpportunityResearchView: React.FC = () => {
         body: JSON.stringify({
           direction: revisionDirection,
           horizonMinutes: Number(revisionHorizon),
+          entryPrice: Number(revisionEntryPrice),
           notes: 'Human-modified pre-trade hypothesis; re-audited from the stored same-snapshot analogue distribution.',
         }),
       });
@@ -439,6 +442,12 @@ export const OpportunityResearchView: React.FC = () => {
                     <span className="rounded-md border border-white/10 bg-white/[0.035] px-2 py-1 text-[10px] text-neutral-400">{selected.horizonMinutes}m hypothesis</span>
                   </div>
                   <div className="mt-1 text-sm text-neutral-300">{selected.hypothesisName}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <span className="rounded border border-white/10 bg-white/[0.025] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-neutral-400">
+                      {selected.sourceKind === 'HISTORICALLY_VALIDATED_GENOME' ? 'Pair-validated genome' : 'Exploratory heuristic · not validated'}
+                    </span>
+                    {selected.strategyGeneId && <span className="text-[9px] text-neutral-500">{selected.strategyGeneId}</span>}
+                  </div>
                   <div className="mt-1 max-w-3xl text-xs leading-5 text-neutral-500">{selected.hypothesis}</div>
                 </div>
                 <div className="rounded-lg border border-white/[0.07] bg-black/10 px-3 py-2 text-right">
@@ -498,7 +507,7 @@ export const OpportunityResearchView: React.FC = () => {
 
               <div className="rounded-xl border border-white/[0.07] bg-black/10 p-3">
                 <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-white"><SlidersHorizontal className="h-4 w-4 text-emerald-300" /> Human hypothesis revision</div>
-                <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                <div className="grid gap-2 sm:grid-cols-[1fr_1fr_1fr_auto]">
                   <label className="text-[10px] text-neutral-500">
                     Direction
                     <select value={revisionDirection} onChange={event => setRevisionDirection(event.target.value as 'BUY' | 'SELL')} className="mt-1 w-full rounded-md border border-white/10 bg-[#101b29] px-2 py-2 text-xs text-white outline-none">
@@ -509,8 +518,26 @@ export const OpportunityResearchView: React.FC = () => {
                   <label className="text-[10px] text-neutral-500">
                     Expiry / entry timeframe
                     <select value={revisionHorizon} onChange={event => setRevisionHorizon(event.target.value)} className="mt-1 w-full rounded-md border border-white/10 bg-[#101b29] px-2 py-2 text-xs text-white outline-none">
-                      {HORIZONS.map(value => <option key={value} value={value}>{value} minutes</option>)}
+                      {HORIZONS.map(value => (
+                        <option
+                          key={value}
+                          value={value}
+                          disabled={selected.sourceKind === 'HISTORICALLY_VALIDATED_GENOME' && value !== selected.horizonMinutes}
+                        >
+                          {value} minutes
+                        </option>
+                      ))}
                     </select>
+                  </label>
+                  <label className="text-[10px] text-neutral-500">
+                    Manual entry reference
+                    <input
+                      type="number"
+                      step={selected.symbol.includes('JPY') ? '0.001' : '0.00001'}
+                      value={revisionEntryPrice}
+                      onChange={event => setRevisionEntryPrice(event.target.value)}
+                      className="mt-1 w-full rounded-md border border-white/10 bg-[#101b29] px-2 py-2 text-xs text-white outline-none"
+                    />
                   </label>
                   <button onClick={revise} disabled={isSavingDecision || Date.parse(selected.staleAfter) <= Date.now()} className="mt-auto flex items-center justify-center gap-2 rounded-md border border-sky-400/20 bg-sky-400/10 px-3 py-2 text-xs font-semibold text-sky-200 hover:bg-sky-400/15 disabled:opacity-40">
                     <RefreshCw className={`h-3.5 w-3.5 ${isSavingDecision ? 'animate-spin' : ''}`} /> Re-evaluate revision
