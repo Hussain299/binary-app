@@ -23,6 +23,7 @@ import {
   genomeSpeciesKey,
   hasSufficientForwardParentEvidence,
   evolutionaryParentFitness,
+  doesResearchHoldoutOverlap,
 } from './evolutionEngine.js';
 import { findEligibleStartTimeframes, getNextCandleOpenMs } from './tradingClock.js';
 
@@ -106,6 +107,31 @@ export async function runAllVerificationTests(): Promise<{
     }
     if (!(bayesianUcbScore(afterLoss, 2) > 0 && bayesianUcbScore(afterLoss, 2) <= 2)) {
       throw new Error('Bayesian UCB score must be finite and bounded for a valid posterior.');
+    }
+  });
+
+  await runTest('RESEARCH', 'Previously inspected chronological holdout periods cannot be reused', () => {
+    const windows = [{
+      symbol: 'EUR/USD',
+      startUtc: '2026-01-01T00:00:00.000Z',
+      endUtc: '2026-02-01T00:00:00.000Z',
+    }];
+    const start = Date.parse('2026-01-31T23:00:00.000Z');
+    const overlapEnd = Date.parse('2026-02-15T00:00:00.000Z');
+    const nextStart = Date.parse('2026-02-01T00:00:00.000Z');
+    const nextEnd = Date.parse('2026-03-01T00:00:00.000Z');
+    const otherPair = 'GBP/USD';
+    if (!doesResearchHoldoutOverlap(windows, 'EUR/USD', start, overlapEnd)) {
+      throw new Error('A holdout interval overlapping one minute of a consumed window must be rejected.');
+    }
+    if (!doesResearchHoldoutOverlap(windows, 'EUR/USD', nextStart, nextEnd)) {
+      throw new Error('A shared boundary must count as overlap to prevent duplicate candle grading.');
+    }
+    if (doesResearchHoldoutOverlap(windows, 'EUR/USD', Date.parse('2026-02-01T00:01:00Z'), nextEnd)) {
+      throw new Error('A wholly future test interval must be available for a future research batch.');
+    }
+    if (doesResearchHoldoutOverlap(windows, otherPair, start, overlapEnd)) {
+      throw new Error('Holdout reservations must be isolated by currency pair.');
     }
   });
 
