@@ -1615,7 +1615,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                         <span className="font-bold text-white text-sm">{sess.name}</span>
                       </div>
                       <span className="text-[10px] text-neutral-400 font-mono block mt-0.5">
-                        {sess.hoursLabel} · {sess.istRange} · {sess.utcRange}
+                        {sess.istRange}
                       </span>
                     </div>
                     {sess.isActive ? (
