@@ -240,6 +240,9 @@ export function isStrategyRegimeCompatible(
   if (regime === "UNKNOWN" || regime === "MIXED") {
     return { allowed: true, reason: "Regime evidence is insufficient or mixed; no regime-specific suppression applied." };
   }
+  if ((regime === "HIGH_TREND_BREAKOUT" || regime === "LOW_VOL_ASIA") && style === "UNKNOWN") {
+    return { allowed: false, reason: "Strategy style cannot be classified safely in an extreme market regime." };
+  }
   if (regime === "HIGH_TREND_BREAKOUT" && style === "MEAN_REVERSION") {
     return { allowed: false, reason: "Mean-reversion setup suppressed during a high-efficiency, expanding-volatility breakout." };
   }
