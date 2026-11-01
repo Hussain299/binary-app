@@ -781,6 +781,7 @@ export class OpportunityEngine {
         entryPrice: requestedEntryPrice,
       },
     };
-  }}
+  }
+}
 
 export const opportunityEngine = new OpportunityEngine();
