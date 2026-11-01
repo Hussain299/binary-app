@@ -470,7 +470,7 @@ export class AutonomousScheduler {
           }
 
           if (candidate) {
-            // Dynamically assign optimal expiry across 5m, 10m, 15m, 20m, 25m, 30m
+            // The chosen N-minute horizon is also the starting entry-candle timeframe.
             const dynamicExpiry: 5 | 10 | 15 | 20 | 25 | 30 = selectedEntryTimeframe;
             let ruleFamily = 'mean_reversion_20';
             let strategyName = '';
