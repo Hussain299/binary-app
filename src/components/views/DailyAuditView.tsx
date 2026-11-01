@@ -43,11 +43,13 @@ function todayIST(): string {
   return istDateKey(new Date().toISOString());
 }
 
+/**
+ * A signal belongs to the IST date on which it was created/predicted.
+ * Entry and expiry can occur later (or be reconciled days later), but must
+ * never move an old observation into today's audit.
+ */
 function activityTime(signal: ResearchSignal): string {
-  return signal.actualEntryTimeUtc ||
-    signal.candleOpenTimeUtc ||
-    signal.entryWindowStartUtc ||
-    signal.predictionTimeUtc;
+  return signal.predictionTimeUtc || signal.signalCandleTime;
 }
 
 function expiryTime(signal: ResearchSignal): string | null {
@@ -155,7 +157,10 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
   const todayKey = todayIST();
 
   const daySignals = useMemo(() => signals
-    .filter(signal => istDateKey(activityTime(signal)) === selectedDate)
+    .filter(signal => {
+      const recordedAt = activityTime(signal);
+      return !!recordedAt && istDateKey(recordedAt) === selectedDate;
+    })
     .sort((a, b) => Date.parse(activityTime(b)) - Date.parse(activityTime(a))),
   [signals, selectedDate]);
 
