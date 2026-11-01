@@ -95,7 +95,6 @@ export function genomeSpeciesKey(genome?: StrategyGenome): string {
 }
 
 export interface HistoricalApprovalEvidence {
-  sampleCount: number;
   testScoredSampleSize: number;
   trainScoredSampleSize: number;
   validationScoredSampleSize: number;
