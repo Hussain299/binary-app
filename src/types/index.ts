@@ -156,8 +156,14 @@ export interface ResearchSignal {
   actualExitPrice: number | null;
   
   // Confidence & Verification
-  confidence: number; // 0.0 - 1.0
+  /** Raw model/strategy activation score; never present this as a win probability. */
+  confidence: number;
   calibrationStatus: 'CALIBRATED' | 'UNCALIBRATED' | 'OVERCONFIDENT';
+  /** Empirical probability calibrated only from earlier settled outcomes; absent until sample suffices. */
+  calibratedProbability?: number;
+  calibratedProbabilityLowerBound?: number;
+  calibrationSampleSize?: number;
+  calibrationBrierScore?: number;
   lifecycleState: SignalLifecycleState;
   lifecycleHistory: SignalLifecycleEvent[];
   
@@ -232,8 +238,13 @@ export interface LossAutopsy {
     | 'MOMENTUM_EXHAUSTION_DIVERGENCE'
     | 'SESSION_BOUNDARY_LIQUIDITY_VACUUM'
     | 'NON_LINEAR_OPERATOR_OVERFITTING';
+  /** Evidence state prevents old heuristic labels from being mistaken for proven causes. */
+  evidenceStatus?: 'OBSERVATION_ONLY' | 'HYPOTHESIS' | 'SUPPORTED';
   rootCauseExplanation: string;
   lessonsLearned: string[];
+  /** Historical heuristic claims are retained for audit but never treated as evidence. */
+  legacyUnverifiedExplanation?: string;
+  legacyUnverifiedLessons?: string[];
   /** Deprecated legacy fields; new observations never fabricate antidote genomes. */
   antidoteStrategyGeneId?: string;
   antidoteStrategyName?: string;
@@ -323,8 +334,13 @@ export interface StrategyPerformanceRecord {
   binaryPushes?: number;
   minimumPayoutPct?: number;
   negativeReturnUnits?: number;
-  /** Recent unique completed outcomes used to calculate a rolling 300-trade approval window. */
-  scoredOutcomes?: Array<{ result: 'WIN' | 'LOSS'; netReturnUnits: number; payoutPct: number }>;
+  /** Recent unique completed outcomes; rawScore enables strictly historical score calibration. */
+  scoredOutcomes?: Array<{
+    result: 'WIN' | 'LOSS';
+    netReturnUnits: number;
+    payoutPct: number;
+    rawScore?: number;
+  }>;
   /** Recent signal IDs prevent the same outcome from being counted more than once. */
   signalIds?: string[];
   /** Beta(1,1) posterior updated exactly once per decisive forward outcome. */
@@ -369,6 +385,11 @@ export interface SynthesizedStrategyGene {
   genome?: StrategyGenome;
   /** Candidate belongs to a 300-strategy search run. */
   searchBatchId?: string;
+  /** Exact reproduction metadata for the evolutionary search that produced this candidate. */
+  researchSeed?: string;
+  datasetFingerprint?: string;
+  featureSchemaVersion?: string;
+  researchEngineVersion?: string;
   validationFailureReason?: string;
   /** Train/validation-only metrics used to select finalists before the untouched test is opened. */
   discoveryMetrics?: StrategyDiscoveryMetrics;
@@ -492,6 +513,11 @@ export interface EvolutionGeneration {
   lessonsLearned: string[];
   /** Present only for real 300-candidate symbolic search batches. */
   researchBatchId?: string;
+  /** Exact reproduction manifest for this evolutionary batch. */
+  researchSeed?: string;
+  datasetFingerprint?: string;
+  featureSchemaVersion?: string;
+  researchEngineVersion?: string;
   status?: 'COMPLETED' | 'FAILED';
   symbol?: ForexSymbol;
   bestValidationExpectedValueUnits?: number;
