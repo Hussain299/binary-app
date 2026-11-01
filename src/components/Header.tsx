@@ -4,7 +4,6 @@ import { Clock3, Layers, Menu, RefreshCw, X } from 'lucide-react';
 interface HeaderProps {
   onRefresh: () => void;
   isRefreshing: boolean;
-  activeSignalsCount: number;
   onToggleSidebar?: () => void;
   isSidebarOpen?: boolean;
 }
@@ -12,7 +11,6 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   onRefresh,
   isRefreshing,
-  activeSignalsCount,
   onToggleSidebar,
   isSidebarOpen,
 }) => {
@@ -51,7 +49,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
           <div className="min-w-0">
             <div className="sf-brand-name truncate">SIGNALFORGE</div>
-            <div className="sf-brand-caption hidden sm:block">Research workspace</div>
+            <div className="sf-brand-caption hidden sm:block">Daily paper audit</div>
           </div>
         </div>
         <span className="sf-status-pill hidden md:inline-flex">
@@ -60,11 +58,6 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-        {activeSignalsCount > 0 && (
-          <div className="sf-live-pill hidden sm:inline-flex">
-            {activeSignalsCount} active
-          </div>
-        )}
         <div className="sf-clock tabular-nums">
           <Clock3 className="h-3.5 w-3.5 text-neutral-500" />
           <span>{timeIst}</span>
