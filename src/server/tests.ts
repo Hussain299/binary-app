@@ -20,6 +20,7 @@ import {
   updateBetaPosterior,
   EpisodicTradeMemory,
 } from './evolutionEngine.js';
+import { findEligibleStartTimeframes, getNextCandleOpenMs } from './tradingClock.js';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -331,6 +332,33 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
+  await runTest('ENTRY_EXIT', 'Exact three-minute schedule across 5–30 minute entry candles', () => {
+    const entryOpen = Date.parse('2026-10-29T10:30:00.000Z');
+    const decisionClose = entryOpen - 3 * 60_000;
+    const now = decisionClose + 20_000;
+    const eligible = findEligibleStartTimeframes(now, decisionClose);
+    const timeframes = eligible.map(item => item.timeframeMinutes);
+    for (const required of [5, 10, 15, 30]) {
+      if (!timeframes.includes(required as any)) {
+        throw new Error(`Expected ${required}m entry timeframe to be eligible at the same 10:30 boundary.`);
+      }
+    }
+    if (timeframes.includes(20) || timeframes.includes(25)) {
+      throw new Error('A timeframe without a boundary exactly three minutes ahead must not be eligible.');
+    }
+    for (const item of eligible) {
+      if (item.entryTimeMs !== entryOpen || item.decisionTimeMs !== decisionClose) {
+        throw new Error('The live clock contract drifted away from the exact T-3m entry boundary.');
+      }
+      if (getNextCandleOpenMs(now, item.timeframeMinutes) !== entryOpen) {
+        throw new Error('Entry boundary calculation disagrees with eligibility output.');
+      }
+    }
+    if (findEligibleStartTimeframes(now + 60_000, decisionClose + 60_000).length !== 0) {
+      throw new Error('A late signal must not be mislabeled as a three-minute advance signal.');
+    }
+  });
+
   await runTest('DATA', 'Deduplication & Gap Detection', () => {
     const testCandles: Candle[] = [
       {
@@ -558,6 +586,25 @@ export async function runAllVerificationTests(): Promise<{
   // ==========================================
   // 3. ML & RESEARCH PIPELINE TESTS
   // ==========================================
+  await runTest('ML', 'Research uses the same N-minute entry and exact expiry candle', () => {
+    const candles = makeM1TestCandles('EUR/USD', 3000);
+    const samples = researchEngine.extractFeatures(candles, 15);
+    if (samples.length < 30) {
+      throw new Error(`Expected enough eligible 15m observations, received ${samples.length}.`);
+    }
+    for (const sample of samples.slice(0, 50)) {
+      if (sample.entryTimeframeMinutes !== 15 || sample.entryTimeMs % (15 * 60_000) !== 0) {
+        throw new Error('Research sample is not aligned to its 15-minute starting candle.');
+      }
+      if (sample.entryTimeMs - (sample.candle.timestampMs + 60_000) !== 180_000) {
+        throw new Error('Research decision was not made exactly three minutes before entry.');
+      }
+      if (sample.exitCandleTimeMs + 60_000 !== sample.expiryTimeMs) {
+        throw new Error('Research settlement used a candle after the exact expiry minute.');
+      }
+    }
+  });
+
   await runTest('ML', 'Purged Walk-Forward Splits & Embargo Verification', () => {
     const candles = makeM1TestCandles('EUR/USD', 12000);
     const exp = researchEngine.runWalkForwardExperiment('EUR/USD', candles, 'momentum_5', 10, 1, { allowTestFixtures: true });
