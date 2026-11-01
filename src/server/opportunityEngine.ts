@@ -27,7 +27,7 @@ import {
   wilsonLowerBound,
 } from "./evolutionEngine.js";
 import { isForexMarketIntervalOpen, isForexMarketOpenAt } from "./marketHours.js";
-import { getNextCandleOpenMs } from "./tradingClock.js";
+import { ADVANCE_NOTICE_MS, getNextCandleOpenMs } from "./tradingClock.js";
 
 const REAL_SOURCES = new Set(["biquote", "dukascopy", "yahoo", "imported"]);
 const M1_MS = 60_000;
@@ -57,6 +57,7 @@ interface HistoricalFeatureRow {
 interface PairContext {
   symbol: ForexSymbol;
   candles: Candle[];
+  timestampIndex: Map<number, number>;
   currentFeatures: number[];
   currentPrice: number;
   previous: Candle;
@@ -206,24 +207,29 @@ export function evaluateOpportunityHoldout(
       ![5, 10, 15, 20, 25, 30].includes(horizon)) {
     throw new Error("A valid holdout boundary and supported horizon are required.");
   }
+  const timestampIndex = new Map<number, number>();
+  candles.forEach((candle, index) => timestampIndex.set(candle.timestampMs, index));
   let wins = 0;
   let losses = 0;
   let scratches = 0;
   let busyUntilMs = -Infinity;
 
   for (const row of historicalRows) {
-    if (row.index < holdoutStartIndex) continue;
-
-    const entryIndex = row.index + 1;
-    const exitIndex = row.index + horizon;
-    if (entryIndex >= candles.length || exitIndex >= candles.length) continue;
-    const entryTimeMs = candles[entryIndex].timestampMs;
+    if (row.index < holdoutStartIndex || row.index >= candles.length) continue;
+    const decisionTimeMs = candles[row.index].timestampMs + M1_MS;
+    const entryTimeMs = getNextCandleOpenMs(decisionTimeMs, horizon);
+    // Match the actual bot contract: decision exactly three minutes before
+    // an aligned N-minute entry candle. Non-matching M1 rows are not trades.
+    if (entryTimeMs - decisionTimeMs !== ADVANCE_NOTICE_MS) continue;
     const expiryTimeMs = entryTimeMs + horizon * M1_MS;
     if (entryTimeMs < busyUntilMs) continue;
-    if (candles[exitIndex].timestampMs !== expiryTimeMs - M1_MS) continue;
     if (!isForexMarketIntervalOpen(entryTimeMs, expiryTimeMs)) continue;
 
-    // Only evaluate a hypothesis at a valid, non-overlapping holdout decision point.
+    const entryIndex = timestampIndex.get(entryTimeMs);
+    const exitIndex = timestampIndex.get(expiryTimeMs - M1_MS);
+    if (entryIndex === undefined || exitIndex === undefined || exitIndex <= entryIndex) continue;
+
+    // Only evaluate the hypothesis at an eligible, non-overlapping decision point.
     const direction = directionAt(row);
     if (!direction) continue;
 
@@ -245,7 +251,7 @@ export function evaluateOpportunityHoldout(
   const sampleSize = wins + losses;
   const winRate = sampleSize ? wins / sampleSize : null;
   // One-sided Wilson bound with a conservative Bonferroni-style correction
-  // for selecting among up to 600 pair/family/horizon candidates per batch.
+  // for up to 600 pair/family/horizon opportunities per batch.
   const lowerBound = sampleSize >= MIN_ANALOGUES_FOR_SHORTLIST
     ? wilsonLowerBound(wins, sampleSize, 3.8)
     : null;
@@ -550,6 +556,8 @@ export class OpportunityEngine {
     const currentFeatures = researchEngine.extractCausalFeatureVector(
       latest, previous, closes, ema9, ema21, rsi14, candles.length - 1
     );
+    const timestampIndex = new Map<number, number>();
+    candles.forEach((candle, index) => timestampIndex.set(candle.timestampMs, index));
 
     // Build historical feature rows only within uninterrupted real M1 segments.
     // Each row must have 60 causal bars behind it and 30 fully observed bars ahead.
@@ -590,6 +598,7 @@ export class OpportunityEngine {
     return {
       symbol,
       candles,
+      timestampIndex,
       currentFeatures,
       currentPrice: latest.close,
       previous,
