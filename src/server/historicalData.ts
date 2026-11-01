@@ -60,22 +60,31 @@ class HistoricalDataStore {
     }
   }
 
-  public getCandles(symbol: ForexSymbol, limit = MAX_CANDLES_PER_PAIR): Candle[] {
+  /** Read only the newest monthly partitions needed for a bounded research window. */
+  public getLatestCandles(symbol: ForexSymbol, limit = 120_000): Candle[] {
     try {
+      if (!Number.isFinite(limit) || limit < 1) return [];
       if (!fs.existsSync(ROOT)) return [];
+      const boundedLimit = Math.max(1, Math.min(Math.floor(limit), MAX_CANDLES_PER_PAIR));
       const prefix = this.prefixFor(symbol);
       const months = fs.readdirSync(ROOT)
         .filter(name => name.startsWith(prefix) && /^\d{6}\.json$/.test(name.slice(prefix.length)))
         .map(name => name.slice(prefix.length, -5))
         .sort();
       const candles: Candle[] = [];
-      for (const month of months) candles.push(...this.readMonth(symbol, month));
+      for (let index = months.length - 1; index >= 0 && candles.length < boundedLimit; index--) {
+        candles.push(...this.readMonth(symbol, months[index]));
+      }
       candles.sort((a, b) => a.timestampMs - b.timestampMs);
-      return candles.slice(-Math.max(1, Math.min(limit, MAX_CANDLES_PER_PAIR)));
+      return candles.slice(-boundedLimit);
     } catch (error) {
-      console.error(`[HistoricalData] Failed to list ${symbol} history:`, error);
+      console.error(`[HistoricalData] Failed to read latest ${symbol} research window:`, error);
       return [];
     }
+  }
+
+  public getCandles(symbol: ForexSymbol, limit = MAX_CANDLES_PER_PAIR): Candle[] {
+    return this.getLatestCandles(symbol, limit);
   }
 
   public importCandles(symbol: ForexSymbol, input: unknown): HistoricalImportResult {
