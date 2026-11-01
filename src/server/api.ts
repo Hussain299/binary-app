@@ -362,6 +362,7 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
           `Forward-paper approval remains separate and requires the full independent 300-outcome gate.`,
         ],
         researchBatchId: jobId,
+        status: 'COMPLETED',
         symbol,
         bestValidationExpectedValueUnits: bestValidation?.discoveryMetrics?.validationExpectedValueUnits ?? 0,
         holdoutPeriod: consumedHoldout ? { start: consumedHoldout.startUtc, end: consumedHoldout.endUtc } : undefined,
@@ -371,6 +372,37 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
       job.status = 'FAILED';
       job.finishedAt = new Date().toISOString();
       job.error = error?.message || 'Strategy search failed.';
+
+      // Record failed attempts too. Once a holdout was reserved, a failed batch
+      // still consumed that period and it must never be silently forgotten.
+      const alreadyRecorded = db.getGenerations().some(record => record.researchBatchId === jobId);
+      if (!alreadyRecorded) {
+        const consumedHoldout = db.getResearchHoldoutWindow(jobId);
+        const failedRecord: EvolutionGeneration = {
+          generation: batchGeneration,
+          timestamp: job.finishedAt,
+          totalExperiments: job.completed,
+          acceptedCount: job.passedHistorical,
+          rejectedCount: job.rejected,
+          topExperimentId: null,
+          bestF1Score: 0,
+          summary: `Evolution batch ${jobId} failed for ${symbol} after ${job.completed}/300 candidates. No success or accuracy is inferred from the partial run. ${consumedHoldout ? 'Its reserved holdout remains permanently consumed.' : 'No holdout was reserved before failure.'} Error: ${job.error}`,
+          lessonsLearned: [
+            `Failed after ${job.completed} candidates; ${job.passedHistorical} historical passes, ${job.insufficientSample} insufficient-sample candidates and ${job.rejected} rejected.`,
+            consumedHoldout
+              ? `Consumed holdout: ${consumedHoldout.startUtc} to ${consumedHoldout.endUtc}; this interval cannot be reused.`
+              : 'No test interval was reserved, so no new holdout period was consumed.',
+          ],
+          researchBatchId: jobId,
+          status: 'FAILED',
+          symbol,
+          bestValidationExpectedValueUnits: 0,
+          holdoutPeriod: consumedHoldout
+            ? { start: consumedHoldout.startUtc, end: consumedHoldout.endUtc }
+            : undefined,
+        };
+        db.addGeneration(failedRecord);
+      }
     });
 
     // Keep only the most recent jobs in memory.
