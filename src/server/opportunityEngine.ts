@@ -840,8 +840,8 @@ export class OpportunityEngine {
       throw new Error("The manual entry reference must be within three recent average M1 ranges of the original snapshot price.");
     }
 
-    // Shift the complete analogue distribution by the manual entry adjustment.
-    // The observed path shape is retained; this is a scenario revision, not a fresh quote.
+    // Shift the analogue path only to render a bounded manual entry scenario.
+    // This transformed path is not an independent historical holdout observation.
     const priceShift = requestedEntryPrice - opportunity.proposedEntryPrice;
     const terminalPrices = opportunity.forecast.terminalPrices.map(price => price + priceShift);
     const shiftedPoints = opportunity.forecast.points.map(point => ({
@@ -852,7 +852,6 @@ export class OpportunityEngine {
       q75: point.q75 + priceShift,
       q90: point.q90 + priceShift,
     }));
-
     const wins = terminalPrices.filter(price =>
       direction === "BUY" ? price > requestedEntryPrice : price < requestedEntryPrice
     ).length;
@@ -860,9 +859,29 @@ export class OpportunityEngine {
       Math.abs(price - requestedEntryPrice) > 1e-12
     ).length;
     const winRate = decisive ? wins / decisive : null;
-    const lower = decisive >= MIN_ANALOGUES_FOR_SHORTLIST ? wilson(wins, decisive) : null;
+    const analogueLower = decisive >= MIN_ANALOGUES_FOR_FORECAST ? wilson(wins, decisive) : null;
+    const analogueExpectedValue = analogueLower === null
+      ? null
+      : analogueLower * (PAYOUT_FLOOR / 100) - (1 - analogueLower);
+
+    const directionChanged = direction !== opportunity.direction;
+    const entryChanged = Math.abs(priceShift) > tickSize / 2;
+    const independentHoldoutStillApplies = !directionChanged && !entryChanged;
+    const holdoutSampleSize = independentHoldoutStillApplies
+      ? opportunity.audit.holdoutSampleSize
+      : 0;
+    const holdoutWins = independentHoldoutStillApplies ? opportunity.audit.holdoutWins : 0;
+    const holdoutLosses = independentHoldoutStillApplies ? opportunity.audit.holdoutLosses : 0;
+    const holdoutScratches = independentHoldoutStillApplies ? opportunity.audit.holdoutScratches : 0;
+    const holdoutWinRate = independentHoldoutStillApplies ? opportunity.audit.holdoutWinRate : null;
+    const holdoutLower = independentHoldoutStillApplies
+      ? opportunity.audit.holdoutLowerConfidenceBound
+      : null;
+    const holdoutExpectedValue = independentHoldoutStillApplies
+      ? opportunity.audit.holdoutExpectedValueLowerBound
+      : null;
+
     const breakEven = opportunity.forecast.payoutBreakEvenProbability;
-    const expectedValue = lower === null ? null : lower * (PAYOUT_FLOOR / 100) - (1 - lower);
     const entryMs = Date.parse(opportunity.entryTimeUtc);
     const expiryMs = Date.parse(opportunity.expiryTimeUtc);
     const scheduleValid = Number.isFinite(entryMs) &&
@@ -872,24 +891,45 @@ export class OpportunityEngine {
       (opportunity.forecast.meanDistance ?? Infinity) <= 0.45 &&
       scheduleValid;
     const activationGate = Math.abs(opportunity.rawHypothesisScore) >= opportunity.activationThreshold;
-    const counterEvidence = [
-      "Human direction override: this is a revised hypothesis, not the original model recommendation.",
-      "A manual entry adjustment shifts the analogue path distribution; it is not a new executable market quote.",
-    ];
-    const reasons = lower === null
-      ? ["Fewer than 100 decisive historical analogue outcomes remain after excluding ties."]
-      : !dataAndSimilarityGate
-        ? ["The revised hypothesis failed the original data-quality, analogue-similarity or market-hours gate."]
-        : !activationGate
-          ? ["The original hypothesis activation score did not clear its threshold; a direction override cannot manufacture a setup."]
-          : lower > breakEven
-            ? ["Human-modified direction and entry reference clear the historical analogue lower-bound check; paper-forward validation is still required."]
-            : ["The human-modified scenario does not clear the payout-adjusted conservative lower-bound check."];
-    const status: OpportunityAudit["status"] = lower === null
+
+    const reasons = !independentHoldoutStillApplies
+      ? ["The human changed direction or entry reference. The original model's holdout cannot validate a different human hypothesis; a new independent test is required."]
+      : holdoutSampleSize < MIN_ANALOGUES_FOR_SHORTLIST || holdoutLower === null
+        ? ["The original later chronological holdout did not contain the required 100 decisive outcomes."]
+        : !dataAndSimilarityGate
+          ? ["The revised hypothesis failed the original data-quality, analogue-similarity or market-hours gate."]
+          : !activationGate
+            ? ["The original hypothesis activation score did not clear its threshold."]
+            : holdoutLower > breakEven
+              ? ["The unchanged hypothesis retains its independent later holdout approval. Human review remains paper-only."]
+              : ["The independent holdout lower bound does not clear payout-adjusted break-even."];
+
+    const status = !independentHoldoutStillApplies ||
+      holdoutSampleSize < MIN_ANALOGUES_FOR_SHORTLIST ||
+      holdoutLower === null
       ? "INSUFFICIENT_EVIDENCE"
-      : dataAndSimilarityGate && activationGate && lower > breakEven
-        ? "SHORTLISTED"
-        : "REJECTED";
+      : !dataAndSimilarityGate || !activationGate || holdoutLower <= breakEven
+        ? "REJECTED"
+        : "SHORTLISTED";
+
+    const counterEvidence = [
+      "The graph distribution is built from older training analogues and must not be confused with the later holdout result.",
+      ...(directionChanged ? ["Direction was changed by a human; the original direction's holdout cannot be reused."] : []),
+      ...(entryChanged ? ["Entry reference was changed by a human; the original entry-level holdout cannot be reused."] : []),
+      ...(opportunity.forecast.meanDistance !== null && opportunity.forecast.meanDistance > 0.35
+        ? ["Training analogues have only moderate similarity to the current state."]
+        : []),
+    ];
+    const edgeScore = holdoutExpectedValue === null
+      ? 0
+      : Math.max(0, holdoutExpectedValue) * 350;
+    const similarityScore = opportunity.forecast.meanDistance === null
+      ? 0
+      : Math.max(0, 1 - opportunity.forecast.meanDistance / 0.45) * 20;
+    const rankScore = status === "SHORTLISTED"
+      ? Number(Math.min(100, edgeScore + similarityScore + Math.min(1, Math.abs(opportunity.rawHypothesisScore)) * 10).toFixed(2))
+      : 0;
+
     const revisedAt = new Date().toISOString();
     const id = `opp_rev_${stableHash(opportunity.id + "|" + direction + "|" + requestedEntryPrice.toPrecision(12) + "|" + revisedAt).slice(0, 16)}`;
     return {
@@ -908,12 +948,19 @@ export class OpportunityEngine {
         terminalPrices,
         analogueCount: decisive,
         winRate: winRate === null ? null : Number(winRate.toFixed(4)),
-        lowerConfidenceBound: lower === null ? null : Number(lower.toFixed(4)),
-        expectedValueLowerBound: expectedValue === null ? null : Number(expectedValue.toFixed(4)),
+        lowerConfidenceBound: analogueLower === null ? null : Number(analogueLower.toFixed(4)),
+        expectedValueLowerBound: analogueExpectedValue === null ? null : Number(analogueExpectedValue.toFixed(4)),
       },
       audit: {
         status,
-        rankScore: status === "SHORTLISTED" ? Number(Math.max(0, expectedValue! * 350 + 10).toFixed(2)) : 0,
+        rankScore,
+        holdoutSampleSize,
+        holdoutWins,
+        holdoutLosses,
+        holdoutScratches,
+        holdoutWinRate,
+        holdoutLowerConfidenceBound: holdoutLower,
+        holdoutExpectedValueLowerBound: holdoutExpectedValue,
         reasons,
         counterEvidence,
         auditedAt: revisedAt,
@@ -927,7 +974,6 @@ export class OpportunityEngine {
         entryPrice: requestedEntryPrice,
       },
     };
-  }
-}
+  }}
 
 export const opportunityEngine = new OpportunityEngine();
