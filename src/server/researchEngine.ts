@@ -1113,7 +1113,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       // be treated as known past. The next test must be wholly beyond it.
       const newSegmentStart = ordered.findIndex(c => c.timestampMs >= previousHoldoutEndMs - 5_000);
       if (newSegmentStart < 0) {
-        throw new Error('No candles exist after the last consumed holdout window. Import at least 30,000 new M1 candles before another evolutionary batch.');
+        throw new Error('No candles exist after the last consumed holdout window. Import at least 60,000 new M1 candles before another evolutionary batch.');
       }
       const newSegmentLength = ordered.length - newSegmentStart;
       if (newSegmentLength < MIN_HISTORY) {
