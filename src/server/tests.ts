@@ -4,7 +4,7 @@
  * Research Trinity Audits, and System State.
  */
 
-import { Candle, ForexSymbol, ResearchSignal, VerificationTestResult } from '../types/index.js';
+import { Candle, ForexSymbol, ResearchSignal, SynthesizedStrategyGene, VerificationTestResult } from '../types/index.js';
 import { dataFeedEngine } from './dataFeeds.js';
 import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
@@ -132,6 +132,54 @@ export async function runAllVerificationTests(): Promise<{
     }
     if (doesResearchHoldoutOverlap(windows, otherPair, start, overlapEnd)) {
       throw new Error('Holdout reservations must be isolated by currency pair.');
+    }
+  });
+
+  await runTest('ML', 'Each genome controls its own inherited activation threshold', () => {
+    const candles = makeM1TestCandles('EUR/USD', 120);
+    const candle = candles[candles.length - 1];
+    const previous = candles[candles.length - 2];
+    const closes = candles.map(item => item.close);
+    const ema9 = researchEngine.calculateEMA(closes, 9);
+    const ema21 = researchEngine.calculateEMA(closes, 21);
+    const rsi14 = researchEngine.calculateRSI(closes, 14);
+    const makeGene = (threshold: number): SynthesizedStrategyGene => ({
+      id: 'threshold-' + threshold,
+      name: 'Threshold test',
+      code: '',
+      generation: 1,
+      mathematicalFormula: 'constant activation test',
+      parents: [],
+      mutationRate: 0.2,
+      nonLinearOperator: 'tanh_polynomial',
+      genome: {
+        version: 1,
+        expression: { kind: 'constant', value: 1.55 },
+        activationThreshold: threshold,
+        signature: 'constant-1.55-' + threshold,
+        complexity: 1,
+      },
+      symbol: 'EUR/USD',
+      optimalHorizonMinutes: 5,
+      sessionAffinity: 'ALL',
+      verifiedAccuracy: 0,
+      sampleCount: 0,
+      status: 'EXPERIMENTING',
+      scientificHypothesis: 'Test threshold execution.',
+      whyHumansMissThis: 'Not a trading candidate.',
+      createdAt: new Date().toISOString(),
+    });
+    const permissive = researchEngine.evaluateSynthesizedGeneSignal(
+      makeGene(0.64), candle, previous, closes, ema9, ema21, rsi14
+    );
+    const strict = researchEngine.evaluateSynthesizedGeneSignal(
+      makeGene(0.70), candle, previous, closes, ema9, ema21, rsi14
+    );
+    if (!permissive.shouldTrigger) {
+      throw new Error('The 0.64 genome threshold should admit an activation score near 0.65.');
+    }
+    if (strict.shouldTrigger) {
+      throw new Error('The 0.70 genome threshold should reject the same activation score.');
     }
   });
 
