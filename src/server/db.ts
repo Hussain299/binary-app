@@ -27,6 +27,7 @@ import {
   EpisodicTradeMemory,
   BetaPosterior,
   NeighborAssessment,
+  MarketRegimeSnapshot,
   updateBetaPosterior,
   bayesianUcbScore,
 } from './evolutionEngine.js';
@@ -44,6 +45,8 @@ interface DatabaseSchema {
   strategyPerformance: Record<string, StrategyPerformanceRecord>;
   /** Durable, prediction-time market contexts for settled WIN/LOSS observations. */
   episodicMemory: EpisodicTradeMemory[];
+  /** Latest measured regime state per pair; telemetry is sourced from the decision engine. */
+  marketRegimes: Record<string, MarketRegimeSnapshot>;
   /** Global idempotency ledger; prevents replayed settlement events from retraining state. */
   processedOutcomeIds: string[];
   cronState: {
@@ -82,6 +85,7 @@ class DatabaseService {
         if (!Array.isArray(parsed.lossAutopsies)) parsed.lossAutopsies = [];
         if (!parsed.strategyPerformance || typeof parsed.strategyPerformance !== 'object') parsed.strategyPerformance = {};
         if (!Array.isArray(parsed.episodicMemory)) parsed.episodicMemory = [];
+        if (!parsed.marketRegimes || typeof parsed.marketRegimes !== 'object') parsed.marketRegimes = {};
         if (!Array.isArray(parsed.processedOutcomeIds)) parsed.processedOutcomeIds = [];
         // Historical versions wrote fabricated strategy accuracy values. Never trust them
         // without stored untouched-test evidence; quarantine all such legacy candidates.
@@ -216,6 +220,7 @@ class DatabaseService {
       lossAutopsies: [],
       strategyPerformance: {},
       episodicMemory: [],
+      marketRegimes: {},
       processedOutcomeIds: [],
       cronState: {
         lastRun: null,
@@ -930,6 +935,21 @@ class DatabaseService {
 
   public getEpisodicMemoryCount(): number {
     return (this.state.episodicMemory || []).length;
+  }
+
+  public updateMarketRegime(symbol: string, session: MarketRegimeSnapshot['session'], assessment: Omit<MarketRegimeSnapshot, 'symbol' | 'session' | 'assessedAt'>): void {
+    if (!this.state.marketRegimes) this.state.marketRegimes = {};
+    this.state.marketRegimes[symbol] = {
+      ...assessment,
+      symbol,
+      session,
+      assessedAt: new Date().toISOString(),
+    };
+    this.scheduleSave();
+  }
+
+  public getMarketRegimes(): MarketRegimeSnapshot[] {
+    return Object.values(this.state.marketRegimes || {}).sort((a, b) => a.symbol.localeCompare(b.symbol));
   }
 
   // Autonomous Forensic Loss Autopsies & Self-Learning
