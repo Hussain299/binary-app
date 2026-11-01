@@ -15,7 +15,7 @@ import {
 } from '../types/index.js';
 import { db } from './db.js';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
-import { getSessionFromTimestamp } from './dataFeeds.js';
+import { getSessionFromTimestamp, isForexMarketOpenAt, isForexMarketIntervalOpen } from './marketHours.js';
 import { ADVANCE_NOTICE_MS, CLOCK_ALIGNMENT_TOLERANCE_MS, MAX_DECISION_PROCESSING_DELAY_MS, M1_CANDLE_MS, getNextCandleOpenMs, isAlignedCandleOpen, TradingTimeframeMinutes } from './tradingClock.js';
 
 export interface SignalCreationParams {
@@ -109,6 +109,12 @@ export class EntryExitEngine {
     // exact aligned boundary after checking the closed M1 decision candle is T-3m.
     const isTest = params.ruleFamily.startsWith('test_');
     const signalCandleMs = params.signalCandle.timestampMs || Date.now();
+    if (!isTest && !isForexMarketOpenAt(now)) {
+      throw new Error('Spot FX market is closed for the weekend; new paper signals are prohibited.');
+    }
+    if (!isTest && !isForexMarketOpenAt(signalCandleMs)) {
+      throw new Error('The signal candle timestamp falls outside the open FX market week.');
+    }
     const entryTimeframeMinutes = params.entryTimeframeMinutes ?? 5;
     if (!isTest && params.entryTimeframeMinutes !== undefined && entryTimeframeMinutes !== expiryMinutes) {
       throw new Error('The research entry timeframe and expiry horizon must match so training and forward outcomes use the same contract.');
@@ -141,6 +147,9 @@ export class EntryExitEngine {
       }
     }
     const nextCandleCloseMs = nextCandleOpenMs + (expiryMinutes * 60 * 1000);
+    if (!isTest && !isForexMarketIntervalOpen(nextCandleOpenMs, nextCandleCloseMs)) {
+      throw new Error('The complete entry-to-expiry interval must remain inside open spot-FX market hours.');
+    }
 
     const candleOpenTimeUtc = new Date(nextCandleOpenMs).toISOString();
     const candleCloseTimeUtc = params.candleCloseTimeUtc || new Date(nextCandleCloseMs).toISOString();
@@ -285,7 +294,10 @@ export class EntryExitEngine {
    * Advances states through the causal state machine.
    */
   public evaluateSignals(candlesMap: Record<ForexSymbol, Candle[]>, includeTest: boolean = false): ResearchSignal[] {
-    const activeSignals = db.getActiveSignals(includeTest);
+    const marketOpen = isForexMarketOpenAt(Date.now());
+    const activeSignals = db.getActiveSignals(includeTest).filter(signal =>
+      marketOpen || (includeTest && signal.ruleFamily.startsWith('test_'))
+    );
     const updatedSignals: ResearchSignal[] = [];
 
     for (const signal of activeSignals) {
