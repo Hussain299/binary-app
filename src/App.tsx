@@ -136,7 +136,7 @@ export default function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   return (
-    <div className="app-shell sf-app-shell relative flex h-[100dvh] w-full min-w-0 flex-col overflow-hidden text-neutral-100 antialiased font-sans">
+    <div className="app-shell sf-app-shell relative flex min-h-[100dvh] w-full min-w-0 flex-col text-neutral-100 antialiased font-sans">
       {/* Real-time In-App Signal Alert Banner */}
       <NotificationBanner
         notification={activeNotification}
@@ -155,7 +155,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
+      <div className="flex flex-1 min-w-0 items-stretch">
         {/* Navigation Sidebar (Desktop persistent, mobile collapsible drawer) */}
         <Sidebar
           activeTab={activeTab}
@@ -168,8 +168,8 @@ export default function App() {
         />
 
         {/* Dynamic View Viewport */}
-        <main className="app-main min-w-0 min-h-0 flex h-full flex-1 flex-col overflow-hidden bg-transparent">
-          <div key={activeTab} className={`sf-view-stage ${activeTab === 'terminal' ? 'sf-view-stage--scroll' : ''}`}>
+        <main className="app-main min-w-0 flex flex-1 flex-col bg-transparent">
+          <div key={activeTab} className="sf-view-stage">
           {activeTab === 'terminal' && (
             <DailyAuditView
               signals={signals}
