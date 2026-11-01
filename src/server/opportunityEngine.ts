@@ -375,70 +375,91 @@ function auditOpportunity(
   rawScore: number,
   threshold: number,
   forecast: OpportunityForecast,
+  holdout: HoldoutMetrics,
   marketDataQuality: number,
   scheduleValid: boolean
 ): OpportunityAudit {
   const reasons: string[] = [];
   const counterEvidence: string[] = [];
   const breakEven = forecast.payoutBreakEvenProbability;
+  const holdoutSampleSize = holdout.sampleSize;
+
+  const holdoutFields = {
+    holdoutSampleSize,
+    holdoutWins: holdout.wins,
+    holdoutLosses: holdout.losses,
+    holdoutScratches: holdout.scratches,
+    holdoutWinRate: holdout.winRate,
+    holdoutLowerConfidenceBound: holdout.lowerConfidenceBound,
+    holdoutExpectedValueLowerBound: holdout.expectedValueLowerBound,
+  };
 
   if (direction === "NO_TRADE") {
     reasons.push("The current hypothesis score did not clear its activation threshold.");
     return {
       status: "NO_TRADE",
       rankScore: 0,
+      ...holdoutFields,
       reasons,
       counterEvidence: ["The model did not identify a sufficiently directional setup."],
       auditedAt: new Date().toISOString(),
     };
   }
 
+  // The analogue archive is descriptive and supplies the graph only. Selection is
+  // exclusively based on a later, embargoed holdout with multiple-testing correction.
   if (!scheduleValid) {
     reasons.push("The proposed entry-to-expiry interval crosses a spot-FX market closure.");
   }
-  if (forecast.status !== "AVAILABLE") {
-    reasons.push("Insufficient real historical analogues to draw a forecast distribution.");
+  if (forecast.status !== "AVAILABLE" || forecast.analogueCount < MIN_ANALOGUES_FOR_FORECAST) {
+    reasons.push("Insufficient older real-market analogues to draw a reliable forecast distribution.");
   }
-  if (forecast.analogueCount < MIN_ANALOGUES_FOR_SHORTLIST) {
-    reasons.push(`Only ${forecast.analogueCount} independent analogue outcomes are available; at least ${MIN_ANALOGUES_FOR_SHORTLIST} are required for shortlisting.`);
-  }
-  if (forecast.meanDistance !== null && forecast.meanDistance > 0.45) {
-    reasons.push("The closest historical states are too dissimilar to support a strong analogy.");
+  if (forecast.meanDistance === null || forecast.meanDistance > 0.45) {
+    reasons.push("The closest older training analogues are too dissimilar to support a strong comparison.");
   }
   if (marketDataQuality < 70) {
     reasons.push("Recent one-minute market-data continuity is below the research quality threshold.");
   }
-  if (forecast.lowerConfidenceBound === null || forecast.lowerConfidenceBound <= breakEven) {
-    reasons.push("The conservative historical lower bound does not clear the payout-adjusted break-even probability.");
-  }
-  if (forecast.winRate !== null && forecast.winRate > breakEven && forecast.lowerConfidenceBound !== null && forecast.lowerConfidenceBound <= breakEven) {
-    counterEvidence.push("The point estimate clears break-even, but its conservative confidence bound does not.");
-  }
-  if (forecast.meanDistance !== null && forecast.meanDistance > 0.35) {
-    counterEvidence.push("Historical analogues have only moderate similarity to the current market state.");
-  }
   if (Math.abs(rawScore) < threshold) {
     reasons.push("Directional activation is too weak.");
   }
+  if (holdoutSampleSize < MIN_ANALOGUES_FOR_SHORTLIST || holdout.lowerConfidenceBound === null) {
+    reasons.push(`The later holdout has ${holdoutSampleSize} decisive outcomes; at least ${MIN_ANALOGUES_FOR_SHORTLIST} are required after the 30-minute embargo.`);
+  } else if (holdout.lowerConfidenceBound <= breakEven) {
+    reasons.push("The multiple-comparison-adjusted holdout lower bound does not clear the payout-adjusted break-even probability.");
+  }
+  if (
+    holdout.winRate !== null &&
+    holdout.winRate > breakEven &&
+    holdout.lowerConfidenceBound !== null &&
+    holdout.lowerConfidenceBound <= breakEven
+  ) {
+    counterEvidence.push("The later holdout point estimate clears break-even, but its multiple-comparison-adjusted lower bound does not.");
+  }
+  if (forecast.meanDistance !== null && forecast.meanDistance > 0.35) {
+    counterEvidence.push("The training analogues have only moderate similarity to the current market state.");
+  }
 
-  const rejectedForHardFailure = !scheduleValid || marketDataQuality < 70 ||
-    (forecast.meanDistance !== null && forecast.meanDistance > 0.45);
+  const hardFailure = !scheduleValid || marketDataQuality < 70 ||
+    forecast.meanDistance === null || forecast.meanDistance > 0.45 ||
+    Math.abs(rawScore) < threshold;
   const insufficient = forecast.status !== "AVAILABLE" ||
-    forecast.analogueCount < MIN_ANALOGUES_FOR_SHORTLIST ||
-    forecast.lowerConfidenceBound === null;
-  const clearedEdge = forecast.lowerConfidenceBound !== null &&
-    forecast.lowerConfidenceBound > breakEven;
-  const status = rejectedForHardFailure
+    forecast.analogueCount < MIN_ANALOGUES_FOR_FORECAST ||
+    holdoutSampleSize < MIN_ANALOGUES_FOR_SHORTLIST ||
+    holdout.lowerConfidenceBound === null;
+  const clearedIndependentEdge = holdout.lowerConfidenceBound !== null &&
+    holdout.lowerConfidenceBound > breakEven;
+  const status = hardFailure
     ? "REJECTED"
     : insufficient
       ? "INSUFFICIENT_EVIDENCE"
-      : clearedEdge && reasons.length === 0
+      : clearedIndependentEdge
         ? "SHORTLISTED"
         : "REJECTED";
 
-  const edgeScore = forecast.expectedValueLowerBound === null
+  const edgeScore = holdout.expectedValueLowerBound === null
     ? 0
-    : Math.max(0, forecast.expectedValueLowerBound) * 350;
+    : Math.max(0, holdout.expectedValueLowerBound) * 350;
   const similarityScore = forecast.meanDistance === null
     ? 0
     : Math.max(0, 1 - forecast.meanDistance / 0.45) * 20;
@@ -450,7 +471,8 @@ function auditOpportunity(
   return {
     status,
     rankScore,
-    reasons: reasons.length ? reasons : ["All configured research shortlist gates passed."],
+    ...holdoutFields,
+    reasons: reasons.length ? reasons : ["Independent later holdout, multiple-testing correction, data, analogue and schedule gates passed."],
     counterEvidence,
     auditedAt: new Date().toISOString(),
   };
@@ -576,6 +598,7 @@ export class OpportunityEngine {
     rawScore: number,
     threshold: number,
     horizon: Horizon,
+    holdout: HoldoutMetrics,
     strategyGeneId?: string
   ): TradeOpportunity {
     const direction: OpportunityDirection = Math.abs(rawScore) < threshold
@@ -591,6 +614,7 @@ export class OpportunityEngine {
       rawScore,
       threshold,
       forecast,
+      holdout,
       context.marketDataQuality,
       scheduleValid
     );
@@ -686,6 +710,17 @@ export class OpportunityEngine {
       if (!context) continue;
       for (const template of templates) {
         for (const horizon of HORIZONS) {
+          const scoreHypothesis = (features: number[]) => template.score(features);
+          const holdout = evaluateIndependentHoldout(
+            context,
+            horizon,
+            row => {
+              const historicalScore = scoreHypothesis(row.vector);
+              return Math.abs(historicalScore) < template.threshold
+                ? null
+                : historicalScore >= 0 ? "BUY" : "SELL";
+            }
+          );
           opportunities.push(this.createOpportunity(
             context,
             batchId,
@@ -693,9 +728,10 @@ export class OpportunityEngine {
             template.name,
             template.description,
             "EXPLORATORY_HEURISTIC",
-            template.score(context.currentFeatures),
+            scoreHypothesis(context.currentFeatures),
             template.threshold,
-            horizon
+            horizon,
+            holdout
           ));
         }
       }
@@ -719,6 +755,23 @@ export class OpportunityEngine {
         const signedScore = evaluation.direction === "BUY"
           ? evaluation.conviction
           : -evaluation.conviction;
+        const geneHoldout = evaluateIndependentHoldout(
+          context,
+          gene.optimalHorizonMinutes,
+          row => {
+            const historicalResult = researchEngine.evaluateSynthesizedGeneSignal(
+              gene,
+              context.candles[row.index],
+              context.candles[row.index - 1],
+              context.closes,
+              context.ema9,
+              context.ema21,
+              context.rsi14,
+              row.index
+            );
+            return historicalResult.shouldTrigger ? historicalResult.direction : null;
+          }
+        );
         opportunities.push(this.createOpportunity(
           context,
           batchId,
@@ -729,6 +782,7 @@ export class OpportunityEngine {
           evaluation.shouldTrigger ? signedScore : 0,
           gene.genome?.activationThreshold ?? 0.64,
           gene.optimalHorizonMinutes,
+          geneHoldout,
           gene.id
         ));
       }
