@@ -21,6 +21,12 @@ export interface RegimeAssessment {
   reason: string;
 }
 
+export interface MarketRegimeSnapshot extends RegimeAssessment {
+  symbol: string;
+  session: MarketSessionId;
+  assessedAt: string;
+}
+
 export interface BetaPosterior {
   alpha: number;
   beta: number;
