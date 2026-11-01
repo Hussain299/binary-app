@@ -172,7 +172,7 @@
   backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
 }
 .sf-lab-pool { min-height:230px; }
-.sf-lab-detail { border-radius:17px; }
+.sf-lab-detail { border-radius:17px;overflow-x:hidden;overflow-y:auto; }
 .sf-filter-tab { border:1px solid transparent;border-radius:8px;transition:color 160ms ease,border-color 160ms ease,background 160ms ease; }
 .sf-filter-tab.bg-white\/10 { border-color:rgba(226,239,244,.09);background:rgba(255,255,255,.075);color:#f0f5f2; }
 .sf-opportunity-row { border:1px solid transparent;border-radius:12px;transition:transform 180ms cubic-bezier(.2,.8,.2,1),border-color 180ms ease,background 180ms ease,box-shadow 180ms ease; }

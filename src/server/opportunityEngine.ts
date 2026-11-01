@@ -959,7 +959,8 @@ export class OpportunityEngine {
   public reviseDirection(
     opportunity: TradeOpportunity,
     direction: "BUY" | "SELL",
-    requestedEntryPrice = opportunity.proposedEntryPrice
+    requestedEntryPrice = opportunity.proposedEntryPrice,
+    nowMs = Date.now()
   ): TradeOpportunity {
     if (opportunity.forecast.status !== "AVAILABLE" || opportunity.forecast.terminalPrices.length < MIN_ANALOGUES_FOR_SHORTLIST) {
       throw new Error("This opportunity has fewer than the required 100 historical paths to recalculate a direction safely.");
@@ -1022,7 +1023,7 @@ export class OpportunityEngine {
     const schedule = buildOpportunitySchedule(
       Date.parse(opportunity.snapshotAt),
       opportunity.horizonMinutes as Horizon,
-      Date.now()
+      nowMs
     );
     const scheduleMatchesStored = schedule.valid &&
       schedule.entryTimeMs === entryMs &&

@@ -397,16 +397,21 @@ export async function runAllVerificationTests(): Promise<{
   });
 
   await runTest('RESEARCH', 'Human direction revisions are separately audited and never overwrite the AI hypothesis', () => {
-    const now = new Date().toISOString();
-    let validEntryMs = Date.now() + 5 * 60_000;
+    // Simulate the exact candle-close moment deterministically; wall-clock test timing is irrelevant.
+    let snapshotMs = Math.ceil((Date.now() + 60_000) / 60_000) * 60_000;
+    let schedule = buildOpportunitySchedule(snapshotMs, 10, snapshotMs + 1_000);
     let scheduleSearchAttempts = 0;
-    while (!isForexMarketIntervalOpen(validEntryMs, validEntryMs + 10 * 60_000) && scheduleSearchAttempts < 4320) {
-      validEntryMs += 60_000;
+    while ((!schedule.exactAdvanceWindow || !schedule.marketIntervalOpen) && scheduleSearchAttempts < 4320) {
+      snapshotMs += 60_000;
+      schedule = buildOpportunitySchedule(snapshotMs, 10, snapshotMs + 1_000);
       scheduleSearchAttempts++;
     }
-    if (scheduleSearchAttempts >= 4320) {
-      throw new Error('Test could not locate a future open-FX entry interval.');
+    if (scheduleSearchAttempts >= 4320 || !schedule.valid) {
+      throw new Error('Test could not locate a fresh exact T-3 open-FX decision window.');
     }
+    const fixtureNowMs = snapshotMs + 1_000;
+    const now = new Date(fixtureNowMs).toISOString();
+    const validEntryMs = schedule.entryTimeMs;
     const terminalPrices = Array.from({ length: 120 }, (_, index) =>
       index < 80 ? 1.10100 + (index % 5) * 0.00001 : 1.09900 - (index % 5) * 0.00001
     );
@@ -423,8 +428,8 @@ export async function runAllVerificationTests(): Promise<{
       activationThreshold: 0.16,
       horizonMinutes: 10,
       generatedAt: now,
-      snapshotAt: now,
-      staleAfter: new Date(Date.now() + 180_000).toISOString(),
+      snapshotAt: new Date(snapshotMs).toISOString(),
+      staleAfter: new Date(snapshotMs + 25_000).toISOString(),
       entryTimeUtc: new Date(validEntryMs).toISOString(),
       expiryTimeUtc: new Date(validEntryMs + 10 * 60_000).toISOString(),
       snapshotPrice: 1.10000,
@@ -467,7 +472,7 @@ export async function runAllVerificationTests(): Promise<{
       humanDecision: { status: 'PENDING', decidedAt: now },
     };
 
-    const revisedBuy = opportunityEngine.reviseDirection(original, 'BUY');
+    const revisedBuy = opportunityEngine.reviseDirection(original, 'BUY', original.proposedEntryPrice, fixtureNowMs);
     if (revisedBuy.id === original.id ||
         revisedBuy.direction !== 'BUY' ||
         revisedBuy.humanDecision.parentOpportunityId !== original.id) {
@@ -477,14 +482,14 @@ export async function runAllVerificationTests(): Promise<{
       throw new Error('A direction with sufficient conservative historical evidence should remain shortlist-eligible.');
     }
 
-    const revisedSell = opportunityEngine.reviseDirection(original, 'SELL');
+    const revisedSell = opportunityEngine.reviseDirection(original, 'SELL', original.proposedEntryPrice, fixtureNowMs);
     if (revisedSell.audit.status !== 'INSUFFICIENT_EVIDENCE' ||
         revisedSell.audit.holdoutSampleSize !== 0 ||
         revisedSell.forecast.lowerConfidenceBound === null ||
         revisedSell.forecast.lowerConfidenceBound >= revisedBuy.forecast.lowerConfidenceBound!) {
       throw new Error('A human direction override must not reuse the original model direction\'s holdout approval.');
     }
-    const changedEntry = opportunityEngine.reviseDirection(original, 'BUY', original.proposedEntryPrice + 0.00002);
+    const changedEntry = opportunityEngine.reviseDirection(original, 'BUY', original.proposedEntryPrice + 0.00002, fixtureNowMs);
     if (changedEntry.audit.status !== 'INSUFFICIENT_EVIDENCE' ||
         changedEntry.audit.holdoutSampleSize !== 0) {
       throw new Error('A changed manual entry reference must receive fresh independent validation before shortlisting.');
