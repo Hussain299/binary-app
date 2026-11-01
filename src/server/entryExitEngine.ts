@@ -15,7 +15,7 @@ import {
 } from '../types/index.js';
 import { db } from './db.js';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
-import { getSessionFromTimestamp, isForexMarketOpenAt, isForexMarketIntervalOpen } from './marketHours.js';
+import { getSessionFromTimestamp, isForexMarketOpenAt, isForexMarketIntervalOpen, isForexSignalScheduleValid } from './marketHours.js';
 import { ADVANCE_NOTICE_MS, CLOCK_ALIGNMENT_TOLERANCE_MS, MAX_DECISION_PROCESSING_DELAY_MS, M1_CANDLE_MS, getNextCandleOpenMs, isAlignedCandleOpen, TradingTimeframeMinutes } from './tradingClock.js';
 
 export interface SignalCreationParams {
@@ -290,15 +290,52 @@ export class EntryExitEngine {
   }
 
   /**
+   * Cancels legacy persisted signals whose decision/entry/expiry schedule ever
+   * touched a closed FX interval. They are not scored and cannot be revived after
+   * the Sunday reopen. Valid pre-close signals remain eligible for exact-bar
+   * recovery if their data is still available.
+   */
+  public cancelSignalsOutsideForexWeek(): ResearchSignal[] {
+    const cancelled: ResearchSignal[] = [];
+    for (const signal of db.getActiveSignals()) {
+      const predictionTimeMs = Date.parse(signal.predictionTimeUtc);
+      const entryTimeMs = Date.parse(
+        signal.actualEntryTimeUtc || signal.candleOpenTimeUtc || signal.entryWindowStartUtc
+      );
+      const expiryTimeMs = Date.parse(
+        signal.plannedExitTimeUtc || signal.candleCloseTimeUtc || signal.entryWindowEndUtc
+      );
+      if (isForexSignalScheduleValid(predictionTimeMs, entryTimeMs, expiryTimeMs)) continue;
+
+      const previousState = signal.lifecycleState;
+      signal.lifecycleState = 'EXPIRED';
+      signal.outcomeResult = 'CANCELLED';
+      signal.netReturnUnits = null;
+      signal.actualExitTimeUtc = null;
+      signal.actualExitPrice = null;
+      signal.lifecycleHistory.push({
+        timestamp: new Date().toISOString(),
+        fromState: previousState,
+        toState: 'EXPIRED',
+        reason: 'Weekly FX market-hours guard cancelled a legacy signal whose decision, entry or expiry window fell outside the open market week. No WIN/LOSS was inferred and no learning update was recorded.',
+      });
+      db.updateSignal(signal);
+      cancelled.push(signal);
+    }
+    return cancelled;
+  }
+
+  /**
    * Evaluates active research signals against newly arrived completed candles.
    * Advances states through the causal state machine.
    */
   public evaluateSignals(candlesMap: Record<ForexSymbol, Candle[]>, includeTest: boolean = false): ResearchSignal[] {
     const marketOpen = isForexMarketOpenAt(Date.now());
+    const cancelledOutsideHours = this.cancelSignalsOutsideForexWeek();
     const activeSignals = db.getActiveSignals(includeTest).filter(signal =>
       marketOpen || (includeTest && signal.ruleFamily.startsWith('test_'))
     );
-    const updatedSignals: ResearchSignal[] = [];
+    const updatedSignals: ResearchSignal[] = [...cancelledOutsideHours];
 
     for (const signal of activeSignals) {
       const candles = candlesMap[signal.symbol];
