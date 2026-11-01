@@ -71,7 +71,7 @@ export const ResearchAgentsView: React.FC<ResearchAgentsViewProps> = ({ reviews 
               selectedRole === 'SKEPTICAL_AUDITOR' ? 'bg-neutral-800 text-amber-400' : 'text-neutral-400'
             }`}
           >
-            Skeptical Auditor
+            Auditor
           </button>
         </div>
       </div>
