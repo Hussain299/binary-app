@@ -643,40 +643,27 @@ apiRouter.post('/signals/clear-history', (_req: Request, res: Response) => {
   });
 });
 
-// POST /api/signals/evaluate — Step causal entry/exit engine on active signals
+// POST /api/signals/evaluate — Reconcile due paper contracts from trusted stored M1 candles.
 apiRouter.post('/signals/evaluate', async (_req: Request, res: Response) => {
-  // Clean up impossible legacy schedules without scoring them, even when the market is closed.
   const cancelledOutsideHours = entryExitEngine.cancelSignalsOutsideForexWeek();
-  // This manual endpoint is a second entry point into the exit engine; it must
-  // enforce the same weekly closure as the autonomous scheduler.
   const marketTime = dataFeedEngine.getMarketSessions();
-  if (!marketTime.marketOpen) {
-    return res.status(423).json({
-      error: 'Spot FX is closed for the weekend. Signal evaluation and settlement are paused.',
-      marketTime,
-      evaluatedCount: 0,
-      transitionedCount: 0,
-      completedOutcomesRecorded: 0,
-      legacySignalsCancelled: cancelledOutsideHours.length,
-    });
-  }
   try {
     const candlesMap: Record<ForexSymbol, any> = {} as any;
+    const trustedSources = new Set(['biquote', 'dukascopy', 'yahoo', 'imported']);
+
     for (const pair of FOREX_PAIRS) {
-      const { candles, source } = await dataFeedEngine.fetchCandles(pair, 60);
-      const newest = candles[candles.length - 1];
-      const ageMs = newest ? Date.now() - newest.timestampMs : Infinity;
-      const hasFreshRealData =
-        source !== 'synthetic' &&
-        !!newest &&
-        newest.source !== 'synthetic' &&
-        ['biquote', 'dukascopy', 'yahoo', 'imported'].includes(newest.source) &&
-        ageMs >= -60_000 &&
-        ageMs <= 120_000;
-      // Do not settle a pending trade using random continuity candles or stale data.
-      candlesMap[pair] = hasFreshRealData
-        ? candles.filter(c => c.source !== 'synthetic')
-        : [];
+      // During open hours, refresh the feed first. When closed or offline, use
+      // only the previously persisted genuine candles; never use synthetic bridges.
+      if (marketTime.marketOpen) {
+        try {
+          await dataFeedEngine.fetchCandles(pair, 100);
+        } catch (feedError: any) {
+          console.warn(`[Signals] Feed refresh failed for ${pair}; reconciling retained candles:`, feedError?.message || feedError);
+        }
+      }
+      candlesMap[pair] = db.getCandles(pair, 5000)
+        .filter(candle => trustedSources.has(candle.source))
+        .sort((a, b) => a.timestampMs - b.timestampMs);
     }
 
     const updated = entryExitEngine.evaluateSignals(candlesMap);
@@ -684,14 +671,14 @@ apiRouter.post('/signals/evaluate', async (_req: Request, res: Response) => {
       signal.lifecycleState === 'CLOSED' &&
       ['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult)
     );
-    // A settled outcome is written once to the forward journal and strategy
-    // ledger. recordStrategyOutcome de-duplicates signal IDs and uses only
-    // payout-aware stake units for the 300-outcome approval window.
+    // Both journal writes are idempotent by signal ID.
     for (const signal of completed) {
       db.recordForwardObservation(signal);
       db.recordStrategyOutcome(signal);
     }
     res.json({
+      marketTime,
+      legacySignalsCancelled: cancelledOutsideHours.length,
       evaluatedCount: db.getActiveSignals().length,
       transitionedCount: updated.length,
       completedOutcomesRecorded: completed.length,

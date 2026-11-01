@@ -438,11 +438,22 @@ export class AutonomousScheduler {
     this.cycleCount++;
 
     try {
-      const candlesMap: Record<ForexSymbol, Candle[]> = {} as any;
+      const lifecycleCandlesMap: Record<ForexSymbol, Candle[]> = {} as any;
+      const freshCandlesMap: Record<ForexSymbol, Candle[]> = {} as any;
+      const trustedSources = new Set(['biquote', 'dukascopy', 'yahoo', 'imported']);
       let totalCandlesFetched = 0;
 
-      // 1. Autonomous Market Sensing across all 8 forex pairs
+      // 1. Autonomous market sensing. Keep two deliberately separate views:
+      // - freshCandlesMap gates new hypotheses and entries;
+      // - lifecycleCandlesMap contains retained genuine M1 history for exact
+      //   entry/expiry reconciliation after feed gaps, app restarts, or weekends.
       for (const symbol of FOREX_PAIRS) {
+        freshCandlesMap[symbol] = [];
+        const readTrustedHistory = () => db.getCandles(symbol, 5000)
+          .filter(c => trustedSources.has(c.source))
+          .sort((a, b) => a.timestampMs - b.timestampMs);
+        lifecycleCandlesMap[symbol] = readTrustedHistory();
+
         try {
           const res = await dataFeedEngine.fetchCandles(symbol, 100);
           const newest = res.candles[res.candles.length - 1];
@@ -450,23 +461,25 @@ export class AutonomousScheduler {
           const isRealFreshFeed =
             res.source !== 'synthetic' &&
             !!newest &&
-            newest.source !== 'synthetic' &&
-            ['biquote', 'dukascopy', 'yahoo', 'imported'].includes(newest.source) &&
+            trustedSources.has(newest.source) &&
             ageMs >= -60_000 &&
             ageMs <= 120_000;
-          // The feed bridge may append random synthetic candles. Never allow those
-          // candles (or stale prices) into signal generation or execution evaluation.
-          candlesMap[symbol] = isRealFreshFeed
-            ? res.candles.filter(c => c.source !== 'synthetic')
+
+          // fetchCandles persists its response; reload the bounded trusted archive
+          // so outcome reconciliation can see the exact historic expiry minute.
+          lifecycleCandlesMap[symbol] = readTrustedHistory();
+          freshCandlesMap[symbol] = isRealFreshFeed
+            ? res.candles.filter(c => trustedSources.has(c.source))
             : [];
-          totalCandlesFetched += candlesMap[symbol].length;
+          totalCandlesFetched += freshCandlesMap[symbol].length;
         } catch (err: any) {
           console.error(`[Autopilot] Sensing failed for ${symbol}:`, err.message);
         }
       }
 
-      // 2. Step Causal Entry/Exit Engine for active trades
-      const updatedSignals = entryExitEngine.evaluateSignals(candlesMap);
+      // 2. Step lifecycle engine from retained genuine candles, even when the
+      // latest feed is stale. Fresh data remains mandatory for new signals.
+      const updatedSignals = entryExitEngine.evaluateSignals(lifecycleCandlesMap);
       if (updatedSignals.length > 0) {
         for (const sig of updatedSignals) {
           if (sig.lifecycleState === 'ACTIVE') {
@@ -483,26 +496,21 @@ export class AutonomousScheduler {
             // Closed-trade forensic diagnosis; generated antidotes remain unvalidated.
             // Every loss counts: investigate causal root-cause and evolve antidote strategy
             if (sig.outcomeResult === 'LOSS') {
-              const lastCandle = candlesMap[sig.symbol]?.[candlesMap[sig.symbol].length - 1] || ({
-                close: sig.actualExitPrice || sig.actualEntryPrice || 0,
-                high: sig.actualExitPrice || sig.actualEntryPrice || 0,
-                low: sig.actualExitPrice || sig.actualEntryPrice || 0,
-                open: sig.actualEntryPrice || 0,
-                volume: 100,
-                timestamp: new Date().toISOString(),
-                timestampMs: Date.now(),
-                source: 'dukascopy',
-                symbol: sig.symbol,
-              } as Candle);
-
-              const autopsy = researchEngine.recordLossObservation(sig, lastCandle);
-              sig.lossAutopsy = autopsy;
-              db.addLossAutopsy(autopsy);
-              db.updateSignal(sig);
+              const expiryCandle = lifecycleCandlesMap[sig.symbol]?.find(
+                candle => candle.timestamp === sig.actualExitTimeUtc
+              );
+              if (expiryCandle) {
+                const autopsy = researchEngine.recordLossObservation(sig, expiryCandle);
+                sig.lossAutopsy = autopsy;
+                db.addLossAutopsy(autopsy);
+                db.updateSignal(sig);
+              }
 
               this.logMind(
                 'AUDITOR',
-                `[LOSS OBSERVATION RECORDED]: ${sig.symbol} ${sig.direction} settled as LOSS. No causal explanation or strategy was invented. The outcome was added to the genome's forward ledger, Bayesian posterior and episodic memory.`,
+                expiryCandle
+                  ? `[LOSS OBSERVATION RECORDED]: ${sig.symbol} ${sig.direction} settled as LOSS. The exact expiry candle was added to diagnostics and the forward ledger.`
+                  : `[LOSS RECORDED]: ${sig.symbol} ${sig.direction} settled as LOSS, but the exact expiry candle is unavailable for diagnostics. No replacement candle was fabricated.`,
                 sig.symbol,
                 sig.id
               );
@@ -544,7 +552,7 @@ export class AutonomousScheduler {
             continue;
           }
 
-          const candles = (candlesMap[symbol] || []).filter(candle =>
+          const candles = (freshCandlesMap[symbol] || []).filter(candle =>
             candle.source !== 'synthetic' && candle.timestampMs + 60_000 <= nowMs
           );
           if (candles.length < 35) continue;

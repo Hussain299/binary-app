@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { AutopilotLog, MarketSessionInfo, ResearchSignal, SynthesizedStrategyGene, LossAutopsy, FOREX_PAIRS, StrategyPerformanceRecord } from '../../types/index.js';
 import { AutopilotStream } from '../AutopilotStream.tsx';
+import { SignalCard } from '../SignalCard.tsx';
 
 interface EvolutionTelemetry {
   timestamp: string;
@@ -442,31 +443,38 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     }
   };
 
-  // Overall Accuracy & Metrics
+  // Overall scorecard counts every verified forward paper outcome.
+  // Evolved-genome-only metrics remain separate for the Evolution review.
   const historySignals = signals.filter(s =>
     ['CLOSED', 'EXPIRED', 'INVALIDATED'].includes(s.lifecycleState)
   );
-  const completedSignals = signals.filter(
-    s => s.isNovelAiSynthesized === true &&
-      !!s.synthesizedGeneId &&
-      s.lifecycleState === 'CLOSED' &&
-      ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
+  const allCompletedSignals = signals.filter(s =>
+    s.lifecycleState === 'CLOSED' &&
+    ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
   );
-  const archivedRuleBasedOutcomes = signals.filter(
-    s => !s.isNovelAiSynthesized &&
-      s.lifecycleState === 'CLOSED' &&
-      ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
-  ).length;
-  const closedSignals = completedSignals.filter(s => ['WIN', 'LOSS'].includes(s.outcomeResult));
-  const totalWins = closedSignals.filter(s => s.outcomeResult === 'WIN').length;
-  const totalLosses = closedSignals.filter(s => s.outcomeResult === 'LOSS').length;
-  const calculatedWinRate =
-    closedSignals.length > 0
-      ? ((totalWins / closedSignals.length) * 100).toFixed(1)
-      : 'No scored forward outcomes';
+  const allScoredSignals = allCompletedSignals.filter(s => ['WIN', 'LOSS'].includes(s.outcomeResult));
+  const totalWins = allScoredSignals.filter(s => s.outcomeResult === 'WIN').length;
+  const totalLosses = allScoredSignals.filter(s => s.outcomeResult === 'LOSS').length;
+  const calculatedWinRate = allScoredSignals.length > 0
+    ? ((totalWins / allScoredSignals.length) * 100).toFixed(1)
+    : 'No scored forward outcomes';
   const totalNetReturnUnits = Number(
+    allCompletedSignals.reduce((acc, signal) => acc + (signal.netReturnUnits ?? 0), 0).toFixed(3)
+  );
+
+  const completedSignals = allCompletedSignals.filter(s =>
+    s.isNovelAiSynthesized === true && !!s.synthesizedGeneId
+  );
+  const evolvedScoredSignals = completedSignals.filter(s => ['WIN', 'LOSS'].includes(s.outcomeResult));
+  const evolvedTotalWins = evolvedScoredSignals.filter(s => s.outcomeResult === 'WIN').length;
+  const evolvedTotalLosses = evolvedScoredSignals.filter(s => s.outcomeResult === 'LOSS').length;
+  const evolvedCalculatedWinRate = evolvedScoredSignals.length > 0
+    ? ((evolvedTotalWins / evolvedScoredSignals.length) * 100).toFixed(1)
+    : 'No scored evolved outcomes';
+  const evolvedNetReturnUnits = Number(
     completedSignals.reduce((acc, signal) => acc + (signal.netReturnUnits ?? 0), 0).toFixed(3)
   );
+  const archivedRuleBasedOutcomes = allCompletedSignals.length - completedSignals.length;
 
   const activeSignals = signals.filter(s =>
     ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE', 'EXIT_PENDING'].includes(s.lifecycleState)
@@ -516,492 +524,171 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-transparent font-sans text-neutral-100">
-      {/* 1. TOP STATUS BAR: Zero clutter, essential numbers at a glance */}
-      <div className="bg-[#0f1722] border-b border-white/[0.07] px-3 sm:px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
-        {/* Shared T-3m entry schedule for all supported start candles */}
-        <div className="flex items-center gap-2.5">
-          <span className={`relative flex h-3 w-3 ${nextDecisionActive ? '' : 'opacity-50'}`}>
-            <span className={`absolute inline-flex h-full w-full rounded-full ${nextDecisionActive ? 'animate-ping bg-amber-400 opacity-75' : 'bg-emerald-400 opacity-30'}`} />
-            <span className={`relative inline-flex rounded-full h-3 w-3 ${nextDecisionActive ? 'bg-amber-400' : 'bg-emerald-500'}`} />
-          </span>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs sm:text-sm font-bold text-white uppercase tracking-wide">
-              {nextDecisionActive ? 'T−3m Decision Window:' : 'Next T−3m Decision:'}
-            </span>
-            <span className="text-sm sm:text-base font-extrabold font-mono text-emerald-400 tabular-nums">
-              {nextDecisionActive ? `closes in ${nextDecisionCountdown}` : `opens in ${nextDecisionCountdown}`}
-            </span>
-            <span className="text-[11px] text-neutral-400 font-mono hidden xs:inline">
-              {nextDecisionTimeframes} → {nextEntryIST}
-            </span>
-            <span
-              className={`px-2 py-0.5 rounded-full text-[10px] font-bold font-mono border flex items-center gap-1 ${
-                nextDecisionActive
-                  ? 'bg-amber-950/80 border-amber-500/80 text-amber-300 animate-pulse'
-                  : 'bg-neutral-900 border-neutral-800 text-neutral-400'
-              }`}
-              title="Signals are accepted only from a closed M1 candle exactly three minutes before an aligned 5–30 minute entry candle."
+      <section className="sf-signals-hero shrink-0 px-4 sm:px-6 py-5 sm:py-6">
+        <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-5">
+          <div className="min-w-0">
+            <div className="text-[10px] font-bold tracking-[.2em] text-emerald-300/80 uppercase">
+              SignalForge · Research workspace · Paper mode
+            </div>
+            <div className="mt-2 flex items-center gap-3 flex-wrap">
+              <h1 className="text-2xl sm:text-[30px] font-semibold tracking-[-.045em] text-white">
+                Signal monitor
+              </h1>
+              <span className="sf-signals-paper">PAPER ONLY</span>
+            </div>
+            <p className="mt-1.5 max-w-2xl text-xs sm:text-[13px] leading-6 text-slate-400">
+              Live research observations, exact entry windows and verified outcomes. Missing market data stays unscored.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 xl:justify-end">
+            <div className="min-w-[205px] rounded-xl border border-white/[.08] bg-white/[.035] px-4 py-3">
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-[.14em] text-slate-400">
+                <span className={`h-1.5 w-1.5 rounded-full ${nextDecisionActive ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                {nextDecisionActive ? 'Decision window closes' : 'Next decision window'}
+              </div>
+              <div className="mt-1.5 flex items-baseline gap-2">
+                <span className="font-mono text-xl font-semibold tabular-nums text-white">{nextDecisionCountdown}</span>
+                <span className="text-[10px] text-slate-500">T−3m</span>
+              </div>
+              <div className="mt-1 text-[10px] text-slate-500">
+                {nextDecisionTimeframes} · Entry {nextEntryIST}
+              </div>
+            </div>
+            <button
+              onClick={onEvaluateSignals}
+              disabled={isEvaluating}
+              className="sf-signals-sync"
+              title="Reconcile signals using trusted market candles"
             >
-              <Clock className="w-3 h-3 text-amber-400" />
-              {nextDecisionActive ? 'T−3m WINDOW ACTIVE' : '5–30M START CANDLES'}
-            </span>
+              <RefreshCw className={`h-3.5 w-3.5 ${isEvaluating ? 'animate-spin' : ''}`} />
+              {isEvaluating ? 'Syncing' : 'Sync outcomes'}
+            </button>
           </div>
         </div>
 
-        {/* Global Accuracy Pill */}
-        <div className="flex items-center gap-2">
-          <div className="px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-800/80 flex items-center gap-2">
-            <Target className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="text-xs font-bold text-emerald-300 font-mono">
-              {closedSignals.length ? `${calculatedWinRate}% Forward signal win rate` : 'No completed forward outcomes'}
-            </span>
-            <span className="text-[10px] text-neutral-400 font-mono hidden sm:inline">
-              ({totalWins}W / {totalLosses}L · n={closedSignals.length})
-            </span>
+        <div className="mt-5 grid grid-cols-2 xl:grid-cols-4 gap-2.5">
+          <div className="sf-signals-metric">
+            <span>Open / verifying</span>
+            <strong>{activeSignals.length}</strong>
+            <small>Scheduled, active or awaiting data</small>
           </div>
-
-          <button
-            onClick={onEvaluateSignals}
-            disabled={isEvaluating}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold text-neutral-200 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg transition-colors disabled:opacity-50"
-            title="Scan market and sync signals"
-          >
-            <RefreshCw className={`w-3 h-3 ${isEvaluating ? 'animate-spin text-emerald-400' : ''}`} />
-            <span className="hidden xs:inline">{isEvaluating ? 'Scanning...' : 'Sync'}</span>
-          </button>
+          <div className="sf-signals-metric">
+            <span>Settled observations</span>
+            <strong>{allCompletedSignals.length}</strong>
+            <small>Exact expiry candle verified</small>
+          </div>
+          <div className="sf-signals-metric">
+            <span>Win rate</span>
+            <strong>{allScoredSignals.length ? `${calculatedWinRate}%` : '—'}</strong>
+            <small>{totalWins} wins · {totalLosses} losses</small>
+          </div>
+          <div className="sf-signals-metric">
+            <span>Net paper return</span>
+            <strong className={totalNetReturnUnits > 0 ? 'text-emerald-300' : totalNetReturnUnits < 0 ? 'text-rose-300' : ''}>
+              {totalNetReturnUnits > 0 ? '+' : ''}{totalNetReturnUnits.toFixed(3)}
+            </strong>
+            <small>Stake units · assumed payout basis</small>
+          </div>
         </div>
-      </div>
+      </section>
 
-      {/* 2. SECONDARY CONTROLS & INFO BUTTONS */}
-      <div className="bg-[#0b1018] px-3 sm:px-5 py-2 border-b border-white/[0.07] flex flex-wrap items-center justify-between gap-2 shrink-0">
-        {/* Filters: Active | All | History */}
-        <div className="flex items-center gap-1 bg-neutral-900 p-1 rounded-lg border border-neutral-800 text-xs font-medium">
+      <div className="sf-signals-toolbar shrink-0 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-1 rounded-xl border border-white/[.07] bg-black/20 p-1">
           <button
             onClick={() => setFilterState('ACTIVE')}
-            className={`px-3 py-1 rounded-md transition-colors font-bold flex items-center gap-1.5 ${
-              filterState === 'ACTIVE'
-                ? 'bg-emerald-500 text-neutral-950 shadow-sm'
-                : 'text-neutral-400 hover:text-white'
-            }`}
+            className={`sf-signals-tab ${filterState === 'ACTIVE' ? 'is-active' : ''}`}
           >
-            <Zap className="w-3 h-3" />
-            <span>Active ({activeSignals.length})</span>
+            Open <span>{activeSignals.length}</span>
           </button>
-
           <button
             onClick={() => setFilterState('ALL')}
-            className={`px-3 py-1 rounded-md transition-colors ${
-              filterState === 'ALL'
-                ? 'bg-neutral-800 text-white font-bold'
-                : 'text-neutral-400 hover:text-white'
-            }`}
+            className={`sf-signals-tab ${filterState === 'ALL' ? 'is-active' : ''}`}
           >
-            <span>All ({signals.length})</span>
+            All <span>{signals.length}</span>
           </button>
-
           <button
             onClick={() => setFilterState('CLOSED')}
-            className={`px-3 py-1 rounded-md transition-colors ${
-              filterState === 'CLOSED'
-                ? 'bg-neutral-800 text-white font-bold'
-                : 'text-neutral-400 hover:text-white'
-            }`}
+            className={`sf-signals-tab ${filterState === 'CLOSED' ? 'is-active' : ''}`}
           >
-            <span>History ({historySignals.length})</span>
+            History <span>{historySignals.length}</span>
           </button>
         </div>
 
-        {/* Secondary Actions & Clear History */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {filterState === 'CLOSED' && historySignals.length > 0 && (
             <button
               onClick={() => setShowClearConfirm(true)}
               disabled={isClearingHistory}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 text-xs text-rose-300 font-medium transition-colors disabled:opacity-50"
-              title="Clear completed trade history"
+              className="sf-signals-action text-rose-300"
             >
-              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-              <span>{isClearingHistory ? 'Clearing...' : 'Clear History'}</span>
+              <Trash2 className="h-3.5 w-3.5" />
+              {isClearingHistory ? 'Clearing' : 'Clear history'}
             </button>
           )}
-
-          <button
-            onClick={() => setShowGenesisModal(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-600/80 text-xs text-cyan-200 font-bold transition-all shadow-xs"
-            title="Inspect strategy candidates and validation evidence"
-          >
-            <Dna className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-            <span className="hidden sm:inline">Candidates</span>
-            <span className="sm:hidden">Candidates</span>
-            <span className="px-1.5 py-0.2 rounded bg-cyan-500/20 text-[10px] text-cyan-300 font-mono font-bold">
-              {synthesizedStrategies.filter(s => s.status === 'PROMOTED_ACTIVE').length}
+          <button onClick={() => setShowGenesisModal(true)} className="sf-signals-action">
+            <Dna className="h-3.5 w-3.5 text-cyan-300" />
+            Candidates
+            <span className="sf-signals-action-count">{synthesizedStrategies.filter(item => item.status === 'PROMOTED_ACTIVE').length}</span>
+          </button>
+          <button onClick={() => setShowSessionsModal(true)} className="sf-signals-action">
+            <Globe className="h-3.5 w-3.5 text-slate-400" />
+            Sessions
+            <span className={`sf-signals-market ${sessionMarketTime?.marketOpen === false ? 'is-closed' : ''}`}>
+              {sessionMarketTime?.marketOpen === false ? 'Closed' : sessionData.find(item => item.isActive)?.shortName || 'Live'}
             </span>
           </button>
-
-          <button
-            onClick={() => setShowSessionsModal(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-800/80 text-xs text-emerald-300 font-medium transition-colors"
-          >
-            <Globe className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden sm:inline">Sessions</span>
-            <span
-              title={sessionMarketTime?.marketMessage || 'Current FX session'}
-              className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold ${sessionMarketTime?.marketOpen === false ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/20 text-emerald-400'}`}
-            >
-              {sessionMarketTime?.marketOpen === false ? 'Market Closed' : sessionData.find(s => s.isActive)?.shortName || 'Live'}
-            </span>
+          <button onClick={() => { setShowLearningModal(true); fetchEvolutionTelemetry(); }} className="sf-signals-action">
+            <Brain className="h-3.5 w-3.5 text-emerald-300" />
+            Evolution state
           </button>
-
-          <button
-            onClick={() => { setShowLearningModal(true); fetchEvolutionTelemetry(); }}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs text-neutral-300 font-medium transition-colors"
-          >
-            <Brain className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="hidden sm:inline">Evolution State</span>
-            <span className="sm:hidden">Learning</span>
-          </button>
-
-
         </div>
       </div>
 
-      {/* 3. MAIN SIGNALS FEED: BOLD, UNCLUTTERED, DIRECT TRADING TICKETS */}
-      <div className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-5 space-y-3">
-        {/* HISTORY SUMMARY BANNER (Shown when viewing History tab) */}
-        {filterState === 'CLOSED' && historySignals.length > 0 && (
-          <div className="bg-neutral-900/90 border border-neutral-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
-                <Target className="w-6 h-6" />
-              </div>
-              <div>
-                <span className="text-[11px] text-neutral-400 uppercase tracking-wider font-bold block">
-                  Closed Trades Performance
-                </span>
-                <div className="text-xl sm:text-2xl font-black font-mono text-white">
-                  {closedSignals.length ? `${calculatedWinRate}% forward paper win rate` : 'No completed forward outcomes'}
-                </div>
-              </div>
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-5">
+        <div className="mx-auto w-full max-w-[1500px] space-y-3">
+          <div className="flex items-center justify-between gap-3 px-1">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-100">
+                {filterState === 'ACTIVE' ? 'Current observations' : filterState === 'CLOSED' ? 'Outcome history' : 'All observations'}
+              </h2>
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                {filterState === 'ACTIVE'
+                  ? 'Each row shows its next required state or verification step.'
+                  : 'Only exact, source-verified expiry candles count as wins, losses or pushes.'}
+              </p>
             </div>
+            <span className="text-[10px] font-mono text-slate-500">{filteredSignals.length} records</span>
+          </div>
 
-            <div className="flex items-center gap-4 text-xs font-mono">
-              <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
-                <span className="text-[10px] text-neutral-400 block uppercase">Settled Contracts</span>
-                <span className="font-bold text-white text-sm">{completedSignals.length}</span>
-              </div>
-              <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-emerald-900/50">
-                <span className="text-[10px] text-emerald-400 block uppercase">Wins</span>
-                <span className="font-bold text-emerald-300 text-sm">{totalWins}</span>
-              </div>
-              <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-rose-900/50">
-                <span className="text-[10px] text-rose-400 block uppercase">Losses</span>
-                <span className="font-bold text-rose-300 text-sm">{totalLosses}</span>
-              </div>
-              <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
-                <span className="text-[10px] text-neutral-400 block uppercase">Net Return</span>
-                <span className={`font-bold text-sm ${totalNetReturnUnits >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {totalNetReturnUnits > 0 ? '+' : ''}{totalNetReturnUnits.toFixed(3)} Stake Units
-                </span>
-              </div>
+          {filteredSignals.length === 0 ? (
+            <div className="sf-signals-empty">
+              <div className="sf-signals-empty-mark"><Activity className="h-5 w-5" /></div>
+              <h3>{filterState === 'CLOSED' ? 'No verified outcomes yet' : 'No open observations'}</h3>
+              <p>
+                {filterState === 'CLOSED'
+                  ? 'When an exact expiry M1 candle is available, the verified result will appear here. Missing candles are never guessed.'
+                  : 'The monitor will list a setup when a valid T−3m decision window produces a research signal.'}
+              </p>
+              <button onClick={() => setFilterState(filterState === 'CLOSED' ? 'ALL' : 'ALL')} className="sf-signals-empty-action">
+                View all observations
+              </button>
             </div>
-          </div>
-        )}
-
-        {filteredSignals.length === 0 ? (
-          <div className="min-h-[280px] flex flex-col items-center justify-center text-center bg-neutral-900/30 border-2 border-dashed border-neutral-800 rounded-2xl p-6">
-            <Clock className="w-12 h-12 text-emerald-500 mb-3 animate-pulse" />
-            <h3 className="text-lg font-bold text-white">
-              {filterState === 'CLOSED'
-                ? 'No Closed Trades in History Yet'
-                : 'Waiting for the next valid 5–30 minute entry window'}
-            </h3>
-            <p className="mt-2 text-xs sm:text-sm text-neutral-400 max-w-md leading-relaxed">
-              {filterState === 'CLOSED'
-                ? 'When paper contracts reach their scheduled expiry, the observed result and payout-adjusted stake return will appear here.'
-                : 'Every signal is decided from a fully closed M1 candle exactly three minutes before its selected 5–30 minute entry candle opens. The starting candle and expiry horizon must match.'}
-            </p>
-            <button
-              onClick={() => setFilterState(filterState === 'CLOSED' ? 'ACTIVE' : 'ALL')}
-              className="mt-4 px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-white rounded-lg text-xs font-semibold"
-            >
-              {filterState === 'CLOSED' ? `View Active Signals (${activeSignals.length})` : `View All Signals (${signals.length})`}
-            </button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-3">
-            {filteredSignals.map(sig => {
-              const isBuy = sig.direction === 'BUY';
-              const isWaiting = sig.lifecycleState === 'WAITING_FOR_ENTRY';
-              const isActive = ['ACTIVE', 'ENTRY_TRIGGERED'].includes(sig.lifecycleState);
-              const isClosed = sig.lifecycleState === 'CLOSED';
-              const isWin = sig.outcomeResult === 'WIN';
-              const isLoss = sig.outcomeResult === 'LOSS';
-
-              return (
-                <div
-                  key={sig.id}
-                  onClick={() => setSelectedSignal(sig)}
-                  className={`border rounded-xl p-3.5 sm:p-4 flex flex-col justify-between transition-colors cursor-pointer relative ${
-                    isActive
-                      ? 'bg-neutral-900/95 border-emerald-500 shadow-emerald-950/40 ring-1 ring-emerald-500/40'
-                      : isWaiting
-                      ? 'bg-neutral-900/95 border-amber-500/80 shadow-amber-950/20'
-                      : 'bg-neutral-900/70 border-neutral-800 hover:border-neutral-700'
-                  }`}
-                >
-                  <div className="space-y-3.5">
-                    {/* ROW 1: PAIR + DIRECTION (MASSIVE & UNMISSABLE) */}
-                    <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white">
-                            {sig.symbol}
-                          </span>
-                          <span className="px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/40 text-[10px] font-bold text-amber-300">
-                            3m Advance
-                          </span>
-                          {sig.marketSessionName && (
-                            <span className="px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-800/80 text-[10px] font-bold text-cyan-300 font-mono">
-                              {sig.marketSessionName.split(' ')[0]} Session
-                            </span>
-                          )}
-                          {sig.isNovelAiSynthesized && (
-                            <span className="px-2 py-0.5 rounded-full bg-linear-to-r from-cyan-950 to-emerald-950 border border-cyan-500 text-[10px] font-black text-cyan-300 font-mono shadow-xs flex items-center gap-1">
-                              <Dna className="w-2.5 h-2.5 text-cyan-400 animate-pulse" />
-                              Formula Candidate
-                            </span>
-                          )}
-                          {sig.isStackedStrategy && !sig.isNovelAiSynthesized && (
-                            <span className="px-2 py-0.5 rounded-full bg-purple-950/80 border border-purple-700/80 text-[10px] font-bold text-purple-300 font-mono">
-                              Stacked ({sig.confluenceScore || 2} Models)
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-neutral-400 font-mono mt-0.5">
-                          {getSignalAge(sig.predictionTimeUtc)} · Expiry: <strong className="text-amber-300">{sig.expiryMinutes || 5} Min Dynamic</strong>
-                        </div>
-                      </div>
-
-                      <div
-                        className={`px-3.5 py-1.5 rounded-xl font-black text-sm sm:text-base flex items-center gap-1.5 shadow-md ${
-                          isBuy
-                            ? 'bg-emerald-500 text-neutral-950 shadow-emerald-500/30'
-                            : 'bg-rose-500 text-white shadow-rose-500/30'
-                        }`}
-                      >
-                        {isBuy ? (
-                          <ArrowUpRight className="w-5 h-5 stroke-[3]" />
-                        ) : (
-                          <ArrowDownRight className="w-5 h-5 stroke-[3]" />
-                        )}
-                        <span>{isBuy ? 'BUY (CALL)' : 'SELL (PUT)'}</span>
-                      </div>
-                    </div>
-
-                    {/* ROW 2: PROMINENT STATUS BANNER & COUNTDOWN */}
-                    {isWaiting && (
-                      <div className="bg-amber-950/60 border border-amber-500/80 rounded-xl p-2.5 text-xs text-amber-200 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Clock className="w-4 h-4 text-amber-400 animate-pulse shrink-0" />
-                          <div>
-                            <span className="font-extrabold text-amber-300 block">
-                              🔔 3-MIN ADVANCE NOTICE
-                            </span>
-                            <span className="text-[10px] text-amber-400/90 font-mono">
-                              Entry at {sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M Candle Open ({sig.candleOpenTimeIst || formatIST(sig.candleOpenTimeUtc)})
-                            </span>
-                          </div>
-                        </div>
-                        <span className="font-mono text-xs font-black text-white bg-amber-900/80 px-2 py-1 rounded border border-amber-600 shrink-0 ml-2">
-                          {getEntryCountdown(sig.candleOpenTimeUtc)}
-                        </span>
-                      </div>
-                    )}
-
-                    {isActive && (
-                      <div className="bg-emerald-950/70 border border-emerald-500 rounded-xl p-2.5 text-xs text-emerald-200 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="relative flex h-2.5 w-2.5 shrink-0">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
-                          </span>
-                          <div>
-                            <span className="font-bold text-emerald-300 block">
-                              TRADE ACTIVE IN PROGRESS
-                            </span>
-                            <span className="text-[10px] text-emerald-400/90 font-mono">
-                              Dynamic {sig.expiryMinutes || 5} Min Expiry Duration
-                            </span>
-                          </div>
-                        </div>
-                        <span className="font-mono text-xs font-black text-white bg-emerald-900 px-2 py-1 rounded border border-emerald-600 shrink-0 ml-2">
-                          {getRemainingTime(sig.plannedExitTimeUtc)}
-                        </span>
-                      </div>
-                    )}
-
-                    {isClosed && (
-                      <div
-                        className={`rounded-xl p-3 text-xs flex flex-col gap-2 border ${
-                          isWin
-                            ? 'bg-emerald-950/60 border-emerald-500/80 text-emerald-200 shadow-md ring-1 ring-emerald-500/30'
-                            : isLoss
-                            ? 'bg-rose-950/60 border-rose-500/80 text-rose-200 shadow-md ring-1 ring-rose-500/30'
-                            : 'bg-neutral-800 border-neutral-700 text-neutral-300'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1.5 font-black text-sm">
-                            {isWin ? (
-                              <>
-                                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                                <span className="text-emerald-300">TRADE WON</span>
-                              </>
-                            ) : isLoss ? (
-                              <>
-                                <XCircle className="w-5 h-5 text-rose-400" />
-                                <span className="text-rose-300">TRADE LOST</span>
-                              </>
-                            ) : (
-                              <>
-                                <AlertTriangle className="w-4 h-4 text-amber-400" />
-                                <span>{sig.lifecycleState}</span>
-                              </>
-                            )}
-                          </div>
-                          <span className="font-mono text-sm font-black px-2 py-0.5 rounded bg-neutral-950 border border-neutral-800">
-                            {typeof sig.netReturnUnits === 'number' ? `${sig.netReturnUnits > 0 ? '+' : ''}${sig.netReturnUnits.toFixed(3)} Stake Units` : typeof sig.netReturnPips === 'number' ? `${sig.netReturnPips > 0 ? '+' : ''}${sig.netReturnPips} Legacy Pips` : (sig.outcomeResult || 'CLOSED')}
-                          </span>
-                        </div>
-
-                        {sig.actualEntryPrice && (
-                          <div className="flex justify-between items-center text-[11px] font-mono border-t border-neutral-800/80 pt-1.5 text-neutral-300">
-                            <span>Entry Fill: <strong className="text-white">{sig.actualEntryPrice}</strong></span>
-                            <span>Exit Fill: <strong className="text-white">{sig.actualExitPrice || '—'}</strong></span>
-                          </div>
-                        )}
-
-                        {isLoss && (
-                          <div className="mt-2 pt-2 border-t border-rose-900/60 space-y-1.5">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-black uppercase text-rose-300 flex items-center gap-1 font-mono">
-                                <Microscope className="w-3.5 h-3.5 text-rose-400" />
-                                Loss Diagnostics
-                              </span>
-                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-900/40 text-rose-300 font-mono">
-                                {sig.lossAutopsy ? sig.lossAutopsy.rootCause.replace(/_/g, ' ') : 'LOSS OBSERVATION'}
-                              </span>
-                            </div>
-                            {sig.lossAutopsy && (
-                              <div className="p-2 rounded-lg bg-neutral-950/80 border border-rose-900/40 text-[10px] space-y-1 font-mono">
-                                <div className="text-neutral-300">
-                                  <strong className="text-amber-400">Lesson:</strong> {sig.lossAutopsy.lessonsLearned[0]}
-                                </div>
-                                <div className="text-neutral-400">
-                                  No cause or replacement strategy was inferred from this single loss.
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* ROW 3: THE TWO ESSENTIAL TIMINGS (HIGH CONTRAST BOXES) */}
-                    <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                      {/* ENTRY BOX */}
-                      <div className="bg-neutral-950 p-2.5 rounded-xl border border-neutral-800 flex flex-col justify-between">
-                        <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          ENTRY ({sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M OPEN)
-                        </span>
-                        <div className="text-sm sm:text-base font-extrabold text-white mt-1 tabular-nums">
-                          {sig.candleOpenTimeIst || formatIST(sig.actualEntryTimeUtc || sig.entryWindowStartUtc)}
-                        </div>
-                        <span className="text-[10px] text-neutral-400 mt-0.5">Strict {sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M Open</span>
-                      </div>
-
-                      {/* EXIT / EXPIRY BOX */}
-                      <div className="bg-neutral-950 p-2.5 rounded-xl border border-neutral-800 flex flex-col justify-between">
-                        <span className="text-[10px] text-rose-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
-                          EXPIRY ({sig.expiryMinutes || 5} MIN)
-                        </span>
-                        <div className="text-sm sm:text-base font-extrabold text-white mt-1 tabular-nums">
-                          {sig.candleCloseTimeIst || formatIST(sig.plannedExitTimeUtc)}
-                        </div>
-                        <span className="text-[10px] text-neutral-400 mt-0.5">Dynamic Close</span>
-                      </div>
-                    </div>
-
-                    {/* ROW 4: EVOLVED GENOME & EVIDENCE */}
-                    <div className="bg-neutral-950/80 p-2.5 rounded-xl border border-neutral-800/80 space-y-1.5 text-xs">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5 truncate">
-                          {sig.isNovelAiSynthesized ? (
-                            <Dna className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                          ) : (
-                            <Lightbulb className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                          )}
-                          <span className="text-neutral-200 font-semibold truncate text-[11px]">
-                            {sig.strategyName || 'Unclassified historical signal'}
-                          </span>
-                        </div>
-                        <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800/80 font-mono text-[11px] font-bold shrink-0">
-                          {sig.paperOnly ? (sig.strategyForwardApproved ? 'FORWARD GATE PASSED · PAPER ONLY' : 'PAPER ONLY · NOT APPROVED') : (sig.strategyEvidenceStatus === 'BACKTESTED' && typeof sig.strategyWinRate === 'number' ? `${sig.strategyWinRate.toFixed(1)}% Historical test WR · n=${sig.strategyHistoricalSampleSize || 0}` : 'Historical result not validated')}
-                        </span>
-                      </div>
-
-                      <details className="mt-1 border-t border-neutral-800/70 pt-2">
-                        <summary className="cursor-pointer list-none text-[10px] font-medium text-neutral-500 hover:text-neutral-300">
-                          Technical evidence · formula · lineage
-                        </summary>
-                        <div className="mt-2 space-y-2">
-                          {(() => {
-                            const forward = getForwardPerformance(sig.strategyId);
-                            const scoredTrades = forward ? forward.wins + forward.losses : 0;
-                            return (
-                              <div className="text-[10px] font-mono text-neutral-400">
-                                Forward paper: {forward && forward.trades > 0
-                                  ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% · n=${scoredTrades}` : 'No scored outcomes'} · ${forward.scratches} scratches · ${(forward.netReturnUnits ?? 0) > 0 ? '+' : ''}${(forward.netReturnUnits ?? 0).toFixed(3)} stake units`
-                                  : 'No completed outcomes yet'}
-                              </div>
-                            );
-                          })()}
-                          {sig.mathematicalFormula && (
-                            <div className="rounded-lg border border-cyan-900/60 bg-cyan-950/20 p-2 font-mono text-[10px] text-cyan-200 break-all">
-                              {sig.mathematicalFormula}
-                            </div>
-                          )}
-                          {sig.confluenceStrategies && sig.confluenceStrategies.length > 0 && (
-                            <div className="flex flex-wrap gap-1">
-                              {sig.confluenceStrategies.map((item, i) => (
-                                <span key={i} className="rounded bg-neutral-900 px-2 py-1 text-[9px] text-neutral-400">{item}</span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </details>
-                    </div>
-                  </div>
-
-                  {/* CARD FOOTER: Tap hint & Confidence */}
-                  <div className="pt-2.5 mt-3 border-t border-neutral-800/60 flex items-center justify-between text-[11px] text-neutral-400">
-                    <span className="font-mono">
-                      Signal score (not a probability):{' '}
-                      <strong className="text-emerald-400">
-                        {(sig.confidence * 100).toFixed(0)}%
-                      </strong>
-                    </span>
-                    <span className="text-[10px] text-neutral-500 hover:text-white underline">
-                      View Candle Proof →
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+          ) : (
+            <div className="space-y-2.5">
+              {filteredSignals.map(signal => (
+                <SignalCard
+                  key={signal.id}
+                  signal={signal}
+                  nowMs={nowMs}
+                  formatIST={formatIST}
+                  onSelect={() => setSelectedSignal(signal)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
         {/* 4. OPTIONAL LIVE AUTOPILOT STREAM (COLLAPSIBLE AT BOTTOM) */}
         <div className="mt-6 border border-neutral-800/80 rounded-xl bg-neutral-900/40 overflow-hidden">
@@ -1230,12 +917,12 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 <div>
                   <div className="text-xs text-neutral-400">Completed forward paper outcomes:</div>
                   <div className="text-2xl font-extrabold text-emerald-400 font-mono">
-                    {closedSignals.length ? `${calculatedWinRate}% forward paper win rate` : 'No completed forward outcomes'}
+                    {evolvedScoredSignals.length ? `${evolvedCalculatedWinRate}% forward paper win rate` : 'No completed forward outcomes'}
                   </div>
                 </div>
                 <div className="text-right text-xs text-neutral-300 font-mono">
-                  <div>{totalWins} Wins</div>
-                  <div className="text-rose-400">{totalLosses} Losses</div>
+                  <div>{evolvedTotalWins} Wins</div>
+                  <div className="text-rose-400">{evolvedTotalLosses} Losses</div>
                 </div>
               </div>
             </div>

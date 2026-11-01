@@ -1469,6 +1469,64 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
+  await runTest('ENTRY_EXIT', 'Overdue contract remains pending until the exact trusted expiry candle arrives', () => {
+    const baseTime = 1793282400000;
+    const signalCandle: Candle = {
+      symbol: 'EUR/USD',
+      timestamp: new Date(baseTime).toISOString(),
+      timestampMs: baseTime,
+      open: 1.085,
+      high: 1.086,
+      low: 1.084,
+      close: 1.0858,
+      volume: 120,
+      source: 'test_fixture',
+    };
+    const signal = entryExitEngine.createResearchSignal({
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      signalCandle,
+      ruleFamily: `test_delayed_expiry_${Date.now()}`,
+      expiryMinutes: 5,
+      confidence: 0.7,
+      modelVersion: 'vTest',
+    });
+    const expiryMs = Math.floor(Date.now() / 60_000) * 60_000 - 60_000;
+    signal.lifecycleState = 'ACTIVE';
+    signal.actualEntryTimeUtc = new Date(expiryMs - 5 * 60_000).toISOString();
+    signal.actualEntryPrice = 1.0859;
+    signal.entrySource = 'test_fixture';
+    signal.plannedExitTimeUtc = new Date(expiryMs).toISOString();
+    db.updateSignal(signal);
+
+    entryExitEngine.evaluateSignals({} as any, true);
+    const pending = db.getSignalById(signal.id);
+    if (!pending || pending.lifecycleState !== 'EXIT_PENDING') {
+      throw new Error(`Expected EXIT_PENDING with no feed, got ${pending?.lifecycleState}.`);
+    }
+    if (pending.outcomeResult === 'WIN' || pending.outcomeResult === 'LOSS' || pending.netReturnUnits !== null) {
+      throw new Error('Missing market data must never be converted into a scored result.');
+    }
+
+    const exactExpiryCandle: Candle = {
+      ...signalCandle,
+      timestamp: new Date(expiryMs - 60_000).toISOString(),
+      timestampMs: expiryMs - 60_000,
+      open: 1.0860,
+      high: 1.0864,
+      low: 1.0858,
+      close: 1.0862,
+    };
+    entryExitEngine.evaluateSignals({ 'EUR/USD': [exactExpiryCandle] } as any, true);
+    const settled = db.getSignalById(signal.id);
+    if (!settled || settled.lifecycleState !== 'CLOSED' || settled.outcomeResult !== 'WIN') {
+      throw new Error(`Expected exact delayed bar to settle WIN, got ${settled?.lifecycleState}/${settled?.outcomeResult}.`);
+    }
+    if (settled.netReturnUnits !== 0.8) {
+      throw new Error(`Expected payout-adjusted +0.8 stake units, got ${settled.netReturnUnits}.`);
+    }
+  });
+
   await runTest('ENTRY_EXIT', 'Ambiguous Candle Ordering Detection', () => {
     const baseTime = 1793282500000;
     const signalCandle: Candle = {
