@@ -28,6 +28,7 @@ type GeneFeatureVector = Record<StrategyFeatureName, number>;
 
 interface GeneResearchRow {
   decisionIndex: number;
+  entryTimeframeMinutes: StrategyHorizon;
   candle: Candle;
   previousCandle: Candle;
   entryIndex: number;
@@ -946,9 +947,6 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       }
     }
 
-    // IQ Option history exports can contain zero-volume, completely flat
-    // filler rows while the market is closed. Exclude them explicitly and
-    // record the exact count; never interpolate across those periods.
     const isClosedMarketFiller = (c: Candle) =>
       c.volume === 0 && c.open === c.high && c.high === c.low && c.low === c.close;
     const excludedZeroVolumeFlatCandles = candles.filter(isClosedMarketFiller).length;
@@ -958,7 +956,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     }
 
     const minuteSteps = ordered.slice(1).filter((c, i) =>
-      Math.abs((c.timestampMs - ordered[i].timestampMs) - 60_000) <= 5_000
+      Math.abs((c.timestampMs - ordered[i].timestampMs) - M1_CANDLE_MS) <= 5_000
     ).length;
     if (minuteSteps / Math.max(1, ordered.length - 1) < 0.75) {
       throw new Error('Imported dataset does not contain sufficiently continuous one-minute candles.');
@@ -971,42 +969,47 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     const timestampIndex = new Map<number, number>();
     ordered.forEach((candle, index) => timestampIndex.set(candle.timestampMs, index));
 
-    const FIVE_MIN_MS = 5 * 60 * 1000;
-    const ONE_MIN_MS = 60 * 1000;
     const rows: GeneResearchRow[] = [];
     const horizons: StrategyHorizon[] = [5, 10, 15, 20, 25, 30];
 
-    // Keep the existing schedule unchanged: predict exactly three minutes
-    // before the next five-minute candle opens, then settle at 5–30 minutes.
-    for (let i = 60; i < ordered.length - 40; i++) {
-      const candle = ordered[i];
-      const decisionTime = candle.timestampMs + ONE_MIN_MS;
-      const entryTime = (Math.floor(decisionTime / FIVE_MIN_MS) + 1) * FIVE_MIN_MS;
-      if (Math.abs((entryTime - decisionTime) - 180_000) > 5_000) continue;
-      const entryIndex = timestampIndex.get(entryTime);
-      if (entryIndex === undefined) continue;
-      const exitIndices: Record<number, number> = {};
-      for (const horizon of horizons) {
-        const exitIndex = timestampIndex.get(entryTime + horizon * ONE_MIN_MS - ONE_MIN_MS);
-        if (exitIndex !== undefined) exitIndices[horizon] = exitIndex;
+    // Every candidate horizon is evaluated on its own aligned N-minute entry
+    // candle: decision exactly three minutes before that candle opens; binary
+    // settlement on the M1 close at entry + N minutes.
+    for (const horizon of horizons) {
+      for (let i = 60; i < ordered.length - horizon - 5; i++) {
+        const candle = ordered[i];
+        const decisionTime = candle.timestampMs + M1_CANDLE_MS;
+        const entryTime = getNextCandleOpenMs(decisionTime, horizon as TradingTimeframeMinutes);
+        if (entryTime - decisionTime !== ADVANCE_NOTICE_MS) continue;
+
+        const entryIndex = timestampIndex.get(entryTime);
+        const expiryTime = entryTime + horizon * M1_CANDLE_MS;
+        const expiryCandleTime = expiryTime - M1_CANDLE_MS;
+        const exitIndex = timestampIndex.get(expiryCandleTime);
+        if (entryIndex === undefined || exitIndex === undefined || exitIndex <= entryIndex) continue;
+
+        rows.push({
+          decisionIndex: i,
+          entryTimeframeMinutes: horizon,
+          candle,
+          previousCandle: ordered[i - 1],
+          entryIndex,
+          entryTimeMs: entryTime,
+          exitIndices: { [horizon]: exitIndex },
+          features: this.buildGeneFeatureVector(candle, ordered[i - 1], closes, ema9, ema21, rsi14, i),
+          session: this.geneSession(candle),
+        });
       }
-      if (Object.keys(exitIndices).length !== horizons.length) continue;
-      rows.push({
-        decisionIndex: i,
-        candle,
-        previousCandle: ordered[i - 1],
-        entryIndex,
-        entryTimeMs: entryTime,
-        exitIndices,
-        features: this.buildGeneFeatureVector(candle, ordered[i - 1], closes, ema9, ema21, rsi14, i),
-        session: this.geneSession(candle),
-      });
     }
+    rows.sort((a, b) =>
+      a.entryTimeMs - b.entryTimeMs ||
+      a.entryTimeframeMinutes - b.entryTimeframeMinutes
+    );
 
     const trainEndMs = ordered[Math.floor(ordered.length * 0.45)]?.timestampMs ?? ordered[0].timestampMs;
-    const validationStartMs = trainEndMs + 35 * ONE_MIN_MS;
+    const validationStartMs = trainEndMs + 35 * M1_CANDLE_MS;
     const validationEndMs = ordered[Math.floor(ordered.length * 0.65)]?.timestampMs ?? ordered[ordered.length - 1].timestampMs;
-    const testStartMs = validationEndMs + 35 * ONE_MIN_MS;
+    const testStartMs = validationEndMs + 35 * M1_CANDLE_MS;
     return {
       candles: ordered, closes, ema9, ema21, rsi14, rows,
       trainEndMs, validationStartMs, validationEndMs, testStartMs,
@@ -1027,6 +1030,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     const horizon = gene.optimalHorizonMinutes;
     const triggerThreshold = Math.max(0.682, gene.genome?.activationThreshold ?? gene.operatorParameters?.threshold ?? 0.682);
     for (const row of rows) {
+      if (row.entryTimeframeMinutes !== horizon) continue;
       if (row.entryTimeMs < busyUntil) continue;
       if (gene.sessionAffinity !== 'ALL' && gene.sessionAffinity !== row.session) continue;
       const activation = gene.genome
