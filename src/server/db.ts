@@ -22,6 +22,7 @@ import {
   StrategyPerformanceRecord,
   TradeOpportunity,
 } from '../types/index.js';
+import type { LearningPlatformPersistedState } from './learningPlatform.js';
 import { sanitizeLossAutopsy } from './researchGovernance.js';
 import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.js';
 import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
@@ -48,6 +49,8 @@ interface DatabaseSchema {
   synthesizedStrategies: SynthesizedStrategyGene[];
   /** Persisted pre-trade hypotheses, forecasts and human decision records. */
   opportunities: TradeOpportunity[];
+  /** Immutable forward-prediction ledger, audit events, assumptions and human model champions. */
+  learningPlatform: LearningPlatformPersistedState;
   lossAutopsies: LossAutopsy[];
   strategyPerformance: Record<string, StrategyPerformanceRecord>;
   /** Durable, prediction-time market contexts for settled WIN/LOSS observations. */
@@ -101,6 +104,30 @@ class DatabaseService {
         if (!parsed.autopilotLogs) parsed.autopilotLogs = [];
         if (!Array.isArray(parsed.synthesizedStrategies)) parsed.synthesizedStrategies = [];
         if (!Array.isArray(parsed.opportunities)) parsed.opportunities = [];
+        const defaultLearningPlatform = {
+          predictions: [],
+          events: [],
+          executionProfile: {
+            payoutPct: 80,
+            spreadPips: null,
+            slippagePips: null,
+            latencyMs: null,
+            assetAvailability: 'UNKNOWN',
+            brokerAcceptance: 'UNKNOWN',
+          },
+          champions: {},
+        };
+        if (!parsed.learningPlatform || typeof parsed.learningPlatform !== 'object') {
+          parsed.learningPlatform = defaultLearningPlatform;
+        }
+        if (!Array.isArray(parsed.learningPlatform.predictions)) parsed.learningPlatform.predictions = [];
+        if (!Array.isArray(parsed.learningPlatform.events)) parsed.learningPlatform.events = [];
+        if (!parsed.learningPlatform.executionProfile || typeof parsed.learningPlatform.executionProfile !== 'object') {
+          parsed.learningPlatform.executionProfile = defaultLearningPlatform.executionProfile;
+        }
+        if (!parsed.learningPlatform.champions || typeof parsed.learningPlatform.champions !== 'object') {
+          parsed.learningPlatform.champions = {};
+        }
         if (!Array.isArray(parsed.lossAutopsies)) parsed.lossAutopsies = [];
         // Quarantine every legacy autopsy, including orphaned records outside the
         // retained signal window, before exposing any forensic history.
@@ -227,6 +254,19 @@ class DatabaseService {
       autopilotLogs: [],
       synthesizedStrategies: [],
       opportunities: [],
+      learningPlatform: {
+        predictions: [],
+        events: [],
+        executionProfile: {
+          payoutPct: 80,
+          spreadPips: null,
+          slippagePips: null,
+          latencyMs: null,
+          assetAvailability: 'UNKNOWN',
+          brokerAcceptance: 'UNKNOWN',
+        },
+        champions: {},
+      },
       lossAutopsies: [],
       strategyPerformance: {},
       episodicMemory: [],
@@ -423,6 +463,18 @@ class DatabaseService {
     this.state.opportunities[index] = opportunity;
     this.scheduleSave();
     return true;
+  }
+
+  /** Return a detached snapshot so callers cannot mutate persisted state by reference. */
+  public getLearningPlatformState(): LearningPlatformPersistedState {
+    const state = this.state.learningPlatform;
+    return JSON.parse(JSON.stringify(state)) as LearningPlatformPersistedState;
+  }
+
+  /** Persist the complete learning state atomically before acknowledging writes. */
+  public saveLearningPlatformState(value: LearningPlatformPersistedState): void {
+    this.state.learningPlatform = JSON.parse(JSON.stringify(value)) as LearningPlatformPersistedState;
+    this.saveStateSync();
   }
 
   // Provider Health

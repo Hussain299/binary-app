@@ -20,6 +20,7 @@ import {
 export type ViewTab =
   | 'terminal'
   | 'opportunities'
+  | 'learning'
   | 'explorer'
   | 'modellab'
   | 'strategy'
@@ -65,6 +66,7 @@ const groups: Array<{
   {
     label: 'Research',
     items: [
+      { id: 'learning', label: 'Learning lab', icon: BrainCircuit },
       { id: 'evolution', label: 'Evolution', icon: Dna },
       { id: 'history', label: 'Research history', icon: History, count: 'history' },
       { id: 'agents', label: 'Research agents', icon: Brain },
