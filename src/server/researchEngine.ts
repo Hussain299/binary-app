@@ -1254,12 +1254,16 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     return updated;
   }
 
+  /**
+   * Individual candidate testing is intentionally disabled. A strategy must
+   * enter the registered 300-candidate batch so a test window is reserved
+   * exactly once and only preselected finalists see it.
+   */
   public validateSynthesizedStrategy(
-    gene: SynthesizedStrategyGene,
-    candles: Candle[]
-  ): SynthesizedStrategyGene {
-    const data = this.prepareGeneResearchData(candles);
-    return this.validateGeneAgainstPreparedData(gene, data);
+    _gene: SynthesizedStrategyGene,
+    _candles: Candle[]
+  ): never {
+    throw new Error('Individual candidate holdout testing is disabled. Use runNovelStrategySearchBatch so the pair holdout is reserved and exposed only to preselected finalists.');
   }
 
   public async runNovelStrategySearchBatch(
