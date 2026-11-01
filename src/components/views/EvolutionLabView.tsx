@@ -38,15 +38,9 @@ interface StrategySearchBatch {
 
 interface EvolutionLabViewProps {
   generations: EvolutionGeneration[];
-  onTriggerGeneration: () => void;
-  isRunning: boolean;
 }
 
-export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
-  generations,
-  onTriggerGeneration,
-  isRunning,
-}) => {
+export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({ generations }) => {
   const [searchPair, setSearchPair] = React.useState<ForexSymbol>('EUR/USD');
   const [historyCounts, setHistoryCounts] = React.useState<Record<string, number>>({});
   const [searchBatch, setSearchBatch] = React.useState<StrategySearchBatch | null>(null);
@@ -232,26 +226,19 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
 
   return (
     <div className="sf-page">
-      {/* Header & Controls */}
-      <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-neutral-800">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/[0.07] pb-4">
         <div>
-          <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
-            <Dna className="w-4 h-4 text-emerald-400" />
-            <span>Research Candidate Laboratory</span>
+          <h3 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-white">
+            <Dna className="h-5 w-5 text-emerald-300" />
+            Evolution lab
           </h3>
-          <p className="text-xs text-neutral-400 font-mono mt-1">
-            Three hundred expressions are ranked on train/validation data; only the preselected finalists see the untouched holdout. Passing history only allows paper testing.
+          <p className="mt-1 max-w-2xl text-xs text-neutral-500">
+            Generate, compare and reject 300 executable strategies against chronological market data.
           </p>
         </div>
-
-        <button
-          onClick={onTriggerGeneration}
-          disabled={isRunning}
-          className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-emerald-950 bg-emerald-400 hover:bg-emerald-300 rounded transition-colors disabled:opacity-50"
-        >
-          <Sparkles className={`w-3.5 h-3.5 ${isRunning ? 'animate-spin' : ''}`} />
-          <span>{isRunning ? 'Scanning for paper signals...' : 'Run Paper Signal Scan'}</span>
-        </button>
+        <span className="rounded-md border border-white/[0.07] bg-white/[0.03] px-2.5 py-1.5 text-[10px] text-neutral-400">
+          3m lead · 5–30m entry
+        </span>
       </div>
 
       {/* Large-scale symbolic discovery and evidence gate */}
@@ -260,10 +247,10 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
           <div className="max-w-2xl">
             <h4 className="text-sm font-bold text-white flex items-center gap-2">
               <Dna className="w-4 h-4 text-cyan-300" />
-              Symbolic Strategy Discovery · 300 Candidate Search
+              Symbolic strategy discovery
             </h4>
             <p className="mt-1 text-xs leading-relaxed text-neutral-400">
-              Generates 300 executable mathematical expressions using genetic crossover and mutation, then replays each one on imported real-market M1 history. Candidates are not approved because they look promising.
+              300 candidates evolve through crossover and mutation. Only evidence—not novelty—can move a candidate forward.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -306,10 +293,21 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
           {historyImportBusy && <span className="text-xs text-cyan-300">Importing…</span>}
         </div>
         {historyImportStatus && <p className="text-[11px] text-emerald-300">{historyImportStatus}</p>}
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-neutral-400">
-          <span>Imported history: <strong className="text-white">{selectedHistoryCount.toLocaleString()} / 60,000 M1 candles</strong></span>
-          <span>Historic gate: <strong className="text-white">150 train + 150 validation + 300 test trades · payout break-even and corrected 99% confidence</strong></span>
-          <span>Final gate: <strong className="text-white">300 scored forward outcomes · payout break-even and 95% confidence</strong></span>
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="rounded-md bg-white/[0.04] px-2.5 py-1.5 text-neutral-400">
+            History <strong className="ml-1 text-neutral-200">{selectedHistoryCount.toLocaleString()} / 60k M1</strong>
+          </span>
+          <span className="rounded-md bg-white/[0.04] px-2.5 py-1.5 text-neutral-400">
+            Historical evidence <strong className="ml-1 text-neutral-200">150 / 150 / 300</strong>
+          </span>
+          <details className="relative">
+            <summary className="cursor-pointer list-none rounded-md bg-white/[0.04] px-2.5 py-1.5 text-neutral-400 hover:text-white">
+              Approval rules
+            </summary>
+            <div className="absolute right-0 z-20 mt-2 w-72 rounded-xl border border-white/10 bg-[#111a26] p-3 text-[11px] leading-relaxed text-neutral-400 shadow-2xl">
+              Train and validation need at least 150 decisive trades each. The untouched test needs 300. All stages must clear payout break-even with positive expectancy and profit-factor checks; holdout finalists receive a multiple-comparison correction. Forward paper approval separately requires 300 decisive outcomes.
+            </div>
+          </details>
         </div>
 
         {searchError && (
@@ -398,25 +396,24 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({
         )}
       </section>
 
-      {/* 11-Stage Evolution Lifecycle Pipeline */}
-      <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4 font-mono text-xs space-y-3">
-        <h4 className="text-sm font-semibold text-white">Closed-Loop Scientific Method Flow</h4>
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 text-[11px]">
-          {steps.map((st, i) => (
-            <div
-              key={i}
-              className="bg-neutral-950 border border-neutral-800/80 p-2.5 rounded text-neutral-300 flex flex-col justify-between"
-            >
-              <span className="text-neutral-500 text-[10px] block">Step {i + 1}</span>
-              <span className="font-medium mt-1">{st.substring(3)}</span>
+      {/* Detailed methodology stays collapsed until it is needed. */}
+      <details className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4">
+        <summary className="cursor-pointer text-xs font-semibold text-neutral-300 hover:text-white">
+          How the evolutionary loop works · 12 stages
+        </summary>
+        <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-3 xl:grid-cols-4">
+          {steps.map((step, index) => (
+            <div key={index} className="rounded-lg border border-white/[0.06] bg-[#0c131d] p-3">
+              <div className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-neutral-600">Step {index + 1}</div>
+              <div className="text-neutral-300">{step.replace(/^\\d+\\.\\s*/, '')}</div>
             </div>
           ))}
-          <div className="bg-emerald-950/40 border border-emerald-800/80 p-2.5 rounded text-emerald-300 flex flex-col justify-between">
-            <span className="text-emerald-500 text-[10px] block">Step 12</span>
-            <span className="font-medium mt-1">Mature Forward Evidence Influences Parents</span>
+          <div className="rounded-lg border border-emerald-400/10 bg-emerald-400/[0.04] p-3 text-emerald-200">
+            <div className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-emerald-500">Step 12</div>
+            Mature paper evidence influences parent selection
           </div>
         </div>
-      </div>
+      </details>
 
       {/* Generations Tree / History */}
       <div className="space-y-4">
