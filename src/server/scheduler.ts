@@ -18,6 +18,11 @@ import { db } from './db.js';
 import { entryExitEngine } from './entryExitEngine.js';
 import { researchEngine } from './researchEngine.js';
 import { historicalDataStore } from './historicalData.js';
+import {
+  classifyMarketRegime,
+  inferGenomeStyle,
+  isStrategyRegimeCompatible,
+} from './evolutionEngine.js';
 
 export class AutonomousScheduler {
   private isRunningCycle = false;
@@ -250,6 +255,10 @@ export class AutonomousScheduler {
           const ema9 = researchEngine.calculateEMA(closes, 9);
           const ema21 = researchEngine.calculateEMA(closes, 21);
           const rsi14 = researchEngine.calculateRSI(closes, 14);
+          const marketFeatureVector = researchEngine.extractCausalFeatureVector(
+            c, prev, closes, ema9, ema21, rsi14, closes.length - 1
+          );
+          const regimeAssessment = classifyMarketRegime(candles, activeSession.id);
 
           const lastEma9 = ema9[ema9.length - 1];
           const lastEma21 = ema21[ema21.length - 1];
@@ -270,7 +279,8 @@ export class AutonomousScheduler {
           // with non-linear polynomial operators triggers on this candle
           // -------------------------------------------------------------
           const promotedGenes = db.getPaperTradingStrategies().sort((a, b) =>
-            Number(b.status === 'PROMOTED_ACTIVE') - Number(a.status === 'PROMOTED_ACTIVE')
+            Number(b.status === 'PROMOTED_ACTIVE') - Number(a.status === 'PROMOTED_ACTIVE') ||
+            db.getStrategyBayesianUcbScore(b.id) - db.getStrategyBayesianUcbScore(a.id)
           );
           let novelGeneCandidate: {
             gene: typeof promotedGenes[0];
@@ -286,6 +296,19 @@ export class AutonomousScheduler {
             if (gene.sessionAffinity !== 'ALL' && gene.sessionAffinity !== activeSession.id) {
               continue;
             }
+            const geneStyle = inferGenomeStyle(gene.genome?.expression);
+            const regimeGate = isStrategyRegimeCompatible(geneStyle, regimeAssessment.regime);
+            if (!regimeGate.allowed) {
+              this.logMind(
+                'AUDITOR',
+                '[REGIME GATE] Suppressed evolved candidate ' + gene.id + ': ' + regimeGate.reason +
+                  ' Regime=' + regimeAssessment.regime + ', ER=' +
+                  (regimeAssessment.directionalEfficiency?.toFixed(3) ?? 'n/a') + ', ATR ratio=' +
+                  (regimeAssessment.atrRatio?.toFixed(3) ?? 'n/a') + '.',
+                symbol
+              );
+              continue;
+            }
             const evalResult = researchEngine.evaluateSynthesizedGeneSignal(
               gene,
               c,
@@ -296,6 +319,24 @@ export class AutonomousScheduler {
               rsi14
             );
             if (evalResult.shouldTrigger && evalResult.conviction >= 0.80) {
+              const memoryAssessment = db.assessEpisodicMemory({
+                symbol,
+                direction: evalResult.direction,
+                ruleFamily: 'volatility_squeeze',
+                featureVector: marketFeatureVector,
+                predictionTimeUtc: new Date().toISOString(),
+              });
+              if (memoryAssessment.veto) {
+                this.logMind(
+                  'AUDITOR',
+                  '[EPISODIC MEMORY VETO] ' + symbol + ' ' + evalResult.direction +
+                    ' suppressed by ' + memoryAssessment.neighborsFound + ' earlier similar outcomes; weighted EV=' +
+                    memoryAssessment.weightedExpectedReturnUnits?.toFixed(3) + ' stake units. ' +
+                    memoryAssessment.reason,
+                  symbol
+                );
+                continue;
+              }
               novelGeneCandidate = {
                 gene,
                 direction: evalResult.direction,
@@ -329,6 +370,7 @@ export class AutonomousScheduler {
               mathematicalFormula: gene.mathematicalFormula,
               whyHumansMissThis: gene.whyHumansMissThis,
               paperOnly: gene.status !== 'PROMOTED_ACTIVE',
+              marketFeatureVector,
               notes: gene.status !== 'PROMOTED_ACTIVE'
                 ? `[PAPER ONLY — NOT APPROVED FOR ACTIONABLE TRADING] Forward validation sample. ${gene.mathematicalFormula}`
                 : `[APPROVED AFTER 300 HISTORICAL + 300 FORWARD OUTCOMES]: ${gene.mathematicalFormula} | Edge: ${gene.whyHumansMissThis}`,
@@ -469,6 +511,40 @@ export class AutonomousScheduler {
               Math.min(0.92, 0.77 + (candidate.confluenceScore - 2) * 0.05).toFixed(2)
             );
 
+            const candidateStyle = (
+              ruleFamily.includes('mean_reversion') ||
+              ruleFamily.includes('wick_reversal') ||
+              strategyName.toLowerCase().includes('swing reversal')
+            ) ? 'MEAN_REVERSION' : 'TREND';
+            const candidateRegimeGate = isStrategyRegimeCompatible(candidateStyle, regimeAssessment.regime);
+            if (!candidateRegimeGate.allowed) {
+              this.logMind(
+                'AUDITOR',
+                '[REGIME GATE] Suppressed ' + ruleFamily + ' setup for ' + symbol + ': ' +
+                  candidateRegimeGate.reason + ' Regime=' + regimeAssessment.regime + '.',
+                symbol
+              );
+              continue;
+            }
+            const candidateMemory = db.assessEpisodicMemory({
+              symbol,
+              direction: candidate.direction,
+              ruleFamily,
+              featureVector: marketFeatureVector,
+              predictionTimeUtc: new Date().toISOString(),
+            });
+            if (candidateMemory.veto) {
+              this.logMind(
+                'AUDITOR',
+                '[EPISODIC MEMORY VETO] ' + symbol + ' ' + candidate.direction +
+                  ' ' + ruleFamily + ' suppressed by ' + candidateMemory.neighborsFound +
+                  ' earlier similar outcomes; weighted EV=' +
+                  candidateMemory.weightedExpectedReturnUnits?.toFixed(3) + ' stake units.',
+                symbol
+              );
+              continue;
+            }
+
             const signal = entryExitEngine.createResearchSignal({
               symbol,
               direction: candidate.direction,
@@ -483,6 +559,7 @@ export class AutonomousScheduler {
               confluenceScore: candidate.confluenceScore,
               isStackedStrategy: true,
               paperOnly: true,
+              marketFeatureVector,
               notes: `[PAPER ONLY — NOT APPROVED FOR ACTIONABLE TRADING] Confluence: [${candidate.confluence.join(' · ')}]. Dynamic ${dynamicExpiry}m expiry strictly on 5M candle open (${activeSession.name}).`,
             });
 
