@@ -20,6 +20,7 @@ import {
 } from '../types/index.js';
 import { db } from './db.js';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
+import { selectEvolutionParents } from './evolutionEngine.js';
 
 type StrategyHorizon = 5 | 10 | 15 | 20 | 25 | 30;
 type GeneFeatureVector = Record<StrategyFeatureName, number>;
@@ -1202,19 +1203,9 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
 
     // Freeze parents before this run. Only train/validation evidence may
     // influence generation and finalist selection; the final test stays sealed.
-    const parentPool = db.getSynthesizedStrategies()
-      .filter(gene =>
-        !!gene.genome &&
-        !!gene.backtestMetrics &&
-        gene.backtestMetrics.binaryPayoutPct >= DEFAULT_BINARY_PAYOUT_PERCENT &&
-        gene.backtestMetrics.expectedValueUnits > 0 &&
-        gene.backtestMetrics.trainScoredSampleSize >= 150 &&
-        gene.backtestMetrics.validationScoredSampleSize >= 150 &&
-        gene.backtestMetrics.validationWinRate >= 0.70
-      )
-      .sort((a, b) =>
-        (b.backtestMetrics?.validationWinRate ?? 0) - (a.backtestMetrics?.validationWinRate ?? 0)
-      ).slice(0, 30);
+    // Parent selection is validation-only. Never read prior holdout results here:
+    // repeated generations must not adapt to the supposedly untouched test period.
+    const parentPool = selectEvolutionParents(db.getSynthesizedStrategies(), 30);
 
     const candidates: Array<{
       gene: SynthesizedStrategyGene;
@@ -1353,9 +1344,10 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     searchBatchId?: string,
     persistImmediately = true
   ): SynthesizedStrategyGene {
-    const eligibleParents = (parentPool || db.getSynthesizedStrategies())
-      .filter(gene => !!gene.genome && gene.accuracyStatus === 'BACKTESTED')
-      .slice(0, 30);
+    const eligibleParents = selectEvolutionParents(
+      parentPool || db.getSynthesizedStrategies(),
+      30
+    );
     const parentA = eligibleParents.length
       ? eligibleParents[Math.floor(Math.random() * eligibleParents.length)]
       : undefined;
