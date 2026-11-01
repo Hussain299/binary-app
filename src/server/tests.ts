@@ -39,7 +39,7 @@ import {
 } from './researchReproducibility.js';
 import { sanitizeLossAutopsy, OBSERVATION_ONLY_LESSONS } from './researchGovernance.js';
 import { calibratePredictionScore } from './predictionCalibration.js';
-import { opportunityEngine } from './opportunityEngine.js';
+import { opportunityEngine, evaluateOpportunityHoldout } from './opportunityEngine.js';
 import {
   assessPaperCapitalRisk,
   CONSERVATIVE_PAPER_RISK_POLICY,
@@ -307,6 +307,71 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
+  await runTest('RESEARCH', 'Opportunity holdout is later, embargoed, non-overlapping and multiple-testing adjusted', () => {
+    const startMs = Date.parse('2026-11-02T00:00:00.000Z');
+    const candles: Candle[] = Array.from({ length: 1200 }, (_, index) => {
+      const open = 1.1 + index * 0.00001;
+      const close = open + 0.00001;
+      const timestampMs = startMs + index * 60_000;
+      return {
+        symbol: 'EUR/USD',
+        timestampMs,
+        timestamp: new Date(timestampMs).toISOString(),
+        open,
+        high: close + 0.000002,
+        low: open - 0.000002,
+        close,
+        volume: 100,
+        source: 'imported',
+      };
+    });
+    const holdoutStartIndex = 500;
+    const rows = Array.from({ length: 1100 }, (_, offset) => ({
+      index: 60 + offset,
+      vector: Array.from({ length: 19 }, () => 0.1),
+    }));
+    const visited: number[] = [];
+    const result = evaluateOpportunityHoldout(
+      candles,
+      rows,
+      holdoutStartIndex,
+      5,
+      row => {
+        visited.push(row.index);
+        return 'BUY';
+      }
+    );
+
+    if (!visited.length || visited.some(index => index < holdoutStartIndex)) {
+      throw new Error('The holdout evaluator read a feature row from before its reserved chronological boundary.');
+    }
+    if (visited.length > 1 && visited.some((index, position) =>
+      position > 0 && index - visited[position - 1] < 5
+    )) {
+      throw new Error('Holdout trades must not overlap within the selected expiry horizon.');
+    }
+    if (result.sampleSize < 100 || result.wins !== result.sampleSize || result.losses !== 0) {
+      throw new Error('The independent holdout should count only the later, exact-expiry directional outcomes.');
+    }
+    if (result.lowerConfidenceBound === null ||
+        result.lowerConfidenceBound <= binaryBreakEvenWinRate(80) ||
+        result.expectedValueLowerBound === null ||
+        result.expectedValueLowerBound <= 0) {
+      throw new Error('The multiple-testing-adjusted lower bound must be used for any claimed edge.');
+    }
+
+    const noSignals = evaluateOpportunityHoldout(
+      candles,
+      rows,
+      holdoutStartIndex,
+      5,
+      () => null
+    );
+    if (noSignals.sampleSize !== 0 || noSignals.lowerConfidenceBound !== null) {
+      throw new Error('A candidate with no test triggers must remain unvalidated, not inherit the analogue sample.');
+    }
+  });
+
   await runTest('RESEARCH', 'Human direction revisions are separately audited and never overwrite the AI hypothesis', () => {
     const now = new Date().toISOString();
     let validEntryMs = Date.now() + 5 * 60_000;
@@ -361,6 +426,13 @@ export async function runAllVerificationTests(): Promise<{
       audit: {
         status: 'SHORTLISTED',
         rankScore: 80,
+        holdoutSampleSize: 120,
+        holdoutWins: 112,
+        holdoutLosses: 8,
+        holdoutScratches: 0,
+        holdoutWinRate: 112 / 120,
+        holdoutLowerConfidenceBound: 0.70,
+        holdoutExpectedValueLowerBound: 0.26,
         reasons: ['Test fixture'],
         counterEvidence: [],
         auditedAt: now,
@@ -379,10 +451,16 @@ export async function runAllVerificationTests(): Promise<{
     }
 
     const revisedSell = opportunityEngine.reviseDirection(original, 'SELL');
-    if (revisedSell.audit.status !== 'REJECTED' ||
+    if (revisedSell.audit.status !== 'INSUFFICIENT_EVIDENCE' ||
+        revisedSell.audit.holdoutSampleSize !== 0 ||
         revisedSell.forecast.lowerConfidenceBound === null ||
         revisedSell.forecast.lowerConfidenceBound >= revisedBuy.forecast.lowerConfidenceBound!) {
-      throw new Error('The opposite direction must be independently recalculated and rejected when its evidence is weak.');
+      throw new Error('A human direction override must not reuse the original model direction\'s holdout approval.');
+    }
+    const changedEntry = opportunityEngine.reviseDirection(original, 'BUY', original.proposedEntryPrice + 0.00005);
+    if (changedEntry.audit.status !== 'INSUFFICIENT_EVIDENCE' ||
+        changedEntry.audit.holdoutSampleSize !== 0) {
+      throw new Error('A changed manual entry reference must receive fresh independent validation before shortlisting.');
     }
     if (original.direction !== 'BUY' || original.audit.status !== 'SHORTLISTED' ||
         original.humanDecision.status !== 'PENDING') {
