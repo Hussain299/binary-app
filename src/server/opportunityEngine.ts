@@ -38,6 +38,9 @@ const MIN_ANALOGUES_FOR_FORECAST = 40;
 const MIN_ANALOGUES_FOR_SHORTLIST = 100;
 const MAX_SHORTLIST = 30;
 const PAYOUT_FLOOR = 80;
+const OPPORTUNITY_MODEL_VERSION = "opportunity-research-v1";
+const OPPORTUNITY_HOLDOUT_CANDIDATE_KEY = `${OPPORTUNITY_MODEL_VERSION}|${FEATURE_SCHEMA_VERSION}|ALL_HYPOTHESIS_FAMILIES`;
+const HOLDOUT_MULTIPLE_TEST_Z = 4.0;
 const FEATURE_NAMES = [
   "return_1", "return_3", "return_5", "return_13",
   "body_direction", "body_ratio", "wick_imbalance", "close_location",
@@ -71,6 +74,8 @@ interface PairContext {
   /** The older partition is used for graph analogues; later candles are sealed for hypothesis audit. */
   trainEndIndex: number;
   holdoutStartIndex: number;
+  holdoutWindowStartUtc: string;
+  holdoutWindowEndUtc: string;
   analogueCache: Map<Horizon, Analogue[]>;
   closes: number[];
   ema9: number[];
@@ -92,6 +97,9 @@ interface HoldoutMetrics {
   winRate: number | null;
   lowerConfidenceBound: number | null;
   expectedValueLowerBound: number | null;
+  windowAlreadyInspected: boolean;
+  windowStartUtc: string;
+  windowEndUtc: string;
 }
 
 type HistoricalDirection = "BUY" | "SELL" | null;
@@ -252,9 +260,9 @@ export function evaluateOpportunityHoldout(
   const sampleSize = wins + losses;
   const winRate = sampleSize ? wins / sampleSize : null;
   // One-sided Wilson bound with a conservative Bonferroni-style correction
-  // for up to 600 pair/family/horizon opportunities per batch.
+  // for up to 800 pair/family/horizon/genome opportunities per batch.
   const lowerBound = sampleSize >= MIN_ANALOGUES_FOR_SHORTLIST
-    ? wilsonLowerBound(wins, sampleSize, 3.8)
+    ? wilsonLowerBound(wins, sampleSize, HOLDOUT_MULTIPLE_TEST_Z)
     : null;
   const expectedValue = lowerBound === null
     ? null
@@ -268,6 +276,24 @@ export function evaluateOpportunityHoldout(
     winRate: winRate === null ? null : Number(winRate.toFixed(4)),
     lowerConfidenceBound: lowerBound === null ? null : Number(lowerBound.toFixed(4)),
     expectedValueLowerBound: expectedValue === null ? null : Number(expectedValue.toFixed(4)),
+    windowAlreadyInspected: false,
+    windowStartUtc: new Date(candles[holdoutStartIndex]?.timestampMs ?? 0).toISOString(),
+    windowEndUtc: new Date((candles[candles.length - 1]?.timestampMs ?? 0) + M1_MS).toISOString(),
+  };
+}
+
+function unavailableHoldout(context: PairContext): HoldoutMetrics {
+  return {
+    sampleSize: 0,
+    wins: 0,
+    losses: 0,
+    scratches: 0,
+    winRate: null,
+    lowerConfidenceBound: null,
+    expectedValueLowerBound: null,
+    windowAlreadyInspected: true,
+    windowStartUtc: context.holdoutWindowStartUtc,
+    windowEndUtc: context.holdoutWindowEndUtc,
   };
 }
 
@@ -423,6 +449,9 @@ function auditOpportunity(
     holdoutWinRate: holdout.winRate,
     holdoutLowerConfidenceBound: holdout.lowerConfidenceBound,
     holdoutExpectedValueLowerBound: holdout.expectedValueLowerBound,
+    holdoutWindowStatus: holdout.windowAlreadyInspected ? "ALREADY_INSPECTED" as const : "FRESH" as const,
+    holdoutWindowStartUtc: holdout.windowStartUtc,
+    holdoutWindowEndUtc: holdout.windowEndUtc,
   };
 
   if (direction === "NO_TRADE") {
@@ -454,8 +483,10 @@ function auditOpportunity(
   if (Math.abs(rawScore) < threshold) {
     reasons.push("Directional activation is too weak.");
   }
-  if (holdoutSampleSize < MIN_ANALOGUES_FOR_SHORTLIST || holdout.lowerConfidenceBound === null) {
-    reasons.push(`The later holdout has ${holdoutSampleSize} decisive outcomes; at least ${MIN_ANALOGUES_FOR_SHORTLIST} are required after the 30-minute embargo.`);
+  if (holdout.windowAlreadyInspected) {
+    reasons.push("This pair's overlapping opportunity holdout window was already inspected by an earlier batch; its outcomes are deliberately not reused.");
+  } else if (holdoutSampleSize < MIN_ANALOGUES_FOR_SHORTLIST || holdout.lowerConfidenceBound === null) {
+    reasons.push(`The fresh later holdout has ${holdoutSampleSize} decisive outcomes; at least ${MIN_ANALOGUES_FOR_SHORTLIST} are required after the 30-minute embargo.`);
   } else if (holdout.lowerConfidenceBound <= breakEven) {
     reasons.push("The multiple-comparison-adjusted holdout lower bound does not clear the payout-adjusted break-even probability.");
   }
@@ -476,6 +507,7 @@ function auditOpportunity(
     Math.abs(rawScore) < threshold;
   const insufficient = forecast.status !== "AVAILABLE" ||
     forecast.analogueCount < MIN_ANALOGUES_FOR_FORECAST ||
+    holdout.windowAlreadyInspected ||
     holdoutSampleSize < MIN_ANALOGUES_FOR_SHORTLIST ||
     holdout.lowerConfidenceBound === null;
   const clearedIndependentEdge = holdout.lowerConfidenceBound !== null &&
@@ -597,6 +629,8 @@ export class OpportunityEngine {
     // embargo prevents any training analogue's forward outcome entering it.
     const trainEndIndex = Math.floor(candles.length * 0.70);
     const holdoutStartIndex = trainEndIndex + MAX_HORIZON + 1;
+    const holdoutWindowStartUtc = new Date(candles[Math.min(holdoutStartIndex, candles.length - 1)].timestampMs).toISOString();
+    const holdoutWindowEndUtc = new Date(candles[candles.length - 1].timestampMs + M1_MS).toISOString();
     const snapshotMs = latest.timestampMs + M1_MS;
     return {
       symbol,
@@ -614,6 +648,8 @@ export class OpportunityEngine {
       historicalFeatureRows,
       trainEndIndex,
       holdoutStartIndex,
+      holdoutWindowStartUtc,
+      holdoutWindowEndUtc,
       analogueCache: new Map<Horizon, Analogue[]>(),
       closes,
       ema9,
@@ -684,7 +720,7 @@ export class OpportunityEngine {
       marketDataQuality: context.marketDataQuality,
       datasetFingerprint: context.datasetFingerprint,
       featureSchemaVersion: FEATURE_SCHEMA_VERSION,
-      modelVersion: "opportunity-research-v1",
+      modelVersion: OPPORTUNITY_MODEL_VERSION,
       marketFeatureVector: [...context.currentFeatures],
       recentPriceHistory: context.candles.slice(-30).map(candle => ({
         minuteOffset: Math.round(
