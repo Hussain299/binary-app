@@ -736,7 +736,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 <div
                   key={sig.id}
                   onClick={() => setSelectedSignal(sig)}
-                  className={`border-2 rounded-2xl p-4 sm:p-5 flex flex-col justify-between transition-all cursor-pointer shadow-lg relative ${
+                  className={`border rounded-xl p-3.5 sm:p-4 flex flex-col justify-between transition-colors cursor-pointer relative ${
                     isActive
                       ? 'bg-neutral-900/95 border-emerald-500 shadow-emerald-950/40 ring-1 ring-emerald-500/40'
                       : isWaiting
@@ -749,7 +749,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-white">
+                          <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white">
                             {sig.symbol}
                           </span>
                           <span className="px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/40 text-[10px] font-bold text-amber-300">
@@ -947,36 +947,36 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                         </span>
                       </div>
 
-                      {(() => {
-                        const forward = getForwardPerformance(sig.strategyId);
-                        const scoredTrades = forward ? forward.wins + forward.losses : 0;
-                        return (
-                          <div className="text-[10px] font-mono text-neutral-400 pt-1">
-                            Forward paper results: {forward && forward.trades > 0
-                              ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% across ${scoredTrades} scored outcomes` : 'No scored outcomes'} · ${forward.scratches} scratches · ${(forward.netReturnUnits ?? 0) > 0 ? '+' : ''}${(forward.netReturnUnits ?? 0).toFixed(3)} payout-adjusted stake units`
-                              : 'No completed forward outcomes yet'}
-                          </div>
-                        );
-                      })()}
-
-                      {sig.mathematicalFormula && (
-                        <div className="mt-1 p-2 rounded-lg bg-cyan-950/40 border border-cyan-800/70 font-mono text-[10px] text-cyan-200 flex items-center justify-between gap-1 overflow-x-auto scrollbar-none">
-                          <span className="text-cyan-400 font-bold shrink-0">Equation:</span>
-                          <span className="truncate">{sig.mathematicalFormula}</span>
-                          <span className="text-[9px] px-1 py-0.2 bg-cyan-500/20 text-cyan-300 rounded shrink-0 font-bold">Formula</span>
+                      <details className="mt-1 border-t border-neutral-800/70 pt-2">
+                        <summary className="cursor-pointer list-none text-[10px] font-medium text-neutral-500 hover:text-neutral-300">
+                          Technical evidence · formula · lineage
+                        </summary>
+                        <div className="mt-2 space-y-2">
+                          {(() => {
+                            const forward = getForwardPerformance(sig.strategyId);
+                            const scoredTrades = forward ? forward.wins + forward.losses : 0;
+                            return (
+                              <div className="text-[10px] font-mono text-neutral-400">
+                                Forward paper: {forward && forward.trades > 0
+                                  ? `${scoredTrades > 0 ? `${((forward.wins / scoredTrades) * 100).toFixed(1)}% · n=${scoredTrades}` : 'No scored outcomes'} · ${forward.scratches} scratches · ${(forward.netReturnUnits ?? 0) > 0 ? '+' : ''}${(forward.netReturnUnits ?? 0).toFixed(3)} stake units`
+                                  : 'No completed outcomes yet'}
+                              </div>
+                            );
+                          })()}
+                          {sig.mathematicalFormula && (
+                            <div className="rounded-lg border border-cyan-900/60 bg-cyan-950/20 p-2 font-mono text-[10px] text-cyan-200 break-all">
+                              {sig.mathematicalFormula}
+                            </div>
+                          )}
+                          {sig.confluenceStrategies && sig.confluenceStrategies.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {sig.confluenceStrategies.map((item, i) => (
+                                <span key={i} className="rounded bg-neutral-900 px-2 py-1 text-[9px] text-neutral-400">{item}</span>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      )}
-
-                      {sig.confluenceStrategies && sig.confluenceStrategies.length > 0 && (
-                        <div className="flex flex-wrap gap-1 pt-1 border-t border-neutral-800/60">
-                          <span className="text-[9px] text-neutral-500 uppercase">Genome lineage:</span>
-                          {sig.confluenceStrategies.map((c, i) => (
-                            <span key={i} className="px-1.5 py-0.5 rounded bg-neutral-900 border border-neutral-800 text-[9px] text-neutral-300 font-mono flex items-center gap-1">
-                              <span className="text-cyan-400">›</span> {c}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                      </details>
                     </div>
                   </div>
 
