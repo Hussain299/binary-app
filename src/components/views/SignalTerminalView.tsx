@@ -412,8 +412,16 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     ['CLOSED', 'EXPIRED', 'INVALIDATED'].includes(s.lifecycleState)
   );
   const completedSignals = signals.filter(
-    s => s.lifecycleState === 'CLOSED' && ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
+    s => s.isNovelAiSynthesized === true &&
+      !!s.synthesizedGeneId &&
+      s.lifecycleState === 'CLOSED' &&
+      ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
   );
+  const archivedRuleBasedOutcomes = signals.filter(
+    s => !s.isNovelAiSynthesized &&
+      s.lifecycleState === 'CLOSED' &&
+      ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
+  ).length;
   const closedSignals = completedSignals.filter(s => ['WIN', 'LOSS'].includes(s.outcomeResult));
   const totalWins = closedSignals.filter(s => s.outcomeResult === 'WIN').length;
   const totalLosses = closedSignals.filter(s => s.outcomeResult === 'LOSS').length;
@@ -1161,6 +1169,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 </p>
               </div>
 
+              <p className="text-[10px] text-neutral-500">
+                Evolved-genome score only. {archivedRuleBasedOutcomes} legacy rule-based paper outcomes are excluded from this win rate and return total.
+              </p>
               <div className="bg-emerald-950/40 p-3.5 rounded-xl border border-emerald-800/80 flex items-center justify-between">
                 <div>
                   <div className="text-xs text-neutral-400">Completed forward paper outcomes:</div>
