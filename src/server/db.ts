@@ -94,6 +94,16 @@ class DatabaseService {
         // Historical versions wrote fabricated strategy accuracy values. Never trust them
         // without stored untouched-test evidence; quarantine all such legacy candidates.
         if (Array.isArray(parsed.synthesizedStrategies)) {
+          const hardcodedSeedIds = new Set([
+            'synth_gen7_fractal_wick',
+            'synth_gen12_harmonic_flow',
+            'synth_gen19_stochastic_drift',
+            'synth_gen26_macro_resonance',
+            'synth_gen33_compression_decoupling',
+          ]);
+          parsed.synthesizedStrategies = parsed.synthesizedStrategies.filter(
+            (gene: any) => !hardcodedSeedIds.has(gene.id)
+          );
           parsed.synthesizedStrategies = parsed.synthesizedStrategies.map((gene: any) => {
             if (!gene.backtestMetrics || !gene.accuracyStatus ||
                 gene.backtestMetrics.testScoredSampleSize < 300 ||
@@ -120,9 +130,7 @@ class DatabaseService {
             return gene;
           });
         }
-        if (parsed.synthesizedStrategies.length === 0) {
-          parsed.synthesizedStrategies = this.generateSeedSynthesizedGenes();
-        }
+        // An empty population stays empty until the research engine actually generates candidates.
         if (Array.isArray(parsed.signals)) {
           // Keep persistent trade history while filtering out removed pairs or test artifacts
           parsed.signals = parsed.signals.filter((s: any) => {
@@ -220,7 +228,7 @@ class DatabaseService {
       reviews: [],
       generations: [],
       autopilotLogs: [],
-      synthesizedStrategies: this.generateSeedSynthesizedGenes(),
+      synthesizedStrategies: [],
       lossAutopsies: [],
       strategyPerformance: {},
       episodicMemory: [],
@@ -236,105 +244,6 @@ class DatabaseService {
     };
   }
 
-  private generateSeedSynthesizedGenes(): SynthesizedStrategyGene[] {
-    return [
-      {
-        id: 'synth_gen7_fractal_wick',
-        name: 'Synth-Gen7: Polynomial Fractal Entropy + Asymmetric Wick Delta',
-        code: 'GEN7_FRACTAL_WICK',
-        generation: 7,
-        mathematicalFormula: 'f(x) = tanh(1.45·Z_Entropy) + 0.68·(LowerWickRatio)^1.85 - 0.28·Δ_20SMA',
-        parents: ['Fractal Volatility Matrix', 'Asymmetric Wick Rejection', 'Microstructure Flow'],
-        mutationRate: 0.042,
-        nonLinearOperator: 'tanh_polynomial',
-        optimalHorizonMinutes: 10,
-        sessionAffinity: 'ALL',
-        verifiedAccuracy: 0,
-        sampleCount: 0,
-        accuracyStatus: 'UNVALIDATED',
-        status: 'EXPERIMENTING',
-        scientificHypothesis: 'Candidate hypothesis: non-linear rejection-wick features combined with local price variation may help identify short-term directional changes.',
-        whyHumansMissThis: 'Candidate design rationale: combine wick shape with recent price variation; performance must be established by historical and forward testing.',
-        createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-      },
-      {
-        id: 'synth_gen12_harmonic_flow',
-        name: 'Synth-Gen12: Non-Linear Harmonic Volatility Expansion + Micro-Flow Imbalance',
-        code: 'GEN12_HARMONIC_FLOW',
-        generation: 12,
-        mathematicalFormula: 'f(x) = σ(2.10·EMA_Curvature × Vol_Elasticity) - 0.42·ln(1 + ATR_harmonic)',
-        parents: ['Wave Curvature Derivative', 'Volume Squeeze Compression', 'Tick Velocity Dispersion'],
-        mutationRate: 0.038,
-        nonLinearOperator: 'exponential_decay',
-        optimalHorizonMinutes: 5,
-        sessionAffinity: 'LONDON',
-        verifiedAccuracy: 0,
-        sampleCount: 0,
-        accuracyStatus: 'UNVALIDATED',
-        status: 'EXPERIMENTING',
-        scientificHypothesis: 'Candidate hypothesis: EMA curvature and volatility changes may help identify directional movement during the London session.',
-        whyHumansMissThis: 'Candidate design rationale: combine moving-average curvature with volatility changes; no advantage is assumed before testing.',
-        createdAt: new Date(Date.now() - 3600000 * 4).toISOString(),
-      },
-      {
-        id: 'synth_gen19_stochastic_drift',
-        name: 'Synth-Gen19: Multi-Horizon Stochastic Drift + Adaptive Band Inversion',
-        code: 'GEN19_STOCHASTIC_DRIFT',
-        generation: 19,
-        mathematicalFormula: 'f(x) = sign(MicroFlow)·|Δ_20MA|^1.25 + 0.54·RSI_Curvature - 0.35·Wick_Asymmetry',
-        parents: ['Stochastic Drift Matrix', 'Adaptive Band Inversion', 'Mean Reversion Engine'],
-        mutationRate: 0.051,
-        nonLinearOperator: 'fractal_power',
-        optimalHorizonMinutes: 15,
-        sessionAffinity: 'ASIA',
-        verifiedAccuracy: 0,
-        sampleCount: 0,
-        accuracyStatus: 'UNVALIDATED',
-        status: 'EXPERIMENTING',
-        scientificHypothesis: 'Candidate hypothesis: changes in price dispersion around a 20-period moving average may help identify short-term drift changes.',
-        whyHumansMissThis: 'Candidate design rationale: measure gradual changes in drift rather than relying only on fixed RSI levels; no early-detection advantage is assumed.',
-        createdAt: new Date(Date.now() - 3600000 * 3).toISOString(),
-      },
-      {
-        id: 'synth_gen26_macro_resonance',
-        name: 'Synth-Gen26: Macro Session Order-Flow Resonance Matrix',
-        code: 'GEN26_MACRO_RESONANCE',
-        generation: 26,
-        mathematicalFormula: 'f(x) = 0.52·tanh(SessionLiquidityFlow) + 0.48·(BreakoutDelta)^1.6 × VolumeRatio',
-        parents: ['Macro Order Flow Resonance', '20-Bar High Expansion', 'Session Open Liquidity Grab'],
-        mutationRate: 0.035,
-        nonLinearOperator: 'tanh_polynomial',
-        optimalHorizonMinutes: 30,
-        sessionAffinity: 'OVERLAP',
-        verifiedAccuracy: 0,
-        sampleCount: 0,
-        accuracyStatus: 'UNVALIDATED',
-        status: 'EXPERIMENTING',
-        scientificHypothesis: 'Candidate hypothesis: volatility and price movement during the London/New York overlap may contain useful information for a longer-horizon continuation setup.',
-        whyHumansMissThis: 'Candidate design rationale: combine session timing and volatility features; this candidate does not measure inter-bank order flow.',
-        createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-      },
-      {
-        id: 'synth_gen33_compression_decoupling',
-        name: 'Synth-Gen33: Asymmetric Volatility Squeeze + Curvature Decoupling',
-        code: 'GEN33_COMPRESSION_DECOUPLING',
-        generation: 33,
-        mathematicalFormula: 'f(x) = (Δ_BandCompression^1.4 / ATR_decay) + 0.62·Wick_Sweep - 0.30·StochasticSlit',
-        parents: ['Volatility Squeeze Compression', 'Fractal Dimension Slope', 'Institutional Wick Rejection'],
-        mutationRate: 0.046,
-        nonLinearOperator: 'harmonic_dispersion',
-        optimalHorizonMinutes: 20,
-        sessionAffinity: 'ALL',
-        verifiedAccuracy: 0,
-        sampleCount: 0,
-        accuracyStatus: 'UNVALIDATED',
-        status: 'EXPERIMENTING',
-        scientificHypothesis: 'Candidate hypothesis: a contraction in recent volatility may precede a larger directional move.',
-        whyHumansMissThis: 'Candidate design rationale: measure changes in recent candle ranges; the existence and size of any edge must be validated.',
-        createdAt: new Date(Date.now() - 3600000 * 1).toISOString(),
-      },
-    ];
-  }
 
   public saveStateSync() {
     this.ensureDataDir();
