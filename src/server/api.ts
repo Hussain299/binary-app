@@ -735,6 +735,12 @@ apiRouter.get('/research/autopsies', (_req: Request, res: Response) => {
 // GET /api/system/health — Provider health, db statistics, cron status
 apiRouter.get('/system/health', (_req: Request, res: Response) => {
   const cron = db.getCronState();
+  const scheduler = autonomousScheduler.getAutopilotStatus();
+  const evolutionResearch = autonomousScheduler.getEvolutionResearchState();
+  const storedStrategies = db.getSynthesizedStrategies();
+  const eligibleStrategies = db.getPaperTradingStrategies();
+  const isCloudRun = Boolean(process.env.K_SERVICE);
+
   res.json({
     uptimeSeconds: Math.floor(process.uptime()),
     dbType: 'JSON File Store',
@@ -750,6 +756,33 @@ apiRouter.get('/system/health', (_req: Request, res: Response) => {
     cronHistory: cron.history,
     providers: db.getFeedHealthList(),
     sessions: dataFeedEngine.getMarketSessions(),
+    scheduler,
+    evolutionResearch,
+    strategyReadiness: {
+      storedCandidates: storedStrategies.length,
+      historicallyQualified: eligibleStrategies.length,
+      promoted: eligibleStrategies.filter(gene => gene.status === 'PROMOTED_ACTIVE').length,
+      paperTrading: eligibleStrategies.filter(gene => gene.status === 'PAPER_TRADING').length,
+      status: eligibleStrategies.length > 0 ? 'READY' : 'NO_HISTORICALLY_QUALIFIED_STRATEGY',
+      researchStatus: evolutionResearch.status,
+      researchMessage: evolutionResearch.message,
+      requiredImportedM1Candles: evolutionResearch.requiredNewM1Candles,
+    },
+    hosting: {
+      platform: isCloudRun ? 'CLOUD_RUN' : 'NODE_PROCESS',
+      backgroundCpuConfiguration: 'NOT_READABLE_FROM_APPLICATION',
+      warning: isCloudRun
+        ? 'Cloud Run background timers require instance-based billing (CPU allocated outside requests) and at least one minimum instance. Keep max instances at 1 while the scheduler and JSON database are process-local.'
+        : 'The host must keep this Node process alive and allow background timers to run continuously.',
+    },
+    storage: {
+      mode: 'LOCAL_JSON_FILES',
+      durableAcrossInstanceReplacement: !isCloudRun,
+      multiInstanceSafe: false,
+      warning: isCloudRun
+        ? 'The database and imported M1 partitions are stored in the container filesystem. They are not durable across instance replacement and are not shared between Cloud Run instances; use persistent external storage before relying on restarts or scaling.'
+        : 'State durability depends on the host filesystem. Multiple app instances do not share this JSON store.',
+    },
   });
 });
 
