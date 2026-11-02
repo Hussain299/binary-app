@@ -365,24 +365,19 @@ export class EntryExitEngine {
     for (const signal of activeSignals) {
       const candles = candlesMap[signal.symbol] || [];
       if (candles.length === 0) {
-        const expiryMs = Date.parse(
-          signal.plannedExitTimeUtc || signal.candleCloseTimeUtc || ''
-        );
-        if (
-          signal.lifecycleState === 'ACTIVE' &&
-          Number.isFinite(expiryMs) &&
-          Date.now() >= expiryMs
-        ) {
+        const expiryMs = Date.parse(signal.plannedExitTimeUtc || signal.candleCloseTimeUtc || '');
+        if (signal.lifecycleState === 'WAITING_FOR_ENTRY' && Number.isFinite(Date.parse(signal.entryWindowEndUtc)) && Date.now() > Date.parse(signal.entryWindowEndUtc)) {
+          const previousState = signal.lifecycleState;
+          signal.lifecycleState = 'EXPIRED'; signal.outcomeResult = 'CANCELLED';
+          signal.lifecycleHistory = Array.isArray(signal.lifecycleHistory) ? signal.lifecycleHistory : [];
+          signal.lifecycleHistory.push({timestamp:new Date().toISOString(),fromState:previousState,toState:'EXPIRED',reason:'Entry window elapsed without trusted candles confirming an entry. No trade outcome was inferred.'});
+          db.updateSignal(signal); updatedSignals.push(signal); continue;
+        }
+        if (signal.lifecycleState === 'ACTIVE' && Number.isFinite(expiryMs) && Date.now() >= expiryMs) {
           signal.lifecycleState = 'EXIT_PENDING';
           signal.lifecycleHistory = Array.isArray(signal.lifecycleHistory) ? signal.lifecycleHistory : [];
-          signal.lifecycleHistory.push({
-            timestamp: new Date().toISOString(),
-            fromState: 'ACTIVE',
-            toState: 'EXIT_PENDING',
-            reason: 'Scheduled expiry has passed, but no trusted M1 candles are currently available. Outcome remains unscored until the exact expiry candle can be verified.',
-          });
-          db.updateSignal(signal);
-          updatedSignals.push(signal);
+          signal.lifecycleHistory.push({timestamp:new Date().toISOString(),fromState:'ACTIVE',toState:'EXIT_PENDING',reason:'Scheduled expiry passed, but trusted settlement candles are unavailable. Outcome remains unresolved.'});
+          db.updateSignal(signal); updatedSignals.push(signal);
         }
         continue;
       }
@@ -570,7 +565,14 @@ export class EntryExitEngine {
             (signal.direction === 'BUY' ? exitPrice - entryPrice : entryPrice - exitPrice) * pipFactor
           ).toFixed(1));
 
-          signal.actualExitTimeUtc = exitCandle.timestamp;
+          signal.actualExitTimeUtc = signal.plannedExitTimeUtc || new Date(exitCandle.timestampMs + 60_000).toISOString();
+          signal.settlementCandleOpenTimeUtc = exitCandle.timestamp;
+          signal.settlementCandleSealTimeUtc = new Date(exitCandle.timestampMs + 60_000).toISOString();
+          signal.settlementProvider = exitCandle.source;
+          signal.settlementTimeframe = '1m';
+          signal.settlementPricingMethod = 'CANDLE_CLOSE_APPROXIMATION';
+          signal.settlementStalenessMs = Math.max(0, plannedExitMs - (exitCandle.timestampMs + 60_000));
+          signal.resolvedAtUtc = new Date().toISOString();
           signal.actualExitPrice = exitPrice;
           signal.grossReturnPips = grossPips;
           signal.netReturnPips = null;
