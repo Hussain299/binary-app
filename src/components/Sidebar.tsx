@@ -19,6 +19,7 @@ import {
 
 export type ViewTab =
   | 'terminal'
+  | 'intelligence'
   | 'opportunities'
   | 'learning'
   | 'explorer'
