@@ -545,7 +545,7 @@ export class ResearchEngine {
       horizonMinutes,
       parameters: {
         threshold: selectedThreshold,
-        purgeEmbargoMinutes: purgeSamples * horizonMinutes,
+        purgeEmbargoMinutes: purgeSamples * ENTRY_CANDLE_TIMEFRAME_MINUTES,
         featureCount,
         spreadModeledPips: modeledSpreadPips,
         algorithm: 'logistic_regression',
@@ -568,7 +568,7 @@ export class ResearchEngine {
         start: testSet[0].candle.timestamp,
         end: testSet[testSet.length - 1].candle.timestamp,
       },
-      purgedWindowCandles: purgeSamples * horizonMinutes,
+      purgedWindowCandles: purgeSamples * ENTRY_CANDLE_TIMEFRAME_MINUTES,
       scientistHypothesis: `A train-fitted logistic-regression model using ${ruleFamily} features may predict direction at the scheduled ${horizonMinutes}-minute expiry.`,
       scientistDisproofCondition: `Disproven if untouched test directional accuracy is below 52%, or after modeled spread the test EV is not positive and profit factor is below 1.15.`,
       engineerConfigNotes: `Logistic regression fitted on ${trainSet.length} training opportunities. Feature means/stds fitted on training only. Threshold ${selectedThreshold} tuned on ${validationSet.length} validation opportunities. Each opportunity uses the 3-minute advance alert, scheduled next M5 open and ${horizonMinutes}-minute expiry; pair-specific modeled spread ${modeledSpreadPips} pips.`,
