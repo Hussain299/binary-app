@@ -147,7 +147,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   onEvaluateSignals,
   isEvaluating,
 }) => {
-  const [filterState, setFilterState] = useState<'ACTIVE' | 'ALL' | 'CLOSED'>('ACTIVE');
+  const [filterState, setFilterState] = useState<'ACTIVE' | 'VERIFYING' | 'ALL' | 'CLOSED'>('ACTIVE');
   const [selectedSignal, setSelectedSignal] = useState<ResearchSignal | null>(null);
   const [selectedAutopsy, setSelectedAutopsy] = useState<LossAutopsy | null>(null);
   const [showLearningModal, setShowLearningModal] = useState<boolean>(false);
@@ -483,8 +483,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   );
 
   const activeSignals = signals.filter(s =>
-    ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE', 'EXIT_PENDING'].includes(s.lifecycleState)
+    ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE'].includes(s.lifecycleState)
   );
+  const verifyingSignals = signals.filter(s => s.lifecycleState === 'EXIT_PENDING');
   const leadingPairBlockers = [...(autopilotStatus?.blockedPairReasons || [])]
     .sort((a, b) => b.count - a.count)
     .slice(0, 3);
@@ -500,10 +501,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
   const filteredSignals = signals.filter(s => {
     if (filterState === 'ACTIVE') {
-      return ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE', 'EXIT_PENDING'].includes(
-        s.lifecycleState
-      );
+      return ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE'].includes(s.lifecycleState);
     }
+    if (filterState === 'VERIFYING') return s.lifecycleState === 'EXIT_PENDING';
     if (filterState === 'CLOSED') {
       return ['CLOSED', 'EXPIRED', 'INVALIDATED'].includes(s.lifecycleState);
     }
@@ -600,7 +600,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
       {/* 2. SECONDARY CONTROLS & INFO BUTTONS */}
       <div className="bg-[#0b1018] px-3 sm:px-5 py-2 border-b border-white/[0.07] flex flex-wrap items-center justify-between gap-2 shrink-0">
-        {/* Filters: Active | All | History */}
+        {/* Lifecycle filters keep live contracts separate from expired contracts awaiting verification. */}
         <div className="flex items-center gap-1 bg-neutral-900 p-1 rounded-lg border border-neutral-800 text-xs font-medium">
           <button
             onClick={() => setFilterState('ACTIVE')}
@@ -612,6 +612,14 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           >
             <Zap className="w-3 h-3" />
             <span>Active ({activeSignals.length})</span>
+          </button>
+
+          <button
+            onClick={() => setFilterState('VERIFYING')}
+            className={`px-3 py-1 rounded-md transition-colors ${filterState === 'VERIFYING' ? 'bg-amber-400/20 text-amber-200 font-bold' : 'text-neutral-400 hover:text-white'}`}
+            title="Expired contracts waiting for trusted settlement data"
+          >
+            <span>Verifying ({verifyingSignals.length})</span>
           </button>
 
           <button
@@ -778,7 +786,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <h3 className="text-lg font-bold text-white">
               {filterState === 'CLOSED'
                 ? 'No Closed Trades in History Yet'
-                : 'Waiting for the next 5-minute entry candle'}
+                : filterState === 'VERIFYING'
+                  ? 'No Trades Awaiting Verification'
+                  : 'Waiting for the next 5-minute entry candle'}
             </h3>
             <p className="mt-2 text-xs sm:text-sm text-neutral-400 max-w-md leading-relaxed">
               {filterState === 'CLOSED'
