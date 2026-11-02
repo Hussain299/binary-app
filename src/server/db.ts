@@ -618,13 +618,6 @@ class DatabaseService {
     this.scheduleSave();
   }
 
-  public clearClosedSignalsHistory() {
-    // Keeps active and pending signals, purges only completed historical trades
-    this.state.signals = this.state.signals.filter(s =>
-      ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE', 'EXIT_PENDING'].includes(s.lifecycleState)
-    );
-    this.scheduleSave();
-  }
 
   public getSignalById(id: string): ResearchSignal | undefined {
     return this.state.signals.find(s => s.id === id);
