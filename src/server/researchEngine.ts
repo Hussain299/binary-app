@@ -1266,20 +1266,20 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     // settlement must never borrow prices from the next partition.
     const trainRows = data.rows.filter(row =>
       outcomeFitsResearchWindow(
-        row.entryTimeMs, row.entryTimeframeMinutes,
+        row.entryTimeMs, row.expiryMinutes,
         data.candles[60]?.timestampMs ?? -Infinity, data.trainEndMs
       )
     );
     const validationRows = data.rows.filter(row =>
       outcomeFitsResearchWindow(
-        row.entryTimeMs, row.entryTimeframeMinutes,
+        row.entryTimeMs, row.expiryMinutes,
         data.validationStartMs, data.validationEndMs
       )
     );
     const testEndMs = data.candles[data.candles.length - 1].timestampMs + M1_CANDLE_MS;
     const testRows = data.rows.filter(row =>
       outcomeFitsResearchWindow(
-        row.entryTimeMs, row.entryTimeframeMinutes, data.testStartMs, testEndMs
+        row.entryTimeMs, row.expiryMinutes, data.testStartMs, testEndMs
       )
     );
     const train = this.simulateGeneRows(gene, trainRows, data);
@@ -1387,13 +1387,13 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     // interval is contained there. No outcome may read a candle from the next split.
     const trainRows = data.rows.filter(row =>
       outcomeFitsResearchWindow(
-        row.entryTimeMs, row.entryTimeframeMinutes,
+        row.entryTimeMs, row.expiryMinutes,
         data.candles[60]?.timestampMs ?? -Infinity, data.trainEndMs
       )
     );
     const validationRows = data.rows.filter(row =>
       outcomeFitsResearchWindow(
-        row.entryTimeMs, row.entryTimeframeMinutes,
+        row.entryTimeMs, row.expiryMinutes,
         data.validationStartMs, data.validationEndMs
       )
     );
