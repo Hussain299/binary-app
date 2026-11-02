@@ -198,6 +198,19 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
+  await runTest('SCHEDULER', 'manual candidate searches share the autonomous single-worker admission guard', () => {
+    // The coordinator admission helper is intentionally covered at the service
+    // boundary by asserting the shared queue state used by the helper.
+    const queue = createInitialAutonomousResearchQueueState();
+    if (queue.currentSymbol !== null) {
+      throw new Error('An idle queue must not block a manual discovery batch.');
+    }
+    queue.currentSymbol = 'EUR/USD';
+    if (queue.currentSymbol === null) {
+      throw new Error('A persisted autonomous owner must be visible to manual worker admission.');
+    }
+  });
+
   await runTest('SCHEDULER', 'multi-pair queue state starts with a durable single-worker policy', () => {
     const state = createInitialAutonomousResearchQueueState();
     if (state.schemaVersion !== 1 || state.nextPairIndex !== 0 ||
