@@ -119,6 +119,12 @@ interface StrategySearchProgress {
 interface SignalTerminalViewProps {
   signals: ResearchSignal[];
   autopilotLogs?: AutopilotLog[];
+  autopilotStatus?: {
+    schedulerStarted?: boolean;
+    pulseHealthy?: boolean;
+    pulseIntervalSeconds?: number;
+    strategyReadiness?: string;
+  } | null;
   onEvaluateSignals: () => void;
   isEvaluating: boolean;
 }
@@ -126,6 +132,7 @@ interface SignalTerminalViewProps {
 export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   signals,
   autopilotLogs = [],
+  autopilotStatus = null,
   onEvaluateSignals,
   isEvaluating,
 }) => {
@@ -1016,7 +1023,14 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           </button>
           {showLogsAccordion && (
             <div className="p-3 border-t border-neutral-800/80">
-              <AutopilotStream logs={autopilotLogs} activeSignalsCount={activeSignals.length} />
+              <AutopilotStream
+                logs={autopilotLogs}
+                activeSignalsCount={activeSignals.length}
+                schedulerStarted={autopilotStatus?.schedulerStarted}
+                pulseHealthy={autopilotStatus?.pulseHealthy}
+                pulseIntervalSeconds={autopilotStatus?.pulseIntervalSeconds}
+                strategyReadiness={autopilotStatus?.strategyReadiness}
+              />
             </div>
           )}
         </div>
