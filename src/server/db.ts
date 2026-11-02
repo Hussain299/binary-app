@@ -560,7 +560,7 @@ class DatabaseService {
           s.symbol === signal.symbol &&
           s.direction === signal.direction &&
           s.ruleFamily === signal.ruleFamily &&
-          ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE'].includes(s.lifecycleState)
+          ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE', 'EXIT_PENDING'].includes(s.lifecycleState)
       );
       if (exists) return exists;
     }
