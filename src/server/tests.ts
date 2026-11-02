@@ -756,6 +756,29 @@ export async function runAllVerificationTests(): Promise<{
       throw new Error('The multiple-testing-adjusted lower bound must be used for any claimed edge.');
     }
 
+    // A 15m expiry must still use the same 5m entry boundary; only its settlement
+    // timestamp moves to entry + 15m. The holdout evaluator may skip overlapping
+    // opportunities, but every evaluated row must retain the M5 entry schedule.
+    const visitedFor15m: number[] = [];
+    evaluateOpportunityHoldout(
+      candles,
+      rows,
+      holdoutStartIndex,
+      15,
+      row => {
+        visitedFor15m.push(row.index);
+        return 'BUY';
+      }
+    );
+    if (!visitedFor15m.length || visitedFor15m.some(index => {
+      const decisionTimeMs = candles[index].timestampMs + 60_000;
+      const entryTimeMs = getNextCandleOpenMs(decisionTimeMs);
+      return entryTimeMs % (5 * 60_000) !== 0 ||
+        entryTimeMs - decisionTimeMs !== 3 * 60_000;
+    })) {
+      throw new Error('The opportunity holdout must use M5 entry even when evaluating a 15m expiry.');
+    }
+
     const noSignals = evaluateOpportunityHoldout(
       candles,
       rows,
