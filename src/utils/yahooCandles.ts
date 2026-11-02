@@ -1,7 +1,15 @@
 import type { Candle, ForexSymbol } from '../types/index.ts';
 
+export interface YahooCloseObservation {
+  timestamp: string;
+  timestampMs: number;
+  close: number;
+  source: 'yahoo-close-only';
+}
+
 export interface YahooNormalizationResult {
   candles: Candle[];
+  closeOnlyObservations: YahooCloseObservation[];
   inputRows: number;
   rejectedRows: number;
   missingVolumeRows: number;
@@ -25,6 +33,7 @@ export function normalizeYahooChartCandles(
   const volumes: unknown[] = Array.isArray(quote.volume) ? quote.volume : [];
 
   const candles: Candle[] = [];
+  const closeOnlyObservations: YahooCloseObservation[] = [];
   let rejectedRows = 0;
   let missingVolumeRows = 0;
   let zeroRangeRows = 0;
@@ -46,13 +55,25 @@ export function normalizeYahooChartCandles(
     const high = toFiniteNumber(highs[i]);
     const low = toFiniteNumber(lows[i]);
     const close = toFiniteNumber(closes[i]);
+    const hasUsableTimestamp =
+      Number.isFinite(timestampMs) &&
+      Number.isFinite(date.getTime()) &&
+      rawTimestamp > 0;
+
+    if (hasUsableTimestamp && Number.isFinite(close) && close > 0) {
+      closeOnlyObservations.push({
+        timestamp: date.toISOString(),
+        timestampMs,
+        close,
+        source: 'yahoo-close-only',
+      });
+    }
 
     // All four OHLC values must be supplied by Yahoo and pass the candle
-    // envelope. Close-only records are not candlesticks and are rejected.
+    // envelope. Close-only records remain available for a price-line view,
+    // but are never converted into OHLC candles or passed to signal logic.
     if (
-      !Number.isFinite(timestampMs) ||
-      !Number.isFinite(date.getTime()) ||
-      rawTimestamp <= 0 ||
+      !hasUsableTimestamp ||
       ![open, high, low, close].every(value => Number.isFinite(value) && value > 0) ||
       high < Math.max(open, close, low) ||
       low > Math.min(open, close, high)
@@ -81,9 +102,14 @@ export function normalizeYahooChartCandles(
 
   const deduplicated = new Map<number, Candle>();
   for (const candle of candles) deduplicated.set(candle.timestampMs, candle);
+  const deduplicatedCloseOnly = new Map<number, YahooCloseObservation>();
+  for (const observation of closeOnlyObservations) {
+    deduplicatedCloseOnly.set(observation.timestampMs, observation);
+  }
 
   return {
     candles: Array.from(deduplicated.values()).sort((a, b) => a.timestampMs - b.timestampMs),
+    closeOnlyObservations: Array.from(deduplicatedCloseOnly.values()).sort((a, b) => a.timestampMs - b.timestampMs),
     inputRows: timestamps.length,
     rejectedRows,
     missingVolumeRows,
