@@ -776,6 +776,18 @@ export interface SystemHealthState {
     message: string;
     nextScanAt?: string | null;
     requiredNewM1Candles: number;
+    candidatesPerBatch?: number;
+    maxConcurrentResearchBatches?: number;
+    queue?: AutonomousResearchQueueState;
+    queueSummary?: {
+      totalPairs: number;
+      ready: number;
+      running: number;
+      waitingForHistory: number;
+      waitingForNewHistory: number;
+      completed: number;
+      failed: number;
+    };
   };
   strategyReadiness?: {
     storedCandidates: number;
