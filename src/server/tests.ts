@@ -30,7 +30,13 @@ import {
   outcomeFitsResearchWindow,
   doesResearchHoldoutOverlap,
 } from './evolutionEngine.ts';
-import { findEligibleStartTimeframes, getNextCandleOpenMs } from './tradingClock.ts';
+import {
+  ENTRY_CANDLE_TIMEFRAME_MINUTES,
+  EXPIRY_HORIZONS_MINUTES,
+  findEligibleStartTimeframes,
+  getNextCandleOpenMs,
+  isSupportedExpiryMinutes,
+} from './tradingClock.ts';
 import { getForexMarketState, getReportingSessionFromTimestamp, isForexMarketIntervalOpen, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.ts';
 import {
   createSeededRandom,
@@ -1658,7 +1664,7 @@ export async function runAllVerificationTests(): Promise<{
         signalCandle,
         ruleFamily: 'clock_guard_probe',
         expiryMinutes: 15,
-        entryTimeframeMinutes: 15,
+        entryTimeframeMinutes: ENTRY_CANDLE_TIMEFRAME_MINUTES,
         candleOpenTimeUtc: '2030-01-01T00:15:00.000Z',
         confidence: 0.7,
         modelVersion: 'clock-guard-test',
@@ -1671,33 +1677,102 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
-  await runTest('ENTRY_EXIT', 'Exact three-minute schedule across 5–30 minute entry candles', () => {
-    const entryOpen = Date.parse('2026-10-29T10:30:00.000Z');
-    const decisionClose = entryOpen - 3 * 60_000;
+  await runTest('ENTRY_EXIT', 'Every signal targets the next M5 open; expiry horizons remain independent', () => {
+    // 10:22:00 M1 close -> 10:25:00 M5 open, even though this is not a 10M/15M boundary.
+    const firstEntryOpen = Date.parse('2026-10-29T10:25:00.000Z');
+    const firstDecisionClose = firstEntryOpen - 3 * 60_000;
+    const firstNow = firstDecisionClose + 20_000;
+    const firstEligible = findEligibleStartTimeframes(firstNow, firstDecisionClose);
+    if (firstEligible.length !== 1 || firstEligible[0].timeframeMinutes !== ENTRY_CANDLE_TIMEFRAME_MINUTES) {
+      throw new Error('A valid T-3 decision must yield exactly one 5-minute entry schedule.');
+    }
+    if (firstEligible[0].entryTimeMs !== firstEntryOpen ||
+        firstEligible[0].decisionTimeMs !== firstDecisionClose ||
+        getNextCandleOpenMs(firstNow) !== firstEntryOpen) {
+      throw new Error('The 5-minute entry schedule drifted from the exact T-3 boundary.');
+    }
+
+    // 10:27 M1 close -> 10:30 M5 open. It is also a 10/15/30 boundary,
+    // but it must still produce one M5 entry schedule, never multiple entry TFs.
+    const sharedBoundary = Date.parse('2026-10-29T10:30:00.000Z');
+    const decisionClose = sharedBoundary - 3 * 60_000;
     const now = decisionClose + 20_000;
     const eligible = findEligibleStartTimeframes(now, decisionClose);
-    const timeframes = eligible.map(item => item.timeframeMinutes);
-    for (const required of [5, 10, 15, 30]) {
-      if (!timeframes.includes(required as any)) {
-        throw new Error(`Expected ${required}m entry timeframe to be eligible at the same 10:30 boundary.`);
+    if (eligible.length !== 1 || eligible[0].timeframeMinutes !== 5 ||
+        eligible[0].entryTimeMs !== sharedBoundary) {
+      throw new Error('A shared 5/10/15/30 boundary must still create only a 5-minute entry schedule.');
+    }
+
+    for (const expiry of EXPIRY_HORIZONS_MINUTES) {
+      if (!isSupportedExpiryMinutes(expiry)) {
+        throw new Error(`The dynamic expiry horizon ${expiry}m must remain selectable.`);
       }
     }
-    if (timeframes.includes(20) || timeframes.includes(25)) {
-      throw new Error('A timeframe without a boundary exactly three minutes ahead must not be eligible.');
+    if (isSupportedExpiryMinutes(6) || isSupportedExpiryMinutes(35)) {
+      throw new Error('Expiry choices must remain within the supported 5–30 minute research horizons.');
     }
-    for (const item of eligible) {
-      if (item.entryTimeMs !== entryOpen || item.decisionTimeMs !== decisionClose) {
-        throw new Error('The live clock contract drifted away from the exact T-3m entry boundary.');
-      }
-      if (getNextCandleOpenMs(now, item.timeframeMinutes) !== entryOpen) {
-        throw new Error('Entry boundary calculation disagrees with eligibility output.');
-      }
-    }
+
     if (findEligibleStartTimeframes(decisionClose + 25_000, decisionClose).length !== 0) {
       throw new Error('A signal processed after the strict 25-second decision-processing window must be rejected.');
     }
     if (findEligibleStartTimeframes(now + 60_000, decisionClose + 60_000).length !== 0) {
       throw new Error('A late signal must not be mislabeled as a three-minute advance signal.');
+    }
+  });
+
+  await runTest('ENTRY_EXIT', 'Signal factory keeps M5 entry while selecting independent 5–30m expiry', () => {
+    const signalCandle: Candle = {
+      symbol: 'EUR/USD',
+      timestamp: '2026-10-29T10:11:00.000Z',
+      timestampMs: Date.parse('2026-10-29T10:11:00.000Z'),
+      open: 1.0850,
+      high: 1.0860,
+      low: 1.0840,
+      close: 1.0855,
+      volume: 100,
+      source: 'test_fixture',
+    };
+
+    for (const expiryMinutes of EXPIRY_HORIZONS_MINUTES) {
+      const signal = entryExitEngine.createResearchSignal({
+        symbol: 'EUR/USD',
+        direction: 'BUY',
+        signalCandle,
+        ruleFamily: `test_m5_entry_expiry_${expiryMinutes}`,
+        expiryMinutes,
+        entryTimeframeMinutes: ENTRY_CANDLE_TIMEFRAME_MINUTES,
+        confidence: 0.7,
+        modelVersion: 'm5-entry-dynamic-expiry-test',
+      });
+      if (signal.entryTimeframeMinutes !== 5 || signal.expiryMinutes !== expiryMinutes) {
+        throw new Error(`Expected M5 entry with independent ${expiryMinutes}m expiry.`);
+      }
+      const duration = Date.parse(signal.candleCloseTimeUtc!) - Date.parse(signal.candleOpenTimeUtc!);
+      if (duration !== expiryMinutes * 60_000) {
+        throw new Error(`Expiry ${expiryMinutes}m must start at the M5 open and close exactly after its duration.`);
+      }
+      if (Date.parse(signal.candleOpenTimeUtc!) % (5 * 60_000) !== 0) {
+        throw new Error('Every test signal entry must align to an M5 candle boundary.');
+      }
+    }
+
+    let rejected = false;
+    try {
+      entryExitEngine.createResearchSignal({
+        symbol: 'EUR/USD',
+        direction: 'BUY',
+        signalCandle,
+        ruleFamily: 'test_reject_non_m5_entry',
+        expiryMinutes: 15,
+        entryTimeframeMinutes: 15 as unknown as 5,
+        confidence: 0.7,
+        modelVersion: 'm5-entry-dynamic-expiry-test',
+      });
+    } catch (error: any) {
+      rejected = String(error.message).includes('only on a 5-minute candle');
+    }
+    if (!rejected) {
+      throw new Error('The signal factory must reject any new entry timeframe other than M5.');
     }
   });
 
@@ -2024,18 +2099,24 @@ export async function runAllVerificationTests(): Promise<{
   // ==========================================
   // 3. ML & RESEARCH PIPELINE TESTS
   // ==========================================
-  await runTest('ML', 'Research uses the same N-minute entry and exact expiry candle', () => {
+  await runTest('ML', 'Research analyses M1 data but always enters M5 and settles at selected expiry', () => {
     const candles = makeM1TestCandles('EUR/USD', 3000);
-    const samples = researchEngine.extractFeatures(candles, 15);
+    const expiryMinutes = 15;
+    const samples = researchEngine.extractFeatures(candles, expiryMinutes);
     if (samples.length < 30) {
-      throw new Error(`Expected enough eligible 15m observations, received ${samples.length}.`);
+      throw new Error(`Expected enough eligible ${expiryMinutes}m expiry observations, received ${samples.length}.`);
     }
     for (const sample of samples.slice(0, 50)) {
-      if (sample.entryTimeframeMinutes !== 15 || sample.entryTimeMs % (15 * 60_000) !== 0) {
-        throw new Error('Research sample is not aligned to its 15-minute starting candle.');
+      if (sample.entryTimeframeMinutes !== 5 ||
+          sample.entryTimeMs % (5 * 60_000) !== 0) {
+        throw new Error('Research samples must enter only on a 5-minute candle boundary.');
+      }
+      if (sample.expiryMinutes !== expiryMinutes ||
+          sample.expiryTimeMs - sample.entryTimeMs !== expiryMinutes * 60_000) {
+        throw new Error('The selected expiry horizon must be independent of the fixed M5 entry.');
       }
       if (sample.entryTimeMs - (sample.candle.timestampMs + 60_000) !== 180_000) {
-        throw new Error('Research decision was not made exactly three minutes before entry.');
+        throw new Error('Research decision was not made exactly three minutes before the M5 entry.');
       }
       if (sample.exitCandleTimeMs + 60_000 !== sample.expiryTimeMs) {
         throw new Error('Research settlement used a candle after the exact expiry minute.');
