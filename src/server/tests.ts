@@ -40,6 +40,7 @@ import {
 import { sanitizeLossAutopsy, OBSERVATION_ONLY_LESSONS } from './researchGovernance.js';
 import { calibratePredictionScore } from './predictionCalibration.js';
 import { opportunityEngine, evaluateOpportunityHoldout, buildOpportunitySchedule } from './opportunityEngine.js';
+import { mapWithConcurrency, MARKET_SENSE_CONCURRENCY } from './scheduler.js';
 import {
   assessPaperCapitalRisk,
   CONSERVATIVE_PAPER_RISK_POLICY,
@@ -90,6 +91,36 @@ export async function runAllVerificationTests(): Promise<{
       });
     }
   };
+
+  await runTest('SCHEDULER', '24/5 market sensing stays bounded and preserves pair ordering', async () => {
+    const items = Array.from({ length: 37 }, (_, index) => index);
+    let active = 0;
+    let maximumActive = 0;
+    const rows = await mapWithConcurrency(items, MARKET_SENSE_CONCURRENCY, async (item, index) => {
+      active++;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise(resolve => setTimeout(resolve, 2));
+      active--;
+      return { item, index };
+    });
+    if (maximumActive > MARKET_SENSE_CONCURRENCY) {
+      throw new Error(`Market scanner exceeded its concurrency limit: ${maximumActive} > ${MARKET_SENSE_CONCURRENCY}.`);
+    }
+    if (rows.length !== items.length || rows.some((row, index) => row.item !== index || row.index !== index)) {
+      throw new Error('Bounded market scan dropped, duplicated or reordered pair results.');
+    }
+    if (maximumActive < 2) throw new Error('Market scan tasks did not run concurrently.');
+  });
+
+  await runTest('SCHEDULER', '24/5 market sensing rejects unsafe concurrency configuration', async () => {
+    let rejected = false;
+    try {
+      await mapWithConcurrency([1, 2, 3], 0, async value => value);
+    } catch (error) {
+      rejected = error instanceof Error && error.message.includes('positive integer');
+    }
+    if (!rejected) throw new Error('Invalid scheduler concurrency must fail explicitly.');
+  });
 
   await runTest('RESEARCH', 'Seeded evolutionary search is deterministic and dataset-bound', () => {
     const seed = 'reproducibility-test-seed';

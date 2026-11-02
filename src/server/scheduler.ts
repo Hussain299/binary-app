@@ -28,9 +28,36 @@ import {
 import { findEligibleStartTimeframes } from './tradingClock.js';
 import { FEATURE_SCHEMA_VERSION, RESEARCH_ENGINE_VERSION } from './researchReproducibility.js';
 
+export const MARKET_SENSE_CONCURRENCY = 8;
+
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R> | R,
+): Promise<R[]> {
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error('Concurrency must be a positive integer.');
+  }
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const runWorker = async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index], index);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(items.length, concurrency) }, () => runWorker())
+  );
+  return results;
+}
+
 export class AutonomousScheduler {
   private isRunningCycle = false;
+  private autopilotLoopActive = false;
   private autopilotTimer: NodeJS.Timeout | null = null;
+  private nextAutopilotPulseAt: string | null = null;
   private autopilotWarmupTimer: NodeJS.Timeout | null = null;
   private autopilotIntervalMs = 20 * 1000; // Market sensing only; never run genetic search on this pulse.
   private researchTimer: NodeJS.Timeout | null = null;
@@ -84,24 +111,23 @@ export class AutonomousScheduler {
   }
 
   public start() {
-    if (this.autopilotTimer || this.researchTimer) return;
-    console.log('[Autopilot] Starting SignalForge scheduled signal and research coordinator...');
+    if (this.autopilotLoopActive) return;
+    this.autopilotLoopActive = true;
+    console.log('[Autopilot] Starting SignalForge always-on 24/5 paper research service...');
 
     this.logMind(
       'MIND',
-      `Research coordinator online. Market sensing runs every 20 seconds; evolutionary research checks imported history every 15 minutes.`
+      `Always-on 24/5 service online. Market sensing repeats after each completed pulse with a ${this.autopilotIntervalMs / 1000}s cooldown; weekends remain monitored without fetching or creating trades. Evolutionary research checks imported history every 15 minutes.`
     );
 
     this.autopilotWarmupTimer = setTimeout(() => {
       this.autopilotWarmupTimer = null;
-      void this.executeAutopilotPulse('WARMUP');
+      void this.runAutopilotLoop('WARMUP');
     }, 1500);
 
-    this.autopilotTimer = setInterval(() => {
-      void this.executeAutopilotPulse('AUTONOMOUS_PULSE');
-    }, this.autopilotIntervalMs);
-
-    // Heavy 300-candidate searches are deliberately isolated from the 20s signal loop.
+    // Schedule the next market pulse only after the previous one finishes.
+    // This avoids overlapping callbacks and skipped scans when providers are slow.
+    // Heavy 300-candidate searches remain isolated from market sensing.
     this.researchWarmupTimer = setTimeout(() => {
       this.researchWarmupTimer = null;
       void this.checkAutonomousEvolutionResearch();
@@ -120,12 +146,14 @@ export class AutonomousScheduler {
   }
 
   public stop() {
+    this.autopilotLoopActive = false;
+    this.nextAutopilotPulseAt = null;
     if (this.autopilotWarmupTimer) {
       clearTimeout(this.autopilotWarmupTimer);
       this.autopilotWarmupTimer = null;
     }
     if (this.autopilotTimer) {
-      clearInterval(this.autopilotTimer);
+      clearTimeout(this.autopilotTimer);
       this.autopilotTimer = null;
     }
     if (this.researchWarmupTimer) {
@@ -140,6 +168,29 @@ export class AutonomousScheduler {
     this.logMind('MIND', 'Autonomous market and research schedulers paused. Any already-running research batch is allowed to finish safely.');
   }
 
+  private scheduleNextAutopilotPulse(triggerSource: string = 'AUTONOMOUS_PULSE') {
+    if (!this.autopilotLoopActive) return;
+    if (this.autopilotTimer) clearTimeout(this.autopilotTimer);
+    this.nextAutopilotPulseAt = new Date(Date.now() + this.autopilotIntervalMs).toISOString();
+    this.autopilotTimer = setTimeout(() => {
+      this.autopilotTimer = null;
+      void this.runAutopilotLoop(triggerSource);
+    }, this.autopilotIntervalMs);
+  }
+
+  private async runAutopilotLoop(triggerSource: string): Promise<void> {
+    if (!this.autopilotLoopActive) return;
+    try {
+      await this.executeAutopilotPulse(triggerSource);
+    } catch (error: any) {
+      this.lastPulseError = error?.message || String(error);
+      this.lastPulseCompletedAt = new Date().toISOString();
+      this.logMind('AUDITOR', `Market-sensing loop recovered from an unexpected error: ${this.lastPulseError}`);
+    } finally {
+      if (this.autopilotLoopActive) this.scheduleNextAutopilotPulse();
+    }
+  }
+
   public getAutopilotStatus() {
     const now = new Date();
     const market = getForexMarketState(now);
@@ -150,8 +201,17 @@ export class AutonomousScheduler {
     for (const item of this.lastPairDiagnostics) {
       reasonCounts.set(item.result, (reasonCounts.get(item.result) || 0) + 1);
     }
+    const lastPulseAtMs = this.lastPulseCompletedAt ? Date.parse(this.lastPulseCompletedAt) : null;
+    const lastPulseAgeSeconds = lastPulseAtMs !== null && Number.isFinite(lastPulseAtMs)
+      ? Math.max(0, Math.floor((now.getTime() - lastPulseAtMs) / 1000))
+      : null;
     return {
-      schedulerStarted: !!this.autopilotTimer,
+      schedulerStarted: this.autopilotLoopActive,
+      serviceMode: 'ALWAYS_ON_24_5',
+      nextPulseAt: this.nextAutopilotPulseAt,
+      lastHeartbeatAt: this.lastPulseCompletedAt,
+      lastPulseAgeSeconds,
+      pulseHealthy: this.autopilotLoopActive && (lastPulseAgeSeconds === null || lastPulseAgeSeconds <= 120),
       warmupPending: !!this.autopilotWarmupTimer,
       cycleRunning: this.isRunningCycle,
       market,
@@ -449,6 +509,18 @@ export class AutonomousScheduler {
     experimentsRun: number;
     topExperiment: ResearchExperiment | null;
   }> {
+    if (this.isRunningCycle) {
+      this.lastPulseSkippedReason = 'PREVIOUS_PULSE_STILL_RUNNING';
+      return {
+        durationMs: 0,
+        pairsProcessed: 0,
+        signalsCreated: 0,
+        signalsUpdated: 0,
+        experimentsRun: 0,
+        topExperiment: null,
+      };
+    }
+
     const pulseNow = new Date();
     this.lastPulseStartedAt = pulseNow.toISOString();
     this.lastPulseTriggerSource = triggerSource;
@@ -478,18 +550,6 @@ export class AutonomousScheduler {
       };
     }
 
-    if (this.isRunningCycle) {
-      this.lastPulseSkippedReason = 'PREVIOUS_PULSE_STILL_RUNNING';
-      return {
-        durationMs: 0,
-        pairsProcessed: 0,
-        signalsCreated: 0,
-        signalsUpdated: 0,
-        experimentsRun: 0,
-        topExperiment: null,
-      };
-    }
-
     this.isRunningCycle = true;
     const startTime = Date.now();
     this.cycleCount++;
@@ -498,24 +558,17 @@ export class AutonomousScheduler {
       const lifecycleCandlesMap: Record<ForexSymbol, Candle[]> = {} as any;
       const freshCandlesMap: Record<ForexSymbol, Candle[]> = {} as any;
       const trustedSources = new Set(['biquote', 'dukascopy', 'yahoo', 'imported']);
-      let totalCandlesFetched = 0;
-      const pairDiagnostics: Array<{
-        symbol: ForexSymbol; source: string; freshFeed: boolean; newestCandleAt: string | null;
-        ageSeconds: number | null; candleCount: number; eligibleTimeframes: number[]; result: string;
-      }> = [];
+      const pairDiagnostics = FOREX_PAIRS.map(symbol => ({
+        symbol, source: 'none', freshFeed: false, newestCandleAt: null as string | null,
+        ageSeconds: null as number | null, candleCount: 0, eligibleTimeframes: [] as number[],
+        result: 'FEED_NOT_CHECKED',
+      }));
 
-      // 1. Autonomous market sensing. Keep two deliberately separate views:
-      // - freshCandlesMap gates new hypotheses and entries;
-      // - lifecycleCandlesMap contains retained genuine M1 history for exact
-      //   entry/expiry reconciliation after feed gaps, app restarts, or weekends.
-      for (const symbol of FOREX_PAIRS) {
+      // Sense independent currency pairs concurrently with a hard ceiling.
+      // A slow provider on one pair no longer blocks the rest of the 24/5 watchlist.
+      await mapWithConcurrency(FOREX_PAIRS, MARKET_SENSE_CONCURRENCY, async (symbol, index) => {
         freshCandlesMap[symbol] = [];
-        const pairDiagnostic = {
-          symbol, source: 'none', freshFeed: false, newestCandleAt: null as string | null,
-          ageSeconds: null as number | null, candleCount: 0, eligibleTimeframes: [] as number[],
-          result: 'FEED_NOT_CHECKED',
-        };
-        pairDiagnostics.push(pairDiagnostic);
+        const pairDiagnostic = pairDiagnostics[index];
         const readTrustedHistory = () => db.getCandles(symbol, 5000)
           .filter(c => trustedSources.has(c.source))
           .sort((a, b) => a.timestampMs - b.timestampMs);
@@ -536,14 +589,10 @@ export class AutonomousScheduler {
           pairDiagnostic.newestCandleAt = newest?.timestamp || null;
           pairDiagnostic.ageSeconds = newest ? Math.round(ageMs / 1000) : null;
           pairDiagnostic.freshFeed = isRealFreshFeed;
-
-          // fetchCandles persists its response; reload the bounded trusted archive
-          // so outcome reconciliation can see the exact historic expiry minute.
           lifecycleCandlesMap[symbol] = readTrustedHistory();
           freshCandlesMap[symbol] = isRealFreshFeed
             ? res.candles.filter(c => trustedSources.has(c.source))
             : [];
-          totalCandlesFetched += freshCandlesMap[symbol].length;
           pairDiagnostic.candleCount = freshCandlesMap[symbol].length;
           pairDiagnostic.result = !isRealFreshFeed
             ? 'NO_FRESH_TRUSTED_M1_FEED'
@@ -554,7 +603,7 @@ export class AutonomousScheduler {
           pairDiagnostic.result = 'FEED_FETCH_FAILED';
           console.error(`[Autopilot] Sensing failed for ${symbol}:`, err.message);
         }
-      }
+      });
 
       // 2. Step lifecycle engine from retained genuine candles, even when the
       // latest feed is stale. Fresh data remains mandatory for new signals.
