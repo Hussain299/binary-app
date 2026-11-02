@@ -663,14 +663,10 @@ apiRouter.post('/strategies/evolve', (_req: Request, res: Response) => {
   });
 });
 
-// POST /api/signals/clear-history — Purges closed trade history while keeping active/pending signals
+// History is an audit ledger. Destructive clearing is permanently disabled.
 apiRouter.post('/signals/clear-history', (_req: Request, res: Response) => {
-  db.clearClosedSignalsHistory();
-  res.json({
-    success: true,
-    message: 'Closed signals history cleared successfully',
-    signals: db.getSignals(),
-    activeCount: db.getActiveSignals().length,
+  return res.status(410).json({
+    error: 'Trade history is immutable and cannot be cleared. Use date and status filters to review records.',
   });
 });
 
