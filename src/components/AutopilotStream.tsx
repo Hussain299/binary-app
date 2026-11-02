@@ -15,12 +15,32 @@ import { AutopilotLog, FOREX_PAIRS } from '../types/index.js';
 interface AutopilotStreamProps {
   logs: AutopilotLog[];
   activeSignalsCount: number;
+  schedulerStarted?: boolean;
+  pulseHealthy?: boolean;
+  pulseIntervalSeconds?: number;
+  strategyReadiness?: string;
 }
 
 export const AutopilotStream: React.FC<AutopilotStreamProps> = ({
   logs,
   activeSignalsCount,
+  schedulerStarted,
+  pulseHealthy,
+  pulseIntervalSeconds = 8,
+  strategyReadiness,
 }) => {
+  const statusLabel = schedulerStarted === undefined
+    ? 'WAITING FOR TELEMETRY'
+    : !schedulerStarted
+      ? 'SCHEDULER STOPPED'
+      : pulseHealthy
+        ? 'PULSE HEALTHY'
+        : 'PULSE STALE';
+  const statusClass = statusLabel === 'PULSE HEALTHY'
+    ? 'text-emerald-400'
+    : statusLabel === 'WAITING FOR TELEMETRY'
+      ? 'text-neutral-400'
+      : 'text-rose-400';
   const getRoleIcon = (role: AutopilotLog['role']) => {
     switch (role) {
       case 'MIND':
@@ -57,24 +77,30 @@ export const AutopilotStream: React.FC<AutopilotStreamProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-neutral-800">
         <div className="flex items-center gap-2.5">
           <div className="relative flex items-center justify-center">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping absolute" />
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 relative" />
+            <span className={`w-2.5 h-2.5 rounded-full relative ${statusLabel === 'PULSE HEALTHY' ? 'bg-emerald-500' : statusLabel === 'WAITING FOR TELEMETRY' ? 'bg-neutral-500' : 'bg-rose-500'}`} />
           </div>
           <div className="flex items-center gap-1.5 font-bold text-white tracking-tight">
-            <span>SCHEDULED SIGNAL & RESEARCH ENGINE</span>
+            <span>PAPER SIGNAL & RESEARCH ENGINE</span>
             <span className="text-neutral-600">·</span>
-            <span className="text-emerald-400 font-semibold">RESEARCH PULSE ACTIVE</span>
+            <span className={`font-semibold ${statusClass}`}>{statusLabel}</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-3 text-[11px] text-neutral-400">
-          <span>Continuous Loop: <strong>20s Pulse</strong></span>
+        <div className="flex flex-wrap items-center gap-3 text-[11px] text-neutral-400">
+          <span>Scan cooldown: <strong>{pulseIntervalSeconds}s after each completed scan</strong></span>
           <span>·</span>
           <span>Sensing: <strong>{FOREX_PAIRS.length} Currency Pairs</strong></span>
           <span>·</span>
           <span>
-            Active Signals:{' '}
-            <strong className="text-emerald-400">{activeSignalsCount} Monitored</strong>
+            Qualified strategies:{' '}
+            <strong className={strategyReadiness === 'READY' ? 'text-emerald-400' : 'text-amber-400'}>
+              {strategyReadiness ?? 'Checking'}
+            </strong>
+          </span>
+          <span>·</span>
+          <span>
+            Active paper signals:{' '}
+            <strong className="text-neutral-200">{activeSignalsCount} monitored</strong>
           </span>
         </div>
       </div>
