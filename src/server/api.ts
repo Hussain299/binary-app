@@ -467,8 +467,9 @@ apiRouter.post('/strategies/search-batch', (req: Request, res: Response) => {
     if (!symbol) return res.status(400).json({ error: 'Choose a supported forex pair.' });
     const activeJob = [...strategySearchJobs.values()].find(job => job.status === 'RUNNING');
     if (activeJob) return res.status(409).json({ error: 'A 300-candidate strategy search is already running.', jobId: activeJob.jobId });
-    if (researchEngine.isEvolutionBatchRunning()) {
-      return res.status(409).json({ error: 'The autonomous research coordinator already owns the evolutionary batch lock.' });
+    const workerAdmission = autonomousScheduler.canStartManualResearchBatch();
+    if (!workerAdmission.allowed) {
+      return res.status(409).json({ error: workerAdmission.reason || 'A research worker is already active.' });
     }
 
     const candles = historicalDataStore.getLatestCandles(symbol, 120_000);

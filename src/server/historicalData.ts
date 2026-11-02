@@ -27,7 +27,21 @@ export interface HistoricalImportResult {
   lastTimestamp: string | null;
 }
 
+export interface HistoricalDataStats {
+  symbol: ForexSymbol;
+  count: number;
+  usableM1Count: number;
+  zeroVolumeFlatRows: number;
+  continuityRatio: number;
+  firstTimestamp: string | null;
+  lastTimestamp: string | null;
+  monthsStored: number;
+  sources: string[];
+}
+
 class HistoricalDataStore {
+  private readonly statsCache = new Map<ForexSymbol, { fingerprint: string; stats: HistoricalDataStats }>();
+
   private prefixFor(symbol: ForexSymbol): string {
     return `${symbol.replace('/', '')}_`;
   }
@@ -186,6 +200,8 @@ class HistoricalDataStore {
       fs.writeFileSync(temp, JSON.stringify(sortedMonth), 'utf-8');
       fs.renameSync(temp, file);
     }
+    // Any changed monthly partition invalidates the cached per-pair summary.
+    this.statsCache.delete(symbol);
 
     const sorted = this.getCandles(symbol, MAX_CANDLES_PER_PAIR);
     return {
@@ -199,16 +215,141 @@ class HistoricalDataStore {
     };
   }
 
-  public getStats(symbol: ForexSymbol) {
-    const candles = this.getCandles(symbol);
-    return {
+  private listMonths(symbol: ForexSymbol): string[] {
+    if (!fs.existsSync(ROOT)) return [];
+    const prefix = this.prefixFor(symbol);
+    return fs.readdirSync(ROOT)
+      .filter(name => name.startsWith(prefix) && /^\d{6}\.json$/.test(name.slice(prefix.length)))
+      .map(name => name.slice(prefix.length, -5))
+      .sort();
+  }
+
+  private isResearchUsable(candle: Candle): boolean {
+    return ALLOWED_SOURCES.has(candle.source) &&
+      !(candle.volume === 0 &&
+        candle.open === candle.high &&
+        candle.high === candle.low &&
+        candle.low === candle.close);
+  }
+
+  /**
+   * Stream one month partition at a time. The old implementation assembled up
+   * to 1.9m candles just to paint the readiness dashboard, creating avoidable
+   * memory pressure across a 20-pair research universe.
+   */
+  private getStatsFingerprint(symbol: ForexSymbol, months: string[]): string {
+    return months.map(month => {
+      try {
+        const stat = fs.statSync(this.fileFor(symbol, month));
+        return `${month}:${stat.size}:${stat.mtimeMs}`;
+      } catch {
+        return `${month}:missing`;
+      }
+    }).join('|');
+  }
+
+  public getStats(
+    symbol: ForexSymbol,
+    sinceTimestampMs: number | null = null,
+  ): HistoricalDataStats & { usableM1CandlesSince: number } {
+    const months = this.listMonths(symbol);
+    const fingerprint = this.getStatsFingerprint(symbol, months);
+    const cached = this.statsCache.get(symbol);
+    if (cached && cached.fingerprint === fingerprint) {
+      return {
+        ...cached.stats,
+        usableM1CandlesSince: sinceTimestampMs === null
+          ? cached.stats.usableM1Count
+          : this.countUsableCandlesSince(symbol, sinceTimestampMs),
+      };
+    }
+
+    let count = 0;
+    let usableM1Count = 0;
+    let usableM1CandlesSince = 0;
+    let zeroVolumeFlatRows = 0;
+    let minuteSteps = 0;
+    let previousUsableTimestamp: number | null = null;
+    let firstTimestamp: string | null = null;
+    let lastTimestamp: string | null = null;
+    let firstTimestampMs = Infinity;
+    let lastTimestampMs = -Infinity;
+    const sources = new Set<string>();
+    let monthsStored = 0;
+
+    for (const month of months) {
+      const rows = this.readMonth(symbol, month)
+        .sort((a, b) => a.timestampMs - b.timestampMs);
+      if (rows.length === 0) continue;
+      monthsStored++;
+      count += rows.length;
+      for (const candle of rows) {
+        sources.add(candle.source);
+        if (candle.timestampMs < firstTimestampMs) {
+          firstTimestampMs = candle.timestampMs;
+          firstTimestamp = candle.timestamp;
+        }
+        if (candle.timestampMs > lastTimestampMs) {
+          lastTimestampMs = candle.timestampMs;
+          lastTimestamp = candle.timestamp;
+        }
+        if (!this.isResearchUsable(candle)) {
+          if (candle.volume === 0 &&
+              candle.open === candle.high &&
+              candle.high === candle.low &&
+              candle.low === candle.close) {
+            zeroVolumeFlatRows++;
+          }
+          continue;
+        }
+        usableM1Count++;
+        if (sinceTimestampMs !== null && candle.timestampMs >= sinceTimestampMs) {
+          usableM1CandlesSince++;
+        }
+        if (previousUsableTimestamp !== null &&
+            Math.abs((candle.timestampMs - previousUsableTimestamp) - 60_000) <= 5_000) {
+          minuteSteps++;
+        }
+        previousUsableTimestamp = candle.timestampMs;
+      }
+    }
+
+    const stats: HistoricalDataStats = {
       symbol,
-      count: candles.length,
-      firstTimestamp: candles[0]?.timestamp ?? null,
-      lastTimestamp: candles[candles.length - 1]?.timestamp ?? null,
-      monthsStored: candles.length ? new Set(candles.map(c => c.timestamp.slice(0, 7))).size : 0,
-      sources: [...new Set(candles.map(c => c.source))],
+      count,
+      usableM1Count,
+      zeroVolumeFlatRows,
+      continuityRatio: minuteSteps / Math.max(1, usableM1Count - 1),
+      firstTimestamp,
+      lastTimestamp,
+      monthsStored,
+      sources: [...sources].sort(),
     };
+    this.statsCache.set(symbol, { fingerprint, stats });
+    return {
+      ...stats,
+      usableM1CandlesSince: sinceTimestampMs === null
+        ? usableM1Count
+        : usableM1CandlesSince,
+    };
+  }
+
+  /** Count only usable M1 observations newer than an already inspected boundary. */
+  public countUsableCandlesSince(symbol: ForexSymbol, timestampMs: number): number {
+    if (!Number.isFinite(timestampMs)) return 0;
+    const date = new Date(timestampMs);
+    if (!Number.isFinite(date.getTime())) return 0;
+    const firstMonth = `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+    let count = 0;
+    // New history since a consumed window is concentrated in the current and
+    // subsequent UTC month partitions; do not reopen older archived months.
+    for (const month of this.listMonths(symbol)) {
+      if (month < firstMonth) continue;
+      for (const candle of this.readMonth(symbol, month)) {
+        if (candle.timestampMs >= timestampMs && this.isResearchUsable(candle)) count++;
+      }
+    }
+    return count;
   }
 }
 

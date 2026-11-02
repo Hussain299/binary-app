@@ -14,6 +14,7 @@ import type {
   ResearchSignal,
   ResearchExperiment,
   AgentReview,
+  AutonomousResearchQueueState,
   EvolutionGeneration,
   SignalLifecycleEvent,
   AutopilotLog,
@@ -26,6 +27,7 @@ import type { LearningPlatformPersistedState } from './learningPlatform.ts';
 import { sanitizeLossAutopsy } from './researchGovernance.ts';
 import { FEATURE_SCHEMA_VERSION, RESEARCH_ENGINE_VERSION } from './researchReproducibility.ts';
 import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.ts';
+import { createInitialAutonomousResearchQueueState } from './researchQueue.ts';
 import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid, type ReportingSession } from './marketHours.ts';
 import {
   assessNearestNeighbors,
@@ -63,6 +65,8 @@ interface DatabaseSchema {
   processedOutcomeIds: string[];
   /** Holdout time ranges already inspected by candidate searches; prevents reuse. */
   researchHoldoutWindows: Array<{ symbol: ForexSymbol; batchId: string; startUtc: string; endUtc: string; reservedAt: string }>;
+  /** Durable fair queue state for autonomous per-pair evolutionary research. */
+  autonomousResearchQueue: AutonomousResearchQueueState;
   /** Per-hypothesis opportunity holdouts; stops overlapping rescans from inflating evidence. */
   opportunityHoldoutWindows: Array<{
     symbol: ForexSymbol;
@@ -140,6 +144,23 @@ class DatabaseService {
         if (!Array.isArray(parsed.processedOutcomeIds)) parsed.processedOutcomeIds = [];
         if (!Array.isArray(parsed.researchHoldoutWindows)) parsed.researchHoldoutWindows = [];
         if (!Array.isArray(parsed.opportunityHoldoutWindows)) parsed.opportunityHoldoutWindows = [];
+        const defaultResearchQueue = createInitialAutonomousResearchQueueState();
+        const storedResearchQueue =
+          parsed.autonomousResearchQueue && typeof parsed.autonomousResearchQueue === 'object'
+            ? parsed.autonomousResearchQueue
+            : {};
+        parsed.autonomousResearchQueue = {
+          ...defaultResearchQueue,
+          ...storedResearchQueue,
+          schemaVersion: 1,
+          pairs: storedResearchQueue.pairs && typeof storedResearchQueue.pairs === 'object'
+            ? storedResearchQueue.pairs
+            : {},
+        };
+        if (!Number.isInteger(parsed.autonomousResearchQueue.nextPairIndex) ||
+            parsed.autonomousResearchQueue.nextPairIndex < 0) {
+          parsed.autonomousResearchQueue.nextPairIndex = 0;
+        }
         // Historical versions wrote fabricated strategy accuracy values. Never trust them
         // without stored untouched-test evidence; quarantine all such legacy candidates.
         if (Array.isArray(parsed.synthesizedStrategies)) {
@@ -276,6 +297,7 @@ class DatabaseService {
       processedOutcomeIds: [],
       researchHoldoutWindows: [],
       opportunityHoldoutWindows: [],
+      autonomousResearchQueue: createInitialAutonomousResearchQueueState(),
       cronState: {
         lastRun: null,
         nextRun: null,
@@ -304,6 +326,19 @@ class DatabaseService {
     this.saveTimeout = setTimeout(() => {
       this.saveStateSync();
     }, 500);
+  }
+
+  public getAutonomousResearchQueueState(): AutonomousResearchQueueState {
+    return JSON.parse(JSON.stringify(this.state.autonomousResearchQueue));
+  }
+
+  public setAutonomousResearchQueueState(
+    queue: AutonomousResearchQueueState,
+    flushImmediately = false,
+  ): void {
+    this.state.autonomousResearchQueue = queue;
+    if (flushImmediately) this.saveStateSync();
+    else this.scheduleSave();
   }
 
   /** Latest holdout end already inspected for one symbol. */

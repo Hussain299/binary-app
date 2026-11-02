@@ -20,7 +20,14 @@ import {
   RotateCcw,
   Zap,
 } from 'lucide-react';
-import { EvolutionGeneration, FOREX_PAIRS, ForexSymbol, SynthesizedStrategyGene, LossAutopsy } from '../../types/index.ts';
+import {
+  AutonomousResearchQueueState,
+  EvolutionGeneration,
+  FOREX_PAIRS,
+  ForexSymbol,
+  SynthesizedStrategyGene,
+  LossAutopsy,
+} from '../../types/index.ts';
 
 interface StrategySearchCandidate {
   id: string;
@@ -99,6 +106,8 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({ generations 
   const [searchPair, setSearchPair] = useState<ForexSymbol>('EUR/USD');
   const [timelinePair, setTimelinePair] = useState<string>('ALL');
   const [historyCounts, setHistoryCounts] = useState<Record<string, number>>({});
+  const [researchQueue, setResearchQueue] = useState<AutonomousResearchQueueState | null>(null);
+  const [researchCoordinator, setResearchCoordinator] = useState<any>(null);
   const [searchBatch, setSearchBatch] = useState<StrategySearchBatch | null>(null);
   const [isSearchingBatch, setIsSearchingBatch] = useState(false);
   const [searchError, setSearchError] = useState('');
@@ -123,6 +132,8 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({ generations 
       if (Array.isArray(stratRes.strategies)) setStrategies(stratRes.strategies);
       if (Array.isArray(autoRes.autopsies)) setAutopsies(autoRes.autopsies);
       if (Array.isArray(genRes.generations)) setStoredGenerations(genRes.generations);
+      setResearchCoordinator(genRes.researchCoordinator ?? null);
+      setResearchQueue(genRes.researchCoordinator?.queue ?? null);
     } catch {
       // Ignore
     } finally {
@@ -136,14 +147,29 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({ generations 
       .then(response => response.json())
       .then(payload => {
         const counts: Record<string, number> = {};
-        (payload.pairs || []).forEach((pair: { symbol: string; count: number }) => {
-          counts[pair.symbol] = pair.count;
+        (payload.pairs || []).forEach((pair: { symbol: string; count: number; usableM1Count?: number }) => {
+          counts[pair.symbol] = pair.usableM1Count ?? pair.count;
         });
         setHistoryCounts(counts);
         const readyPair = FOREX_PAIRS.find(pair => (counts[pair] || 0) >= 60_000);
         if (readyPair) setSearchPair(readyPair);
       })
       .catch(() => setSearchError('Could not read historical-data status.'));
+
+    // Queue telemetry is refreshed independently from the heavy strategy tables.
+    const refreshQueue = async () => {
+      try {
+        const response = await fetch('/api/evolution/state');
+        if (!response.ok) return;
+        const payload = await response.json();
+        setResearchCoordinator(payload.researchCoordinator ?? null);
+        setResearchQueue(payload.researchCoordinator?.queue ?? null);
+      } catch {
+        // Preserve the last known queue snapshot during transient API failures.
+      }
+    };
+    const timer = window.setInterval(refreshQueue, 15_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   // Build the genetic mutation timeline linking losses to strategy evolutionary adaptations
@@ -364,6 +390,18 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({ generations 
 
   const selectedHistoryCount = historyCounts[searchPair] || 0;
   const searchProgress = searchBatch ? Math.round((searchBatch.completed / 300) * 100) : 0;
+  const queuePairRows = FOREX_PAIRS.map(symbol => researchQueue?.pairs[symbol] ?? null);
+  const queueReadyCount = queuePairRows.filter(pair => pair && ['READY', 'QUEUED'].includes(pair.status)).length;
+  const queueRunningCount = queuePairRows.filter(pair => pair?.status === 'RUNNING').length;
+  const queueWaitingHistoryCount = queuePairRows.filter(pair =>
+    pair && ['NO_HISTORY', 'INSUFFICIENT_HISTORY', 'LOW_CONTINUITY'].includes(pair.status)
+  ).length;
+  const queueWaitingNewCount = queuePairRows.filter(pair => pair?.status === 'WAITING_FOR_NEW_HISTORY').length;
+  const queueCompletedCount = queuePairRows.filter(pair => pair?.lastBatchStatus === 'COMPLETED').length;
+  const queueFailedCount = queuePairRows.filter(pair => pair?.lastBatchStatus === 'FAILED' || pair?.lastBatchStatus === 'INTERRUPTED').length;
+  const currentResearchProgress = researchCoordinator?.totalCandidates
+    ? Math.round((researchCoordinator.completedCandidates / researchCoordinator.totalCandidates) * 100)
+    : 0;
 
   return (
     <div className="sf-page space-y-6">
@@ -768,6 +806,143 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({ generations 
          ============================================================== */}
       {activeSubTab === 'SEARCH' && (
         <section className="rounded-xl border border-cyan-900/70 bg-neutral-900/70 p-4 space-y-4">
+          <div className="rounded-xl border border-cyan-900/60 bg-[#08131d] p-4 sm:p-5 space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-[9px] uppercase tracking-[0.2em] text-cyan-300 font-semibold">Autonomous research orchestration</div>
+                <h4 className="mt-1 text-base font-bold text-white">Multi-pair evolutionary research fleet</h4>
+                <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-neutral-400">
+                  Every pair is assessed independently. Eligible pairs move through a persistent round-robin queue; one 300-candidate worker runs at a time to protect market sensing, memory and CPU.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={queueRunningCount > 0 ? 'rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[10px] text-emerald-300' : 'rounded-full border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-[10px] text-neutral-400'}>
+                  {queueRunningCount > 0 ? `RUNNING · ${researchCoordinator?.symbol || researchQueue?.currentSymbol || 'PAIR'}` : researchQueue?.lastRunStatus || 'INITIALIZING'}
+                </span>
+                <button
+                  onClick={loadData}
+                  disabled={isRefreshingData}
+                  className="rounded-lg border border-white/10 bg-white/[0.04] p-2 text-neutral-400 hover:text-white"
+                  title="Refresh research queue"
+                >
+                  <RotateCcw className={`h-3.5 w-3.5 ${isRefreshingData ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2">
+              {[
+                ['Pairs monitored', FOREX_PAIRS.length, 'text-white'],
+                ['Ready / queued', queueReadyCount, 'text-cyan-300'],
+                ['Research running', queueRunningCount, 'text-emerald-300'],
+                ['Need M1 history', queueWaitingHistoryCount, 'text-amber-300'],
+                ['Need new history', queueWaitingNewCount, 'text-amber-300'],
+                ['Batches completed', queueCompletedCount, 'text-white'],
+              ].map(([label, value, tone]) => (
+                <div key={label} className="rounded-lg border border-neutral-800 bg-neutral-950/90 px-3 py-2.5">
+                  <div className="text-[9px] uppercase tracking-wide text-neutral-500">{label}</div>
+                  <div className={`mt-1 text-xl font-bold tabular-nums ${tone}`}>{value}</div>
+                </div>
+              ))}
+            </div>
+
+            {queueRunningCount > 0 && (
+              <div className="rounded-lg border border-emerald-900/50 bg-emerald-950/10 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[10px]">
+                  <span className="font-semibold text-emerald-200">
+                    {researchCoordinator?.symbol || researchQueue?.currentSymbol} · 300-candidate research batch
+                  </span>
+                  <span className="font-mono text-emerald-300">
+                    {researchCoordinator?.completedCandidates ?? 0}/{researchCoordinator?.totalCandidates ?? 300} · {currentResearchProgress}%
+                  </span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-neutral-800">
+                  <div className="h-full rounded-full bg-emerald-400 transition-all" style={{ width: `${currentResearchProgress}%` }} />
+                </div>
+                <p className="mt-2 text-[10px] text-neutral-400">{researchCoordinator?.message || researchQueue?.lastRunMessage}</p>
+              </div>
+            )}
+
+            <div className="overflow-x-auto rounded-lg border border-neutral-800">
+              <table className="w-full min-w-[1120px] text-left">
+                <thead className="bg-neutral-950 text-[9px] uppercase tracking-wider text-neutral-500">
+                  <tr>
+                    <th className="px-3 py-2.5">Pair</th>
+                    <th className="px-3 py-2.5">Usable M1 history</th>
+                    <th className="px-3 py-2.5">New since inspected</th>
+                    <th className="px-3 py-2.5">Continuity</th>
+                    <th className="px-3 py-2.5">Queue</th>
+                    <th className="px-3 py-2.5">Last batch</th>
+                    <th className="px-3 py-2.5">Research readiness / blocker</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-800/80">
+                  {FOREX_PAIRS.map(symbol => {
+                    const pair = researchQueue?.pairs[symbol];
+                    const status = pair?.status || 'SCANNING';
+                    const statusTone = status === 'RUNNING'
+                      ? 'text-emerald-300 border-emerald-700/50 bg-emerald-950/20'
+                      : ['READY', 'QUEUED', 'COMPLETED'].includes(status)
+                        ? 'text-cyan-300 border-cyan-800/50 bg-cyan-950/20'
+                        : status === 'FAILED' || status === 'INTERRUPTED'
+                          ? 'text-rose-300 border-rose-900/50 bg-rose-950/20'
+                          : 'text-amber-300 border-amber-900/50 bg-amber-950/20';
+                    return (
+                      <tr key={symbol} className="hover:bg-white/[0.02]">
+                        <td className="px-3 py-2.5">
+                          <div className="font-mono text-[11px] font-semibold text-white">{symbol}</div>
+                          <div className="text-[9px] text-neutral-600">{pair?.monthsStored ?? 0} stored months</div>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="font-mono text-[11px] text-neutral-200">
+                            {(pair?.usableM1Count ?? 0).toLocaleString()} <span className="text-neutral-600">/ 60,000</span>
+                          </div>
+                          <div className="mt-1 h-1 w-28 overflow-hidden rounded-full bg-neutral-800">
+                            <div className="h-full rounded-full bg-cyan-400" style={{ width: `${Math.min(100, ((pair?.usableM1Count ?? 0) / 60_000) * 100)}%` }} />
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 font-mono text-[10px] text-neutral-300">
+                          {(pair?.genuinelyNewM1Candles ?? 0).toLocaleString()}
+                        </td>
+                        <td className="px-3 py-2.5 font-mono text-[10px] text-neutral-300">
+                          {pair ? `${(pair.continuityRatio * 100).toFixed(1)}%` : '—'}
+                          <div className="text-[9px] text-neutral-600">{(pair?.zeroVolumeFlatRows ?? 0).toLocaleString()} closure rows excluded</div>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span className={`inline-flex rounded-md border px-2 py-1 text-[9px] font-semibold ${statusTone}`}>
+                            {status.replace(/_/g, ' ')}
+                          </span>
+                          {pair?.queuePosition ? <div className="mt-1 text-[9px] text-cyan-300">Position #{pair.queuePosition}</div> : null}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="text-[10px] text-neutral-300">{pair?.lastBatchStatus || '—'}</div>
+                          <div className="mt-0.5 font-mono text-[9px] text-neutral-500">
+                            {pair?.lastBatchCompletedCandidates ? `${pair.lastBatchCompletedCandidates}/300 candidates` : 'No batch yet'}
+                          </div>
+                          <div className="text-[9px] text-neutral-600">
+                            {pair?.lastBatchHistoricalPasses ?? 0} passes · {pair?.lastBatchRejected ?? 0} rejected
+                          </div>
+                        </td>
+                        <td className="max-w-[360px] px-3 py-2.5 text-[10px] leading-relaxed text-neutral-400" title={pair?.readinessMessage || 'Waiting for the first eligibility scan.'}>
+                          {pair?.lastError
+                            ? <span className="text-rose-300">{pair.lastError}</span>
+                            : pair?.readinessMessage || 'Waiting for the first eligibility scan.'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[9px] text-neutral-500">
+              <span>Worker concurrency: {researchCoordinator?.maxConcurrentResearchBatches ?? 1} · Candidates per pair: {researchCoordinator?.candidatesPerBatch ?? 300} · Cooldown: {researchQueue?.cooldownSeconds ?? 60}s</span>
+              <span>{queueFailedCount} failed / interrupted batches · Holdout windows are never recycled</span>
+            </div>
+            {researchQueue?.lastRunMessage && (
+              <p className="text-[10px] text-neutral-400">{researchQueue.lastRunMessage}</p>
+            )}
+          </div>
+
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="max-w-2xl">
               <h4 className="text-sm font-bold text-white flex items-center gap-2">
