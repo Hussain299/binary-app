@@ -809,6 +809,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               const isWaiting = sig.lifecycleState === 'WAITING_FOR_ENTRY';
               const isActive = ['ACTIVE', 'ENTRY_TRIGGERED'].includes(sig.lifecycleState);
               const isClosed = sig.lifecycleState === 'CLOSED';
+              const isVerifying = sig.lifecycleState === 'EXIT_PENDING';
               const isWin = sig.outcomeResult === 'WIN';
               const isLoss = sig.outcomeResult === 'LOSS';
 
@@ -816,8 +817,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 <div
                   key={sig.id}
                   onClick={() => setSelectedSignal(sig)}
-                  className={`border rounded-xl p-3.5 sm:p-4 flex flex-col justify-between transition-colors cursor-pointer relative ${
-                    isActive
+                  className={`sf-trade-card border rounded-xl p-3.5 sm:p-4 flex flex-col justify-between transition-colors cursor-pointer relative ${
+                    isVerifying
+                      ? 'bg-neutral-900/95 border-violet-400/70 shadow-violet-950/30'
+                      : isActive
                       ? 'bg-neutral-900/95 border-emerald-500 shadow-emerald-950/40 ring-1 ring-emerald-500/40'
                       : isWaiting
                       ? 'bg-neutral-900/95 border-amber-500/80 shadow-amber-950/20'
@@ -912,6 +915,19 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                         <span className="font-mono text-xs font-black text-white bg-emerald-900 px-2 py-1 rounded border border-emerald-600 shrink-0 ml-2">
                           {getRemainingTime(sig.plannedExitTimeUtc)}
                         </span>
+                      </div>
+                    )}
+
+                    {isVerifying && (
+                      <div className="sf-settlement-pending rounded-xl p-3 text-xs flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Clock className="w-4 h-4 text-violet-300 shrink-0" />
+                          <div className="min-w-0">
+                            <span className="font-extrabold text-violet-200 block">SETTLEMENT VERIFICATION</span>
+                            <span className="text-[10px] text-violet-200/70">Expiry passed · waiting for the exact trusted candle · no result guessed</span>
+                          </div>
+                        </div>
+                        <span className="shrink-0 rounded-lg border border-violet-300/20 bg-violet-300/10 px-2 py-1 text-[10px] font-bold text-violet-100">PENDING</span>
                       </div>
                     )}
 
