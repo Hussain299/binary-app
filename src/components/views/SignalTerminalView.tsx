@@ -463,9 +463,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     ['CLOSED', 'EXPIRED', 'INVALIDATED'].includes(s.lifecycleState)
   );
   const completedSignals = signals.filter(
-    s => s.isNovelAiSynthesized === true &&
-      !!s.synthesizedGeneId &&
-      s.lifecycleState === 'CLOSED' &&
+    s => s.lifecycleState === 'CLOSED' &&
       ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
   );
   const archivedRuleBasedOutcomes = signals.filter(
