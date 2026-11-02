@@ -205,7 +205,10 @@ apiRouter.post('/analyze', (_req: Request, res: Response) => {
 apiRouter.get('/history', (req: Request, res: Response) => {
   const supplied = typeof req.query.date === 'string' ? req.query.date.trim() : '';
   const date = supplied || getIstDateString(Date.now()) || '';
-  if (date !== 'ALL' && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD or ALL.' });
+  const parsedDate = date === 'ALL' ? null : new Date(\`${date}T00:00:00.000Z\`);
+  if (date !== 'ALL' && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !parsedDate || !Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date)) {
+    return res.status(400).json({ error: 'date must be a real calendar date in YYYY-MM-DD format or ALL.' });
+  }
   const all = db.getSignals();
   const completed = all.filter(s => s.lifecycleState === 'CLOSED' && ['WIN','LOSS','SCRATCH'].includes(s.outcomeResult));
   const history = date === 'ALL' ? completed : completed.filter(s => getEconomicConclusionIstDate(s) === date);
