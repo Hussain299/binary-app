@@ -7,6 +7,8 @@
 import { FOREX_PAIRS } from '../types/index.ts';
 import type {
   AutopilotLog,
+  AutonomousResearchPairState,
+  AutonomousResearchQueueState,
   Candle,
   EvolutionGeneration,
   ForexSymbol,
@@ -32,6 +34,15 @@ import {
 } from './tradingClock.ts';
 import { FEATURE_SCHEMA_VERSION, RESEARCH_ENGINE_VERSION } from './researchReproducibility.ts';
 import { getTrustedMarketCandles, isBatchCandleStructureValid } from '../utils/marketChart.ts';
+import {
+  assessResearchPairReadiness,
+  assignResearchQueuePositions,
+  AUTONOMOUS_RESEARCH_COOLDOWN_SECONDS,
+  MINIMUM_RESEARCH_M1_CANDLES,
+  RESEARCH_CANDIDATES_PER_BATCH,
+  RESEARCH_HISTORY_WINDOW_LIMIT,
+  selectNextResearchPair,
+} from './researchQueue.ts';
 
 export const MARKET_SENSE_CONCURRENCY = Math.max(1, FOREX_PAIRS.length);
 export const AUTOPILOT_SCAN_INTERVAL_MS = 8_000;
@@ -97,9 +108,8 @@ export class AutonomousScheduler {
   private autopilotIntervalMs = AUTOPILOT_SCAN_INTERVAL_MS; // Recheck inside the strict 25s T-3 decision window.
   private researchTimer: NodeJS.Timeout | null = null;
   private researchWarmupTimer: NodeJS.Timeout | null = null;
-  private researchIntervalMs = 15 * 60 * 1000; // One bounded check every fifteen minutes.
+  private researchIntervalMs = AUTONOMOUS_RESEARCH_COOLDOWN_SECONDS * 1000; // One 300-candidate worker, with a one-minute inter-batch cooldown.
   private researchCoordinatorRunning = false;
-  private nextResearchPairIndex = 0;
   private nextResearchScanAt: string | null = null;
   private researchState: {
     status: 'IDLE' | 'SCANNING' | 'WAITING_FOR_HISTORY' | 'WAITING_FOR_NEW_HISTORY' | 'RUNNING' | 'COMPLETED' | 'FAILED';
@@ -161,6 +171,40 @@ export class AutonomousScheduler {
     if (existingGens.length > 0) {
       this.currentGeneration = existingGens[0].generation + 1;
     }
+    this.recoverInterruptedResearchQueue();
+  }
+
+  /**
+   * Recover a worker interrupted by process replacement. Any already-reserved
+   * holdout remains consumed; lastInspectedThroughUtc prevents replaying the
+   * same full research window after a restart.
+   */
+  private recoverInterruptedResearchQueue(): void {
+    const queue = db.getAutonomousResearchQueueState();
+    if (!queue.currentSymbol) return;
+    const pair = queue.pairs[queue.currentSymbol];
+    if (pair && pair.lastBatchId) {
+      const recorded = db.getGenerations().find(item => item.researchBatchId === pair.lastBatchId);
+      if (recorded) {
+        pair.lastBatchStatus = recorded.status === 'COMPLETED' ? 'COMPLETED' : 'FAILED';
+        pair.lastBatchFinishedAt = recorded.timestamp;
+        pair.status = recorded.status === 'COMPLETED' ? 'COMPLETED' : 'FAILED';
+        pair.readinessMessage = recorded.summary;
+      } else {
+        pair.status = 'INTERRUPTED';
+        pair.lastBatchStatus = 'INTERRUPTED';
+        pair.lastBatchFinishedAt = new Date().toISOString();
+        pair.lastError = 'Process restarted during the research batch. Partial candidates were not promoted; the inspected history window is not automatically replayed.';
+        pair.readinessMessage = pair.lastError;
+      }
+      pair.updatedAt = new Date().toISOString();
+    }
+    queue.currentSymbol = null;
+    queue.lastRunStatus = 'INTERRUPTED';
+    queue.lastBatchFinishedAt = new Date().toISOString();
+    queue.lastRunMessage = 'Recovered an interrupted research worker. Queue cursor and consumed history windows were preserved.';
+    queue.nextRunAt = new Date(Date.now() + this.researchIntervalMs).toISOString();
+    db.setAutonomousResearchQueueState(queue, true);
   }
 
   public start() {
@@ -170,7 +214,7 @@ export class AutonomousScheduler {
 
     this.logMind(
       'MIND',
-      `Always-on 24/5 service online. Market sensing repeats after each completed pulse with a ${this.autopilotIntervalMs / 1000}s cooldown; weekends remain monitored without fetching or creating trades. Evolutionary research checks imported history every 15 minutes.`
+      `Always-on 24/5 service online. Market sensing repeats after each completed pulse with a ${this.autopilotIntervalMs / 1000}s cooldown; weekends remain monitored without fetching or creating trades. A persistent 20-pair research queue dispatches one 300-candidate batch at a time with a ${AUTONOMOUS_RESEARCH_COOLDOWN_SECONDS}s cooldown.`
     );
 
     this.autopilotWarmupTimer = setTimeout(() => {
@@ -301,8 +345,23 @@ export class AutonomousScheduler {
       batchRunning: this.researchCoordinatorRunning || researchEngine.isEvolutionBatchRunning(),
       scanIntervalMinutes: this.researchIntervalMs / 60_000,
       marketPulseSeconds: this.autopilotIntervalMs / 1000,
-      requiredNewM1Candles: 60_000,
-      historyWindowLimit: 120_000,
+      requiredNewM1Candles: MINIMUM_RESEARCH_M1_CANDLES,
+      historyWindowLimit: RESEARCH_HISTORY_WINDOW_LIMIT,
+      candidatesPerBatch: RESEARCH_CANDIDATES_PER_BATCH,
+      maxConcurrentResearchBatches: 1,
+      queue: db.getAutonomousResearchQueueState(),
+      queueSummary: (() => {
+        const pairs = Object.values(db.getAutonomousResearchQueueState().pairs);
+        return {
+          totalPairs: FOREX_PAIRS.length,
+          ready: pairs.filter(item => item && ['READY', 'QUEUED'].includes(item.status)).length,
+          running: pairs.filter(item => item?.status === 'RUNNING').length,
+          waitingForHistory: pairs.filter(item => item && ['NO_HISTORY', 'INSUFFICIENT_HISTORY', 'LOW_CONTINUITY'].includes(item.status)).length,
+          waitingForNewHistory: pairs.filter(item => item?.status === 'WAITING_FOR_NEW_HISTORY').length,
+          completed: pairs.filter(item => item?.lastBatchStatus === 'COMPLETED').length,
+          failed: pairs.filter(item => item?.lastBatchStatus === 'FAILED').length,
+        };
+      })(),
     };
   }
 
