@@ -103,11 +103,22 @@ export const apiRouter = Router();
 
 // Healthcheck
 apiRouter.get('/_healthcheck', (_req: Request, res: Response) => {
+  const scheduler = autonomousScheduler.getAutopilotStatus();
   res.json({
     status: 'ok',
-    system: 'SignalForge ML Autonomous Research Intelligence',
+    system: 'SignalForge ML Paper Research Service',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
+    scheduler: {
+      started: scheduler.schedulerStarted,
+      pulseHealthy: scheduler.pulseHealthy,
+      lastHeartbeatAt: scheduler.lastHeartbeatAt,
+      lastPulseAgeSeconds: scheduler.lastPulseAgeSeconds,
+      lastPulseError: scheduler.lastPulseError,
+      marketOpen: scheduler.market.isOpen,
+      qualifiedStrategies: scheduler.paperStrategiesEligible,
+      strategyReadiness: scheduler.strategyReadiness,
+    },
   });
 });
 
@@ -735,6 +746,12 @@ apiRouter.get('/research/autopsies', (_req: Request, res: Response) => {
 // GET /api/system/health — Provider health, db statistics, cron status
 apiRouter.get('/system/health', (_req: Request, res: Response) => {
   const cron = db.getCronState();
+  const scheduler = autonomousScheduler.getAutopilotStatus();
+  const evolutionResearch = autonomousScheduler.getEvolutionResearchState();
+  const storedStrategies = db.getSynthesizedStrategies();
+  const eligibleStrategies = db.getPaperTradingStrategies();
+  const isCloudRun = Boolean(process.env.K_SERVICE);
+
   res.json({
     uptimeSeconds: Math.floor(process.uptime()),
     dbType: 'JSON File Store',
@@ -750,6 +767,33 @@ apiRouter.get('/system/health', (_req: Request, res: Response) => {
     cronHistory: cron.history,
     providers: db.getFeedHealthList(),
     sessions: dataFeedEngine.getMarketSessions(),
+    scheduler,
+    evolutionResearch,
+    strategyReadiness: {
+      storedCandidates: storedStrategies.length,
+      historicallyQualified: eligibleStrategies.length,
+      promoted: eligibleStrategies.filter(gene => gene.status === 'PROMOTED_ACTIVE').length,
+      paperTrading: eligibleStrategies.filter(gene => gene.status === 'PAPER_TRADING').length,
+      status: eligibleStrategies.length > 0 ? 'READY' : 'NO_HISTORICALLY_QUALIFIED_STRATEGY',
+      researchStatus: evolutionResearch.status,
+      researchMessage: evolutionResearch.message,
+      requiredImportedM1Candles: evolutionResearch.requiredNewM1Candles,
+    },
+    hosting: {
+      platform: isCloudRun ? 'CLOUD_RUN' : 'NODE_PROCESS',
+      backgroundCpuConfiguration: 'NOT_READABLE_FROM_APPLICATION',
+      warning: isCloudRun
+        ? 'Cloud Run background timers require instance-based billing (CPU allocated outside requests) and at least one minimum instance. Keep max instances at 1 while the scheduler and JSON database are process-local.'
+        : 'The host must keep this Node process alive and allow background timers to run continuously.',
+    },
+    storage: {
+      mode: 'LOCAL_JSON_FILES',
+      durableAcrossInstanceReplacement: isCloudRun ? false : null,
+      multiInstanceSafe: false,
+      warning: isCloudRun
+        ? 'The database and imported M1 partitions are stored in the container filesystem. They are not durable across instance replacement and are not shared between Cloud Run instances; use persistent external storage before relying on restarts or scaling.'
+        : 'State durability depends on the host filesystem. Multiple app instances do not share this JSON store.',
+    },
   });
 });
 
@@ -928,7 +972,7 @@ apiRouter.get('/autopilot/status', (_req: Request, res: Response) => {
   const scheduler = autonomousScheduler.getAutopilotStatus();
   res.json({
     status: scheduler.schedulerStarted ? 'SCHEDULER_RUNNING' : 'SCHEDULER_STOPPED',
-    mode: 'ALWAYS_ON_24_5_AUTOMATED_PAPER_SIGNAL_AND_RESEARCH',
+    mode: 'PROCESS_LOCAL_PAPER_RESEARCH',
     ...scheduler,
     totalCandles: db.getTotalCandlesCount(),
     pairsMonitored: FOREX_PAIRS.length,
@@ -957,7 +1001,7 @@ apiRouter.post('/autopilot/start', (_req: Request, res: Response) => {
 apiRouter.post('/autopilot/stop', (_req: Request, res: Response) => {
   return res.status(409).json({
     error: 'The paper research service is configured for automatic 24/5 operation. Manual pause is disabled; stop the hosting service only for planned maintenance.',
-    mode: 'ALWAYS_ON_24_5_AUTOMATED_PAPER_SIGNAL_AND_RESEARCH',
+    mode: 'PROCESS_LOCAL_PAPER_RESEARCH',
     executionEnabled: false,
   });
 });

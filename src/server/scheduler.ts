@@ -28,7 +28,29 @@ import {
 import { findEligibleStartTimeframes } from './tradingClock.ts';
 import { FEATURE_SCHEMA_VERSION, RESEARCH_ENGINE_VERSION } from './researchReproducibility.ts';
 
-export const MARKET_SENSE_CONCURRENCY = 8;
+export const MARKET_SENSE_CONCURRENCY = Math.max(1, FOREX_PAIRS.length);
+export const AUTOPILOT_SCAN_INTERVAL_MS = 8_000;
+
+const TRUSTED_MARKET_SOURCES = new Set(['biquote', 'dukascopy', 'yahoo', 'imported']);
+
+export function getTrustedFreshCandleSnapshot(candles: Candle[], nowMs: number): {
+  candles: Candle[];
+  newestCandle: Candle | null;
+  ageMs: number | null;
+  isFresh: boolean;
+} {
+  const trustedCandles = candles
+    .filter(candle => TRUSTED_MARKET_SOURCES.has(candle.source))
+    .sort((a, b) => a.timestampMs - b.timestampMs);
+  const newestCandle = trustedCandles[trustedCandles.length - 1] || null;
+  const ageMs = newestCandle ? nowMs - newestCandle.timestampMs : null;
+  return {
+    candles: trustedCandles,
+    newestCandle,
+    ageMs,
+    isFresh: ageMs !== null && ageMs >= -60_000 && ageMs <= 120_000,
+  };
+}
 
 export async function mapWithConcurrency<T, R>(
   items: readonly T[],
@@ -59,7 +81,7 @@ export class AutonomousScheduler {
   private autopilotTimer: NodeJS.Timeout | null = null;
   private nextAutopilotPulseAt: string | null = null;
   private autopilotWarmupTimer: NodeJS.Timeout | null = null;
-  private autopilotIntervalMs = 20 * 1000; // Market sensing only; never run genetic search on this pulse.
+  private autopilotIntervalMs = AUTOPILOT_SCAN_INTERVAL_MS; // Recheck inside the strict 25s T-3 decision window.
   private researchTimer: NodeJS.Timeout | null = null;
   private researchWarmupTimer: NodeJS.Timeout | null = null;
   private researchIntervalMs = 15 * 60 * 1000; // One bounded check every fifteen minutes.
@@ -102,6 +124,7 @@ export class AutonomousScheduler {
     symbol: ForexSymbol; source: string; freshFeed: boolean; newestCandleAt: string | null;
     ageSeconds: number | null; candleCount: number; eligibleTimeframes: number[]; result: string;
   }> = [];
+  private readonly lastDiagnosticLogAt = new Map<string, number>();
 
   constructor() {
     const existingGens = db.getGenerations();
@@ -207,11 +230,11 @@ export class AutonomousScheduler {
       : null;
     return {
       schedulerStarted: this.autopilotLoopActive,
-      serviceMode: 'ALWAYS_ON_24_5',
+      serviceMode: 'IN_PROCESS_PAPER_RESEARCH',
       nextPulseAt: this.nextAutopilotPulseAt,
       lastHeartbeatAt: this.lastPulseCompletedAt,
       lastPulseAgeSeconds,
-      pulseHealthy: this.autopilotLoopActive && (lastPulseAgeSeconds === null || lastPulseAgeSeconds <= 120),
+      pulseHealthy: this.autopilotLoopActive && !this.lastPulseError && lastPulseAgeSeconds !== null && lastPulseAgeSeconds <= 45,
       warmupPending: !!this.autopilotWarmupTimer,
       cycleRunning: this.isRunningCycle,
       market,
@@ -228,6 +251,8 @@ export class AutonomousScheduler {
       maxConcurrentOpenSignals: 4,
       availableOpenSlots: Math.max(0, 4 - openSignals.length),
       paperStrategiesEligible: eligibleStrategies.length,
+      storedStrategyCandidates: db.getSynthesizedStrategies().length,
+      strategyReadiness: eligibleStrategies.length > 0 ? 'READY' : 'NO_HISTORICALLY_QUALIFIED_STRATEGY',
       promotedStrategies: eligibleStrategies.filter(item => item.status === 'PROMOTED_ACTIVE').length,
       freshPairs: this.lastPairDiagnostics.filter(item => item.freshFeed).length,
       pairsScanned: this.lastPairDiagnostics.length,
@@ -487,9 +512,38 @@ export class AutonomousScheduler {
     symbol?: ForexSymbol,
     signalId?: string
   ) {
+    const now = Date.now();
+    let dedupeKey: string | null = null;
+    let throttleMs = 60_000;
+
+    const regimeGate = message.match(/^\[REGIME GATE\] Suppressed evolved candidate ([^:]+):/);
+    if (regimeGate) {
+      // One stable diagnostic per pair/genome per five minutes. The measured
+      // regime values may change each pulse; they do not justify 20 repeated alerts.
+      dedupeKey = `REGIME_GATE:${symbol || 'UNKNOWN'}:${regimeGate[1]}`;
+      throttleMs = 5 * 60_000;
+    } else {
+      const memoryVeto = message.match(/^\[EPISODIC MEMORY VETO\] ([A-Z]{3}\/[A-Z]{3}) (BUY|SELL)/);
+      if (memoryVeto) {
+        dedupeKey = `MEMORY_VETO:${memoryVeto[1]}:${memoryVeto[2]}`;
+        throttleMs = 60_000;
+      }
+    }
+
+    if (dedupeKey) {
+      const previousAt = this.lastDiagnosticLogAt.get(dedupeKey);
+      if (previousAt !== undefined && now - previousAt < throttleMs) return;
+      this.lastDiagnosticLogAt.set(dedupeKey, now);
+      if (this.lastDiagnosticLogAt.size > 2_000) {
+        for (const [key, timestamp] of this.lastDiagnosticLogAt) {
+          if (now - timestamp > 10 * 60_000) this.lastDiagnosticLogAt.delete(key);
+        }
+      }
+    }
+
     db.addAutopilotLog({
-      id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      timestamp: new Date().toISOString(),
+      id: `log_${now}_${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: new Date(now).toISOString(),
       role,
       message,
       symbol,
@@ -557,7 +611,7 @@ export class AutonomousScheduler {
     try {
       const lifecycleCandlesMap: Record<ForexSymbol, Candle[]> = {} as any;
       const freshCandlesMap: Record<ForexSymbol, Candle[]> = {} as any;
-      const trustedSources = new Set(['biquote', 'dukascopy', 'yahoo', 'imported']);
+      const trustedSources = TRUSTED_MARKET_SOURCES;
       const pairDiagnostics = FOREX_PAIRS.map(symbol => ({
         symbol, source: 'none', freshFeed: false, newestCandleAt: null as string | null,
         ageSeconds: null as number | null, candleCount: 0, eligibleTimeframes: [] as number[],
@@ -576,23 +630,20 @@ export class AutonomousScheduler {
 
         try {
           const res = await dataFeedEngine.fetchCandles(symbol, 100);
-          const newest = res.candles[res.candles.length - 1];
-          const ageMs = newest ? Date.now() - newest.timestampMs : Infinity;
-          const isRealFreshFeed =
-            res.source !== 'synthetic' &&
-            !!newest &&
-            trustedSources.has(newest.source) &&
-            ageMs >= -60_000 &&
-            ageMs <= 120_000;
+          // The feed bridge may append synthetic continuity bars after a genuine
+          // provider candle. Judge freshness from the newest trusted candle, not
+          // from the synthetic tail, and never pass synthetic bars to signal logic.
+          const feedSnapshot = getTrustedFreshCandleSnapshot(res.candles, Date.now());
+          const newest = feedSnapshot.newestCandle;
+          const ageMs = feedSnapshot.ageMs;
+          const isRealFreshFeed = feedSnapshot.isFresh;
 
           pairDiagnostic.source = res.source;
           pairDiagnostic.newestCandleAt = newest?.timestamp || null;
-          pairDiagnostic.ageSeconds = newest ? Math.round(ageMs / 1000) : null;
+          pairDiagnostic.ageSeconds = ageMs === null ? null : Math.round(ageMs / 1000);
           pairDiagnostic.freshFeed = isRealFreshFeed;
           lifecycleCandlesMap[symbol] = readTrustedHistory();
-          freshCandlesMap[symbol] = isRealFreshFeed
-            ? res.candles.filter(c => trustedSources.has(c.source))
-            : [];
+          freshCandlesMap[symbol] = isRealFreshFeed ? feedSnapshot.candles : [];
           pairDiagnostic.candleCount = freshCandlesMap[symbol].length;
           pairDiagnostic.result = !isRealFreshFeed
             ? 'NO_FRESH_TRUSTED_M1_FEED'
@@ -901,7 +952,7 @@ export class AutonomousScheduler {
       this.lastPulseCompletedAt = new Date().toISOString();
       this.lastPulseResult = {
         durationMs,
-        pairsProcessed: Object.keys(freshCandlesMap).length,
+        pairsProcessed: pairDiagnostics.filter(item => item.freshFeed).length,
         signalsCreated: createdSignals.length,
         signalsUpdated: updatedSignals.length,
       };
@@ -913,7 +964,7 @@ export class AutonomousScheduler {
 
       return {
         durationMs,
-        pairsProcessed: Object.keys(freshCandlesMap).length,
+        pairsProcessed: pairDiagnostics.filter(item => item.freshFeed).length,
         signalsCreated: createdSignals.length,
         signalsUpdated: updatedSignals.length,
         experimentsRun: experimentsRun.length,

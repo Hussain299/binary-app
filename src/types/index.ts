@@ -658,6 +658,62 @@ export interface SystemHealthState {
   nextCronRun: string | null;
   isCronRunning: boolean;
   providers: ProviderHealth[];
+  scheduler?: {
+    schedulerStarted: boolean;
+    serviceMode: string;
+    pulseIntervalSeconds: number;
+    lastHeartbeatAt: string | null;
+    lastPulseAgeSeconds: number | null;
+    pulseHealthy: boolean;
+    warmupPending: boolean;
+    cycleRunning: boolean;
+    market: { isOpen: boolean; status: string; message: string };
+    lastPulseSkippedReason: string | null;
+    lastPulseError: string | null;
+    paperStrategiesEligible: number;
+    storedStrategyCandidates: number;
+    strategyReadiness: string;
+    freshPairs: number;
+    pairsScanned: number;
+    blockedPairReasons: Array<{ reason: string; count: number }>;
+    pairDiagnostics: Array<{
+      symbol: ForexSymbol;
+      source: string;
+      freshFeed: boolean;
+      newestCandleAt: string | null;
+      ageSeconds: number | null;
+      candleCount: number;
+      eligibleTimeframes: number[];
+      result: string;
+    }>;
+  };
+  evolutionResearch?: {
+    status: string;
+    message: string;
+    nextScanAt?: string | null;
+    requiredNewM1Candles: number;
+  };
+  strategyReadiness?: {
+    storedCandidates: number;
+    historicallyQualified: number;
+    promoted: number;
+    paperTrading: number;
+    status: string;
+    researchStatus: string;
+    researchMessage: string;
+    requiredImportedM1Candles: number;
+  };
+  hosting?: {
+    platform: string;
+    backgroundCpuConfiguration: string;
+    warning: string;
+  };
+  storage?: {
+    mode: string;
+    durableAcrossInstanceReplacement: boolean | null;
+    multiInstanceSafe: boolean;
+    warning: string;
+  };
 }
 
 export interface VerificationTestResult {

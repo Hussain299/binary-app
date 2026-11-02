@@ -40,7 +40,7 @@ import {
 import { sanitizeLossAutopsy, OBSERVATION_ONLY_LESSONS } from './researchGovernance.ts';
 import { calibratePredictionScore } from './predictionCalibration.ts';
 import { opportunityEngine, evaluateOpportunityHoldout, buildOpportunitySchedule } from './opportunityEngine.ts';
-import { mapWithConcurrency, MARKET_SENSE_CONCURRENCY } from './scheduler.ts';
+import { AUTOPILOT_SCAN_INTERVAL_MS, getTrustedFreshCandleSnapshot, mapWithConcurrency, MARKET_SENSE_CONCURRENCY } from './scheduler.ts';
 import {
   assessPaperCapitalRisk,
   CONSERVATIVE_PAPER_RISK_POLICY,
@@ -120,6 +120,47 @@ export async function runAllVerificationTests(): Promise<{
       rejected = error instanceof Error && error.message.includes('positive integer');
     }
     if (!rejected) throw new Error('Invalid scheduler concurrency must fail explicitly.');
+  });
+
+  await runTest('SCHEDULER', 'market scan cadence stays inside the strict T-3 processing window', () => {
+    if (AUTOPILOT_SCAN_INTERVAL_MS <= 0 || AUTOPILOT_SCAN_INTERVAL_MS > 10_000) {
+      throw new Error(`Autopilot scan cooldown must be at most 10 seconds; received ${AUTOPILOT_SCAN_INTERVAL_MS}ms.`);
+    }
+    if (AUTOPILOT_SCAN_INTERVAL_MS >= 25_000) {
+      throw new Error('Autopilot scan cooldown cannot exceed the 25-second T-3 processing window.');
+    }
+  });
+
+  await runTest('DATA', 'fresh trusted candles survive synthetic continuity bars appended by feed bridge', () => {
+    const nowMs = Date.parse('2026-11-02T10:00:00.000Z');
+    const trusted: Candle = {
+      symbol: 'EUR/USD',
+      timestamp: new Date(nowMs - 60_000).toISOString(),
+      timestampMs: nowMs - 60_000,
+      open: 1.0850,
+      high: 1.0860,
+      low: 1.0840,
+      close: 1.0855,
+      volume: 100,
+      source: 'biquote',
+    };
+    const synthetic: Candle = {
+      ...trusted,
+      timestamp: new Date(nowMs).toISOString(),
+      timestampMs: nowMs,
+      source: 'synthetic',
+    };
+    const snapshot = getTrustedFreshCandleSnapshot([trusted, synthetic], nowMs);
+    if (!snapshot.isFresh || snapshot.newestCandle?.source !== 'biquote') {
+      throw new Error('A synthetic continuity tail must not hide a still-fresh trusted provider candle.');
+    }
+    if (snapshot.candles.length !== 1 || snapshot.candles[0].source !== 'biquote') {
+      throw new Error('Signal input must contain only trusted real-market candles.');
+    }
+    const syntheticOnly = getTrustedFreshCandleSnapshot([synthetic], nowMs);
+    if (syntheticOnly.isFresh || syntheticOnly.candles.length !== 0) {
+      throw new Error('Synthetic-only data must never be eligible for a live paper signal.');
+    }
   });
 
   await runTest('RESEARCH', 'Seeded evolutionary search is deterministic and dataset-bound', () => {

@@ -110,13 +110,49 @@ async function startServer() {
     }
   };
   reconcileLearningOutcomes();
-  setInterval(reconcileLearningOutcomes, 15_000);
+  const reconciliationTimer = setInterval(reconcileLearningOutcomes, 15_000);
 
   const port = resolvePort();
   const host = resolveHost();
   const server = app.listen(port, host, () => {
     console.log(`[SignalForge ML] Server running at http://${host}:${port}`);
   });
+
+  let shuttingDown = false;
+  const shutdown = (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.info(`[SignalForge ML] Received ${signal}; stopping timers and flushing local state.`);
+
+    clearInterval(reconciliationTimer);
+    autonomousScheduler.stop();
+    try {
+      db.saveStateSync();
+    } catch (error) {
+      console.error('[SignalForge ML] Final database flush failed:', error);
+      process.exitCode = 1;
+    }
+
+    const forcedExit = setTimeout(() => {
+      console.error('[SignalForge ML] Graceful shutdown timed out; forcing process exit.');
+      process.exit(1);
+    }, 10_000);
+    forcedExit.unref();
+
+    server.close(error => {
+      clearTimeout(forcedExit);
+      if (error) {
+        console.error('[SignalForge ML] HTTP server shutdown failed:', error);
+        process.exitCode = 1;
+      }
+      process.exit(process.exitCode || 0);
+    });
+    // Do not let keep-alive sockets delay a Cloud Run termination signal.
+    server.closeIdleConnections?.();
+  };
+
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
 
   server.on('error', error => {
     console.error('[SignalForge ML] HTTP server failed to listen:', error);
