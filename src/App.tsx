@@ -117,6 +117,20 @@ export default function App() {
     }
   };
 
+  const handleAutopilotToggle = async () => {
+    const currentlyRunning = Boolean(autopilotStatus?.schedulerStarted);
+    const endpoint = currentlyRunning ? '/api/autopilot/stop' : '/api/autopilot/start';
+    try {
+      const response = await fetch(endpoint, { method: 'POST' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Unable to change scheduler state.');
+      await fetchAllData();
+    } catch (error) {
+      console.error('Autopilot control failed:', error);
+      window.alert(error instanceof Error ? error.message : 'Autopilot control failed.');
+    }
+  };
+
   const handleEvaluateSignals = async () => {
     setIsEvaluating(true);
     try {
@@ -156,6 +170,8 @@ export default function App() {
         isRefreshing={isRefreshing}
         onToggleSidebar={() => setIsMobileMenuOpen(prev => !prev)}
         isSidebarOpen={isMobileMenuOpen}
+        autopilotStatus={autopilotStatus}
+        onToggleAutopilot={handleAutopilotToggle}
       />
 
       {/* Main Content Area */}

@@ -934,3 +934,37 @@ apiRouter.get('/autopilot/status', (_req: Request, res: Response) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+// Explicit controls for the background paper-research scheduler. These never place broker orders.
+apiRouter.post('/autopilot/start', (_req: Request, res: Response) => {
+  try {
+    const before = autonomousScheduler.getAutopilotStatus();
+    if (!before.schedulerStarted) autonomousScheduler.start();
+    const status = autonomousScheduler.getAutopilotStatus();
+    return res.json({
+      success: true,
+      status: status.schedulerStarted ? 'SCHEDULER_RUNNING' : 'SCHEDULER_STARTING',
+      message: before.schedulerStarted ? 'Paper bot is already running.' : 'Paper bot start requested.',
+      ...status,
+      executionEnabled: false,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Could not start the paper bot.' });
+  }
+});
+
+apiRouter.post('/autopilot/stop', (_req: Request, res: Response) => {
+  try {
+    autonomousScheduler.stop();
+    const status = autonomousScheduler.getAutopilotStatus();
+    return res.json({
+      success: true,
+      status: status.schedulerStarted ? 'STOPPING' : 'SCHEDULER_STOPPED',
+      message: 'New market and research cycles paused. An already-running cycle may finish safely.',
+      ...status,
+      executionEnabled: false,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Could not stop the paper bot.' });
+  }
+});
