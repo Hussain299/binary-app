@@ -252,24 +252,27 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
-  await runTest('DATA', 'Yahoo batches at the collapsed-quote threshold are rejected as OHLC', () => {
+  await runTest('DATA', 'Yahoo batches at the 75-percent collapsed-quote threshold are rejected as OHLC', () => {
     const base = Math.floor(Date.parse('2026-11-02T15:00:00.000Z') / 1000);
     const prices = [1.1000, 1.1001, 1.1002, 1.1003, 1.1004];
     const normalized = normalizeYahooChartCandles('EUR/USD', {
       timestamp: prices.map((_, index) => base + index * 60),
       indicators: {
         quote: [{
-          open: prices,
-          high: prices,
-          low: prices,
-          close: prices,
+          open: [...prices.slice(0, 4), 1.1004],
+          high: [...prices.slice(0, 4), 1.1008],
+          low: [...prices.slice(0, 4), 1.1002],
+          close: [...prices.slice(0, 4), 1.1006],
           volume: prices.map(() => 0),
         }],
       },
     });
     if (!normalized.isCollapsedQuoteSeries || normalized.candles.length !== 0 ||
         normalized.closeOnlyObservations.length !== prices.length) {
-      throw new Error('A batch with at least five rows and 100% zero-range values must be classified as close-only.');
+      throw new Error('A batch with at least three rows and at least 75% zero-range values must be classified entirely as close-only.');
+    }
+    if (normalized.zeroRangeRows !== 4) {
+      throw new Error('Batch diagnostics must report exactly the four zero-range quote rows.');
     }
   });
 
