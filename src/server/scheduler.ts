@@ -147,6 +147,7 @@ export class AutonomousScheduler {
     selectedTimeframe: number | null;
     lastStrategyName: string | null;
     signalPersisted: boolean;
+    signalCreationError: string | null;
     result: string;
   }> = [];
   private readonly lastDiagnosticLogAt = new Map<string, number>();
@@ -661,6 +662,7 @@ export class AutonomousScheduler {
         selectedTimeframe: null as number | null,
         lastStrategyName: null as string | null,
         signalPersisted: false,
+        signalCreationError: null as string | null,
         result: 'FEED_NOT_CHECKED',
       }));
 
@@ -942,7 +944,17 @@ export class AutonomousScheduler {
 
           if (novelGeneCandidate) {
             const gene = novelGeneCandidate.gene;
-            const signal = entryExitEngine.createResearchSignal({
+            const entryOpenUtc = new Date(selectedSchedule.entryTimeMs).toISOString();
+            const duplicateForEntry = db.getSignals().find(existing =>
+              existing.symbol === symbol && existing.candleOpenTimeUtc === entryOpenUtc
+            );
+            if (duplicateForEntry) {
+              if (pairDiagnostic) pairDiagnostic.result = 'ENTRY_CANDLE_ALREADY_RECORDED';
+              continue;
+            }
+            let signal: ReturnType<typeof entryExitEngine.createResearchSignal>;
+            try {
+              signal = entryExitEngine.createResearchSignal({
               symbol,
               direction: novelGeneCandidate.direction,
               signalCandle: c,
@@ -971,7 +983,16 @@ export class AutonomousScheduler {
               notes: gene.status !== 'PROMOTED_ACTIVE'
                 ? `[PAPER ONLY] Historical candidate has not completed forward approval. ${gene.mathematicalFormula}`
                 : `[PAPER ONLY — FORWARD EVIDENCE GATE PASSED; NO BROKER EXECUTION] ${gene.mathematicalFormula} | ${gene.whyHumansMissThis}`,
-            });
+              });
+            } catch (error: any) {
+              const message = error?.message || String(error);
+              if (pairDiagnostic) {
+                pairDiagnostic.result = 'SIGNAL_CREATION_REJECTED';
+                pairDiagnostic.signalCreationError = message;
+              }
+              this.logMind('AUDITOR', `Signal factory rejected ${symbol} ${gene.name}: ${message}`, symbol);
+              continue;
+            }
 
             createdSignals.push(signal);
             activeSymbols.add(symbol);
