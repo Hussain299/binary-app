@@ -1551,11 +1551,20 @@ export async function runAllVerificationTests(): Promise<{
   // ==========================================
   // 1. DATA TESTS
   // ==========================================
-  await runTest('DATA', 'Provider Fallback & Continuity Generation', async () => {
-    // Test that requesting candles never returns empty list even if remote APIs are offline
+  await runTest('DATA', 'Provider fallback preserves OHLC or read-only close-only market data', async () => {
+    // A connected Yahoo FX endpoint may supply genuine Close observations while
+    // its OHLC dimensions are collapsed. That is useful for charting but must not
+    // be converted into synthetic candles just to satisfy an older non-empty-list test.
     const res = await dataFeedEngine.fetchCandles('EUR/USD', 50);
-    if (!res.candles || res.candles.length < 20) {
-      throw new Error(`Expected at least 20 candles, got ${res.candles?.length || 0}`);
+    const hasUsableOhlc = Array.isArray(res.candles) && res.candles.length >= 20;
+    const hasUsableCloseOnly = Array.isArray(res.closeOnlySeries) && res.closeOnlySeries.length >= 20;
+    if (!hasUsableOhlc && !hasUsableCloseOnly) {
+      throw new Error(
+        `Expected at least 20 genuine OHLC candles or close-only observations, got OHLC=${res.candles?.length || 0}, close-only=${res.closeOnlySeries?.length || 0}.`
+      );
+    }
+    if (hasUsableCloseOnly && res.candles.some(candle => candle.source === 'synthetic')) {
+      throw new Error('A connected close-only quote feed must not trigger synthetic OHLC fallback.');
     }
     if (!res.source) {
       throw new Error('Missing active provider source attribution');
