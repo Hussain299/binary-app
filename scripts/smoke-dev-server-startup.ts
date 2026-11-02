@@ -48,7 +48,7 @@ try {
       const pageResponse = await fetch(baseUrl, { signal: AbortSignal.timeout(1500) });
       assert.equal(pageResponse.status, 200, 'Development preview root should return HTTP 200.');
       const html = await pageResponse.text();
-      assert.match(html, /<div id="root"><\\/div>/, 'Development preview should render the React root.');
+      assert.ok(html.includes('<div id="root"></div>'), 'Development preview should render the React root.');
 
       const entryResponse = await fetch(`${baseUrl}/src/main.tsx`, {
         signal: AbortSignal.timeout(1500),
