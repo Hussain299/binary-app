@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   LineChart,
   Activity,
@@ -23,27 +23,50 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
   const [qualityScore, setQualityScore] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [hoveredCandle, setHoveredCandle] = useState<Candle | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const requestSequence = useRef(0);
 
-  const fetchPairData = async (symbol: ForexSymbol) => {
-    setIsLoading(true);
+  const fetchPairData = useCallback(async (symbol: ForexSymbol, showLoader = true) => {
+    const requestId = ++requestSequence.current;
+    if (showLoader) setIsLoading(true);
+    setLoadError(null);
     try {
-      const res = await fetch(`/api/forex-candles?symbol=${symbol.replace('/', '')}&limit=80`);
-      if (res.ok) {
-        const data = await res.json();
-        setCandles(data.candles || []);
-        setActiveSource(data.source || 'biquote');
-        setQualityScore(Number.isFinite(data.qualityScore) ? data.qualityScore : null);
-      }
-    } catch (e) {
-      console.error('Failed to fetch candles:', e);
+      const res = await fetch(`/api/forex-candles?symbol=${encodeURIComponent(symbol.replace('/', ''))}&limit=80`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Market data request failed (${res.status}).`);
+      if (requestId !== requestSequence.current) return;
+      const validCandles = (Array.isArray(data.candles) ? data.candles : [])
+        .filter((c: Candle) => c && Number.isFinite(c.timestampMs) &&
+          [c.open, c.high, c.low, c.close].every(Number.isFinite) &&
+          c.high >= Math.max(c.open, c.close, c.low) &&
+          c.low <= Math.min(c.open, c.close, c.high))
+        .sort((a: Candle, b: Candle) => a.timestampMs - b.timestampMs);
+      setCandles(validCandles);
+      setHoveredCandle(null);
+      setActiveSource(data.source || '—');
+      setQualityScore(Number.isFinite(data.qualityScore) ? data.qualityScore : null);
+      if (validCandles.length < 2) setLoadError('Not enough valid candles are available for this pair yet.');
+    } catch (error) {
+      if (requestId !== requestSequence.current) return;
+      console.error('Failed to fetch candles:', error);
+      setCandles([]);
+      setActiveSource('—');
+      setQualityScore(null);
+      setLoadError(error instanceof Error ? error.message : 'Market data is temporarily unavailable.');
     } finally {
-      setIsLoading(false);
+      if (requestId === requestSequence.current && showLoader) setIsLoading(false);
+      else if (requestId === requestSequence.current) setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchPairData(selectedPair);
-  }, [selectedPair]);
+    void fetchPairData(selectedPair);
+    const refresh = window.setInterval(() => void fetchPairData(selectedPair, false), 15_000);
+    return () => {
+      window.clearInterval(refresh);
+      requestSequence.current += 1;
+    };
+  }, [selectedPair, fetchPairData]);
 
   const latestCandle = candles[candles.length - 1];
   const firstCandle = candles[0];
@@ -85,8 +108,8 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
         >
           {/* Horizontal Grid lines */}
           {[0.2, 0.4, 0.6, 0.8].map(ratio => {
-            const y = chartHeight * ratio;
             const price = maxPrice - ratio * priceRange;
+            const y = getY(price);
             return (
               <g key={ratio}>
                 <line
@@ -236,7 +259,17 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
           </div>
         </div>
 
-        {renderChart()}
+        {isLoading ? (
+          <div className="flex h-72 items-center justify-center rounded-xl border border-white/[.07] bg-[#080d15] text-xs text-neutral-400">
+            <Activity className="mr-2 h-4 w-4 animate-pulse" /> Loading {selectedPair} candles…
+          </div>
+        ) : loadError ? (
+          <div className="flex min-h-56 flex-col items-center justify-center gap-3 rounded-xl border border-rose-400/15 bg-rose-400/[.035] px-5 text-center">
+            <AlertCircle className="h-5 w-5 text-rose-300" />
+            <p className="max-w-md text-xs text-neutral-300">{loadError}</p>
+            <button type="button" onClick={() => void fetchPairData(selectedPair)} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-white hover:bg-white/5">Retry market data</button>
+          </div>
+        ) : renderChart()}
       </div>
 
       {/* Feed status: only measured provider states are shown. */}
