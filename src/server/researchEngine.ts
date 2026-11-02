@@ -17,11 +17,11 @@ import {
   StrategyExpressionNode,
   StrategyFeatureName,
   StrategyGenome,
-} from '../types/index.js';
-import { db } from './db.js';
-import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
-import { binaryBreakEvenWinRate, calculateAdaptiveMutationRate, outcomeFitsResearchWindow, selectEvolutionParents, wilsonLowerBound } from './evolutionEngine.js';
-import { ADVANCE_NOTICE_MS, M1_CANDLE_MS, getNextCandleOpenMs, TradingTimeframeMinutes } from './tradingClock.js';
+} from '../types/index.ts';
+import { db } from './db.ts';
+import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.ts';
+import { binaryBreakEvenWinRate, calculateAdaptiveMutationRate, outcomeFitsResearchWindow, selectEvolutionParents, wilsonLowerBound } from './evolutionEngine.ts';
+import { ADVANCE_NOTICE_MS, M1_CANDLE_MS, getNextCandleOpenMs, TradingTimeframeMinutes } from './tradingClock.ts';
 import {
   createSeededRandom,
   deriveResearchSeed,
@@ -29,7 +29,7 @@ import {
   fingerprintCandles,
   RESEARCH_ENGINE_VERSION,
   stableHash,
-} from './researchReproducibility.js';
+} from './researchReproducibility.ts';
 
 type StrategyHorizon = 5 | 10 | 15 | 20 | 25 | 30;
 type GeneFeatureVector = Record<StrategyFeatureName, number>;

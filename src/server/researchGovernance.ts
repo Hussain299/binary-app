@@ -5,7 +5,7 @@
  * mechanism, and a single outcome must never manufacture a validated antidote.
  */
 
-import type { LossAutopsy } from "../types/index.js";
+import type { LossAutopsy } from "../types/index.ts";
 
 export const OBSERVATION_ONLY_LESSONS = [
   "The contract outcome is recorded as an observation; no causal mechanism has been established.",
