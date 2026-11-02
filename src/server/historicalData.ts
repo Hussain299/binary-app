@@ -221,10 +221,11 @@ class HistoricalDataStore {
    * to 1.9m candles just to paint the readiness dashboard, creating avoidable
    * memory pressure across a 20-pair research universe.
    */
-  public getStats(symbol: ForexSymbol) {
+  public getStats(symbol: ForexSymbol, sinceTimestampMs: number | null = null) {
     const months = this.listMonths(symbol);
     let count = 0;
     let usableM1Count = 0;
+    let usableM1CandlesSince = 0;
     let zeroVolumeFlatRows = 0;
     let minuteSteps = 0;
     let previousUsableTimestamp: number | null = null;
@@ -257,6 +258,9 @@ class HistoricalDataStore {
           continue;
         }
         usableM1Count++;
+        if (sinceTimestampMs !== null && candle.timestampMs >= sinceTimestampMs) {
+          usableM1CandlesSince++;
+        }
         if (previousUsableTimestamp !== null &&
             Math.abs((candle.timestampMs - previousUsableTimestamp) - 60_000) <= 5_000) {
           minuteSteps++;
@@ -269,6 +273,7 @@ class HistoricalDataStore {
       symbol,
       count,
       usableM1Count,
+      usableM1CandlesSince: sinceTimestampMs === null ? usableM1Count : usableM1CandlesSince,
       zeroVolumeFlatRows,
       continuityRatio: minuteSteps / Math.max(1, usableM1Count - 1),
       firstTimestamp,
