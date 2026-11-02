@@ -1418,7 +1418,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
       validationProfitFactor: number;
     }> = [];
     const signatures = new Set<string>(
-      db.getSynthesizedStrategies()
+      executionCompatibleParents
         .map(gene => gene.genome?.signature)
         .filter((signature): signature is string => !!signature)
     );
