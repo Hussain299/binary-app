@@ -103,6 +103,11 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
   const firstCandle = trustedCandles[0] ?? null;
   const latestCloseOnly = closeOnlySeries[closeOnlySeries.length - 1] ?? null;
   const firstCloseOnly = closeOnlySeries[0] ?? null;
+  const isCloseOnlyMode = trustedCandles.length < 2 && closeOnlySeries.length >= 2;
+  const feedLabel = isCloseOnlyMode ? 'YAHOO · CLOSE-ONLY' : activeSource || '—';
+  const qualityLabel = qualityScore === null
+    ? '—'
+    : `${qualityScore}/100${isCloseOnlyMode ? ' · DEGRADED' : ''}`;
   const lastObservedPrice = latestCandle?.close ?? latestCloseOnly?.close ?? null;
   const lastObservedAtMs = latestCandle?.timestampMs ?? latestCloseOnly?.timestampMs ?? null;
   const syntheticCount = candles.filter(candle => candle.source === 'synthetic').length;
@@ -448,11 +453,11 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
         <div className="flex items-center gap-4 text-xs">
           <div className="flex items-center gap-1.5 text-neutral-500">
             <span>Feed</span>
-            <span className="font-medium uppercase text-neutral-200">{activeSource || '—'}</span>
+            <span className="font-medium uppercase text-neutral-200">{feedLabel}</span>
           </div>
           <div className="flex items-center gap-1.5 text-neutral-500">
             <span>Quality</span>
-            <span className="font-medium text-neutral-200">{qualityScore === null ? '—' : `${qualityScore}/100`}</span>
+            <span className={`font-medium ${isCloseOnlyMode ? 'text-amber-300' : 'text-neutral-200'}`}>{qualityLabel}</span>
           </div>
         </div>
       </div>
