@@ -124,6 +124,17 @@ interface SignalTerminalViewProps {
     pulseHealthy?: boolean;
     pulseIntervalSeconds?: number;
     strategyReadiness?: string;
+    paperStrategiesEligible?: number;
+    freshPairs?: number;
+    pairsScanned?: number;
+    lastPulseResult?: { durationMs: number; pairsProcessed: number; signalsCreated: number; signalsUpdated: number } | null;
+    blockedPairReasons?: Array<{ reason: string; count: number }>;
+    strategyEligibility?: {
+      storedCandidates: number;
+      eligibleForPaperSignals: number;
+      historicalFailureCounts: Record<string, number>;
+      forwardFailureCounts: Record<string, number>;
+    };
   } | null;
   onEvaluateSignals: () => void;
   isEvaluating: boolean;
@@ -476,6 +487,18 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const activeSignals = signals.filter(s =>
     ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE', 'EXIT_PENDING'].includes(s.lifecycleState)
   );
+  const leadingPairBlockers = [...(autopilotStatus?.blockedPairReasons || [])]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3);
+  const signalGenerationDiagnosis = !autopilotStatus?.schedulerStarted
+    ? 'The background scheduler is not running.'
+    : !autopilotStatus?.pulseHealthy
+      ? 'The scheduler heartbeat is stale or unhealthy. Check System Health before expecting signals.'
+      : (autopilotStatus.paperStrategiesEligible ?? 0) === 0
+        ? 'No stored strategy currently passes the historical approval gate. Market scanning can run, but the system will not create a signal without a qualified strategy.'
+        : leadingPairBlockers.length
+          ? `Most recent pulse is blocked mainly by ${leadingPairBlockers[0].reason.replace(/_/g, ' ').toLowerCase()}.`
+          : 'No qualifying setup triggered in the most recent market pulse.';
 
   const filteredSignals = signals.filter(s => {
     if (filterState === 'ACTIVE') {
@@ -669,6 +692,48 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
       {/* 3. MAIN SIGNALS FEED: BOLD, UNCLUTTERED, DIRECT TRADING TICKETS */}
       <div className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-5 space-y-3">
+        {activeSignals.length === 0 && autopilotStatus && (
+          <div className="rounded-xl border border-amber-900/50 bg-amber-950/10 p-3 sm:p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs font-bold uppercase tracking-wide text-amber-200">Why no paper signals are appearing</div>
+              <span className={autopilotStatus.pulseHealthy ? 'text-emerald-300' : 'text-rose-300'}>
+                {autopilotStatus.pulseHealthy ? 'Scheduler heartbeat healthy' : 'Scheduler needs attention'}
+              </span>
+            </div>
+            <p className="text-xs text-neutral-300 leading-relaxed">{signalGenerationDiagnosis}</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px]">
+              <div className="rounded bg-neutral-950/80 border border-neutral-800 p-2">
+                <span className="text-neutral-500 block">Qualified strategies</span>
+                <strong className="block text-white text-base">{autopilotStatus.paperStrategiesEligible ?? 0}</strong>
+              </div>
+              <div className="rounded bg-neutral-950/80 border border-neutral-800 p-2">
+                <span className="text-neutral-500 block">Fresh pairs</span>
+                <strong className="block text-white text-base">{autopilotStatus.freshPairs ?? 0}/{autopilotStatus.pairsScanned ?? 0}</strong>
+              </div>
+              <div className="rounded bg-neutral-950/80 border border-neutral-800 p-2">
+                <span className="text-neutral-500 block">Last pulse signals</span>
+                <strong className="block text-white text-base">{autopilotStatus.lastPulseResult?.signalsCreated ?? 0}</strong>
+              </div>
+              <div className="rounded bg-neutral-950/80 border border-neutral-800 p-2">
+                <span className="text-neutral-500 block">Scan cooldown</span>
+                <strong className="block text-white text-base">{autopilotStatus.pulseIntervalSeconds ?? '—'}s</strong>
+              </div>
+            </div>
+            {leadingPairBlockers.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {leadingPairBlockers.map(item => (
+                  <span key={item.reason} className="rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1 text-[10px] text-neutral-300">
+                    {item.reason.replace(/_/g, ' ')} · {item.count}
+                  </span>
+                ))}
+              </div>
+            )}
+            <p className="text-[10px] text-neutral-500">
+              Open System Health for pair-by-pair strategy evaluation and exact historical/forward approval blockers. This app creates paper research signals only; it does not place broker orders.
+            </p>
+          </div>
+        )}
+
         {/* HISTORY SUMMARY BANNER (Shown when viewing History tab) */}
         {filterState === 'CLOSED' && historySignals.length > 0 && (
           <div className="bg-neutral-900/90 border border-neutral-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
