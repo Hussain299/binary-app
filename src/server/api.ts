@@ -907,7 +907,7 @@ apiRouter.get('/intelligence/overview', (_req: Request, res: Response) => {
         generations: generations.length,
         agentReviews: reviews.length,
         signalsObserved: signals.length,
-        latestExperimentAt: (experiments[0] as any)?.completedAt || (experiments[0] as any)?.createdAt || null,
+        latestExperimentAt: experiments[0]?.createdAt || null,
         latestGenerationAt: (generations[0] as any)?.timestamp || (generations[0] as any)?.createdAt || null,
       },
       governance: {
