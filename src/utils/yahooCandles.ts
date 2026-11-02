@@ -36,7 +36,7 @@ interface ParsedYahooRow {
  */
 export function isCollapsedYahooQuoteCandleBatch(candles: Candle[]): boolean {
   const yahooRows = candles.filter(candle => candle.source === 'yahoo');
-  if (yahooRows.length < 5) return false;
+  if (yahooRows.length < 3) return false;
   const zeroRangeRows = yahooRows.filter(candle => candle.high === candle.low).length;
   return zeroRangeRows / yahooRows.length >= 0.75;
 }
@@ -44,7 +44,7 @@ export function isCollapsedYahooQuoteCandleBatch(candles: Candle[]): boolean {
 /**
  * Normalize provider data without manufacturing OHLC or volume.
  *
- * If at least 75% of a batch of five or more structurally complete Yahoo rows
+ * If at least 75% of a batch of three or more structurally complete Yahoo rows
  * have High===Low, the entire batch is treated as close-only observations.
  * This preserves isolated dojis in otherwise genuine OHLC data.
  */
@@ -149,7 +149,7 @@ export function normalizeYahooChartCandles(
   const fullOhlcRows = deduplicatedRows.filter(row => row.hasFullOhlc);
   const zeroRangeFullRows = fullOhlcRows.filter(row => row.zeroRange).length;
   const isCollapsedQuoteSeries =
-    fullOhlcRows.length >= 5 &&
+    fullOhlcRows.length >= 3 &&
     zeroRangeFullRows / fullOhlcRows.length >= 0.75;
 
   const candles: Candle[] = [];
