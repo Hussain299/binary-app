@@ -319,7 +319,7 @@ export interface ResearchSignal {
   whyHumansMissThis?: string;
   /** True when this is an internal forward-paper observation, not an approved actionable alert. */
   paperOnly?: boolean;
-  /** Entry candle timeframe; a supported 5–30 minute boundary, aligned with the expiry horizon. */
+  /** Entry candle timeframe. New signals are always 5M; the wider union preserves legacy saved signals. */
   entryTimeframeMinutes?: 5 | 10 | 15 | 20 | 25 | 30;
   /** Frozen causal 19-feature context captured when this prediction was made. */
   marketFeatureVector?: number[];
@@ -508,6 +508,7 @@ export interface SynthesizedStrategyGene {
   discoveryMetrics?: StrategyDiscoveryMetrics;
   /** Currency pair used to validate this candidate against historical data. */
   symbol?: ForexSymbol;
+  /** Historically validated contract expiry in minutes; new candidates always enter on M5. */
   optimalHorizonMinutes: 5 | 10 | 15 | 20 | 25 | 30;
   sessionAffinity: MarketSessionId | 'ALL';
   /** Measured untouched-test win rate. Zero means no verified result exists. */
