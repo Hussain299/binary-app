@@ -6,7 +6,7 @@
 
 import type { Candle, ForexSymbol, ProviderHealth } from '../types/index.ts';
 import { db } from './db.ts';
-import { isLegacyFabricatedYahooFlatCandle, normalizeYahooChartCandles } from '../utils/yahooCandles.ts';
+import { isLegacyFabricatedYahooFlatCandle, normalizeYahooChartCandles, type YahooCloseObservation } from '../utils/yahooCandles.ts';
 import { getForexMarketState, isForexMarketOpenAt, getReportingSessionFromTimestamp } from './marketHours.ts';
 
 interface RawCandle {
@@ -45,7 +45,7 @@ export class DataFeedEngine {
   /**
    * Fetches candles with full 3-tier fallback logic and health auditing.
    */
-  public async fetchCandles(symbol: ForexSymbol, limit: number = 100): Promise<{ candles: Candle[]; source: string; qualityScore: number }> {
+  public async fetchCandles(symbol: ForexSymbol, limit: number = 100): Promise<{ candles: Candle[]; source: string; qualityScore: number; closeOnlySeries: YahooCloseObservation[] }> {
     // Hard stop before contacting providers or generating continuity candles while FX is closed.
     // Return only previously stored, non-synthetic market observations for display; these are stale
     // context, never permission to create or settle a trade.
@@ -58,11 +58,13 @@ export class DataFeedEngine {
         candles,
         source: 'market_closed',
         qualityScore: candles.length ? this.calculateQualityScore(candles) : 0,
+        closeOnlySeries: [],
       };
     }
 
     const cleanSymbol = symbol.replace('/', '');
     let candles: Candle[] = [];
+    let closeOnlySeries: YahooCloseObservation[] = [];
     let activeSource = 'none';
 
     // 1. Try Biquote
@@ -165,6 +167,7 @@ export class DataFeedEngine {
           if (result && result.timestamp && result.indicators?.quote?.[0]) {
             const normalized = normalizeYahooChartCandles(symbol, result);
             candles = normalized.candles;
+            closeOnlySeries = normalized.closeOnlyObservations;
 
             if (candles.length >= 2) {
               activeSource = 'yahoo';
@@ -184,6 +187,7 @@ export class DataFeedEngine {
             } else {
               // Do not label a close-only/invalid response as an online candle feed.
               candles = [];
+              activeSource = closeOnlySeries.length >= 2 ? 'yahoo-close-only' : 'none';
               db.updateFeedHealth({
                 provider: 'yahoo',
                 symbol,
@@ -191,8 +195,8 @@ export class DataFeedEngine {
                 latencyMs: Date.now() - start,
                 lastSuccess: new Date().toISOString(),
                 consecutiveFailures: 0,
-                attribution: 'Yahoo Finance Chart Feed (rejected incomplete OHLC)',
-                errorMessage: `Yahoo returned ${normalized.inputRows} rows but only ${normalized.candles.length} complete valid OHLC candles. At least two are required; close-only rows are not converted into fake doji candles.`,
+                attribution: 'Yahoo Finance Chart Feed (close-only observations; OHLC unavailable)',
+                errorMessage: `Yahoo returned ${normalized.inputRows} rows but only ${normalized.candles.length} complete valid OHLC candles. ${closeOnlySeries.length} close-price observations are retained for a read-only line chart; they are not trading candles and cannot create signals.`,
               });
             }
           }
@@ -216,10 +220,10 @@ export class DataFeedEngine {
       const stored = db.getCandles(symbol, limit);
       if (stored.length > 0) {
         candles = this.extendFromStored(symbol, stored, limit);
-        activeSource = 'synthetic';
+        if (activeSource === 'none') activeSource = 'synthetic';
       } else {
         candles = this.generateRealisticHistoricalCandles(symbol, limit);
-        activeSource = 'synthetic';
+        if (activeSource === 'none') activeSource = 'synthetic';
       }
     } else {
       // Ensure returned API candles extend up to current live time
@@ -241,6 +245,7 @@ export class DataFeedEngine {
       candles: validated,
       source: reportedSource,
       qualityScore,
+      closeOnlySeries,
     };
   }
 

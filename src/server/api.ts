@@ -140,6 +140,7 @@ apiRouter.get('/forex-candles', async (req: Request, res: Response) => {
       source: result.source,
       qualityScore: result.qualityScore,
       candles: result.candles,
+      closeOnlySeries: result.closeOnlySeries,
       sessions: dataFeedEngine.getMarketSessions(),
     });
   } catch (err: any) {

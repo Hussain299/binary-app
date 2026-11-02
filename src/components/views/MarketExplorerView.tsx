@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Candle, FOREX_PAIRS, ForexSymbol, ProviderHealth } from '../../types/index.js';
 import { getLatestObservedCandle, getMarketChartPriceDomain, getTrustedMarketCandles } from '../../utils/marketChart.ts';
+import type { YahooCloseObservation } from '../../utils/yahooCandles.ts';
 
 interface MarketExplorerViewProps {
   providers: ProviderHealth[];
@@ -26,6 +27,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
   const [hoveredCandle, setHoveredCandle] = useState<Candle | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshWarning, setRefreshWarning] = useState<string | null>(null);
+  const [closeOnlySeries, setCloseOnlySeries] = useState<YahooCloseObservation[]>([]);
   const requestSequence = useRef(0);
 
   const fetchPairData = useCallback(async (symbol: ForexSymbol, showLoader = true) => {
@@ -51,13 +53,20 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
             : new Date(c.timestampMs).toISOString(),
         }))
         .sort((a: Candle, b: Candle) => a.timestampMs - b.timestampMs);
+      const validCloseOnly = (Array.isArray(data.closeOnlySeries) ? data.closeOnlySeries : [])
+        .filter((point: YahooCloseObservation) =>
+          point && Number.isFinite(point.timestampMs) &&
+          Number.isFinite(point.close) && point.close > 0
+        )
+        .sort((a: YahooCloseObservation, b: YahooCloseObservation) => a.timestampMs - b.timestampMs);
       setCandles(validCandles);
+      setCloseOnlySeries(validCloseOnly);
       setHoveredCandle(null);
       setActiveSource(data.source || '—');
       setQualityScore(Number.isFinite(data.qualityScore) ? data.qualityScore : null);
       setRefreshWarning(null);
-      if (validCandles.length < 2) {
-        setLoadError('Not enough valid candles are available for this pair yet.');
+      if (validCandles.length < 2 && validCloseOnly.length < 2) {
+        setLoadError('This pair has no complete OHLC candles or usable close-price series yet.');
       } else {
         setLoadError(null);
       }
@@ -67,6 +76,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
       const message = error instanceof Error ? error.message : 'Market data is temporarily unavailable.';
       if (showLoader) {
         setCandles([]);
+        setCloseOnlySeries([]);
         setActiveSource('—');
         setQualityScore(null);
         setLoadError(message);
@@ -91,20 +101,139 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
   const trustedCandles = getTrustedMarketCandles(candles);
   const latestCandle = getLatestObservedCandle(candles);
   const firstCandle = trustedCandles[0] ?? null;
+  const latestCloseOnly = closeOnlySeries[closeOnlySeries.length - 1] ?? null;
+  const firstCloseOnly = closeOnlySeries[0] ?? null;
+  const lastObservedPrice = latestCandle?.close ?? latestCloseOnly?.close ?? null;
+  const lastObservedAtMs = latestCandle?.timestampMs ?? latestCloseOnly?.timestampMs ?? null;
   const syntheticCount = candles.filter(candle => candle.source === 'synthetic').length;
-  const latestAgeSeconds = latestCandle
-    ? Math.max(0, Math.floor((Date.now() - latestCandle.timestampMs) / 1000))
+  const latestAgeSeconds = lastObservedAtMs !== null
+    ? Math.max(0, Math.floor((Date.now() - lastObservedAtMs) / 1000))
     : null;
+  const pipScale = selectedPair.includes('JPY') ? 100 : 10000;
   const changePips =
     latestCandle && firstCandle
-      ? Number(
-          ((latestCandle.close - firstCandle.open) * (selectedPair.includes('JPY') ? 100 : 10000)).toFixed(1)
-        )
-      : 0;
+      ? Number(((latestCandle.close - firstCandle.open) * pipScale).toFixed(1))
+      : latestCloseOnly && firstCloseOnly
+        ? Number(((latestCloseOnly.close - firstCloseOnly.close) * pipScale).toFixed(1))
+        : 0;
+
+  // A Yahoo close-only response is drawn as a line, never disguised as OHLC candles.
+  const renderCloseOnlyChart = () => {
+    if (closeOnlySeries.length < 2) return null;
+
+    const isJpy = selectedPair.includes('JPY');
+    const prices = closeOnlySeries.map(point => point.close);
+    const rawMin = Math.min(...prices);
+    const rawMax = Math.max(...prices);
+    const span = Math.max(rawMax - rawMin, isJpy ? 0.04 : 0.0004);
+    const padding = span * 0.10;
+    const centre = (rawMin + rawMax) / 2;
+    const minPrice = centre - span / 2 - padding;
+    const maxPrice = centre + span / 2 + padding;
+    const priceRange = maxPrice - minPrice;
+    const chartWidth = 1000;
+    const chartHeight = 330;
+    const plotLeft = 18;
+    const plotRight = 890;
+    const plotTop = 22;
+    const plotBottom = 265;
+    const plotHeight = plotBottom - plotTop;
+    const slotWidth = (plotRight - plotLeft) / (closeOnlySeries.length - 1);
+    const getY = (price: number) => plotBottom - ((price - minPrice) / priceRange) * plotHeight;
+    const formatPrice = (price: number) => price.toFixed(isJpy ? 3 : 5);
+    const formatTime = (timestampMs: number) => new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'UTC', hour: '2-digit', minute: '2-digit',
+    }).format(new Date(timestampMs));
+    const path = closeOnlySeries.map((point, index) => {
+      const x = plotLeft + index * slotWidth;
+      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${getY(point.close).toFixed(2)}`;
+    }).join(' ');
+    const lastPoint = latestCloseOnly || closeOnlySeries[closeOnlySeries.length - 1];
+    const latestY = getY(lastPoint.close);
+    const tickIndices = Array.from(new Set([
+      0,
+      Math.round((closeOnlySeries.length - 1) * 0.25),
+      Math.round((closeOnlySeries.length - 1) * 0.5),
+      Math.round((closeOnlySeries.length - 1) * 0.75),
+      closeOnlySeries.length - 1,
+    ]));
+
+    return (
+      <div className="sf-chart-frame p-3 sm:p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="inline-flex items-center gap-2 rounded-md border border-amber-400/20 bg-amber-400/[.06] px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+            <Activity className="h-3.5 w-3.5" />
+            Close-only price view · not OHLC candles
+          </div>
+          <span className="text-[10px] text-neutral-500">Yahoo Finance · read-only price observations</span>
+        </div>
+        <div className="sf-chart-scroll">
+          <svg
+            viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+            preserveAspectRatio="none"
+            role="img"
+            aria-label={`${selectedPair} close-only one-minute price line with ${closeOnlySeries.length} observations; OHLC values were not supplied`}
+          >
+            {[0, 0.25, 0.5, 0.75, 1].map(ratio => {
+              const y = plotTop + ratio * plotHeight;
+              const price = maxPrice - ratio * priceRange;
+              return (
+                <g key={ratio}>
+                  <line className="sf-chart-grid" x1={plotLeft} y1={y} x2={plotRight} y2={y} />
+                  <text className="sf-chart-axis" x={plotRight + 12} y={y + 3.5}>{formatPrice(price)}</text>
+                </g>
+              );
+            })}
+            <line x1={plotLeft} y1={latestY} x2={plotRight} y2={latestY}
+              stroke="#8ce7b9" strokeWidth="1" strokeDasharray="5 5" opacity=".55" />
+            <path d={path} fill="none" stroke="#65d9ad" strokeWidth="2.5"
+              strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+            {closeOnlySeries.map((point, index) => {
+              const x = plotLeft + index * slotWidth;
+              const isLast = index === closeOnlySeries.length - 1;
+              return (
+                <circle key={point.timestampMs} cx={x} cy={getY(point.close)}
+                  r={isLast ? 4 : 1.5} fill={isLast ? '#d5f7e4' : '#65d9ad'}
+                  opacity={isLast ? 1 : 0.48}>
+                  <title>{formatTime(point.timestampMs)} UTC · Close {formatPrice(point.close)} · Yahoo close-only</title>
+                </circle>
+              );
+            })}
+            <line x1={plotLeft} y1={plotBottom + 7} x2={plotRight} y2={plotBottom + 7}
+              stroke="rgba(148,163,184,.22)" strokeWidth="1" />
+            {tickIndices.map(index => {
+              const point = closeOnlySeries[index];
+              const x = plotLeft + index * slotWidth;
+              return (
+                <g key={point.timestampMs}>
+                  <line x1={x} y1={plotBottom + 7} x2={x} y2={plotBottom + 12}
+                    stroke="rgba(148,163,184,.3)" />
+                  <text className="sf-chart-axis" x={x} y={plotBottom + 29} textAnchor="middle">
+                    {formatTime(point.timestampMs)}
+                  </text>
+                </g>
+              );
+            })}
+            <text className="sf-chart-axis" x={plotRight + 12} y={plotBottom + 29}>UTC</text>
+          </svg>
+        </div>
+        <div className="sf-chart-inspector mt-3 font-mono text-[11px]">
+          <span className="text-neutral-400">Latest close <strong className="text-neutral-100">{formatPrice(lastPoint.close)}</strong></span>
+          <span className="text-neutral-500">{formatTime(lastPoint.timestampMs)} UTC · Yahoo</span>
+        </div>
+        <p className="mt-3 text-[10px] leading-relaxed text-amber-200/75">
+          Yahoo did not provide complete Open, High and Low values. This line uses only its reported Close values. No candle bodies, wicks, volume, or trading signals are fabricated from this series.
+        </p>
+      </div>
+    );
+  };
 
   // Responsive SVG candlestick chart. Synthetic continuity candles are
   // deliberately rendered in muted grey so they cannot be mistaken for live quotes.
   const renderChart = () => {
+    if (trustedCandles.length < 2 && closeOnlySeries.length >= 2) {
+      return renderCloseOnlyChart();
+    }
     if (candles.length < 2) {
       return (
         <div className="flex h-[330px] items-center justify-center text-neutral-500 font-mono text-xs">
@@ -328,7 +457,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
           <div className="flex min-w-0 flex-wrap items-center gap-3">
             <h3 className="text-base font-bold text-white font-mono">{selectedPair} M1</h3>
             <span className="text-xs font-mono text-neutral-400">
-              Last observed: <strong className="text-white">{latestCandle?.close?.toFixed(selectedPair.includes('JPY') ? 3 : 5) ?? '—'}</strong>
+              Last observed: <strong className="text-white">{lastObservedPrice?.toFixed(selectedPair.includes('JPY') ? 3 : 5) ?? '—'}</strong>
             </span>
             <span className={`text-xs font-mono font-medium ${changePips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
               {changePips >= 0 ? '+' : ''}{changePips} pips
@@ -338,7 +467,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
             </span>
           </div>
           <div className="text-[10px] font-mono text-neutral-500">
-            {trustedCandles.length} trusted · {candles.length} displayed · {latestAgeSeconds === null ? 'no provider candle' : `${latestAgeSeconds}s old`}
+            {trustedCandles.length} trusted candles · {closeOnlySeries.length} close-only · {candles.filter(candle => candle.source === 'synthetic').length} continuity · {latestAgeSeconds === null ? 'no observed price' : `${latestAgeSeconds}s old`}
           </div>
         </div>
 
@@ -355,7 +484,9 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
         ) : renderChart()}
         {syntheticCount > 0 && !isLoading && (
           <div className="sf-market-source-warning">
-            {syntheticCount} synthetic continuity candle{syntheticCount === 1 ? '' : 's'} are shown in muted grey because the provider feed was delayed. They are not live market observations. “Last observed” and the pip change use trusted provider/imported candles only.
+            {closeOnlySeries.length >= 2 && trustedCandles.length < 2
+              ? `Yahoo supplied ${closeOnlySeries.length} genuine close-price observations but incomplete OHLC. The chart above is a close-only line; ${syntheticCount} continuity candles are not plotted as real market candles or used for signals.`
+              : `${syntheticCount} synthetic continuity candles are shown in muted grey because the provider feed was delayed. They are not live market observations. Last observed price and pip change use provider/imported data only.`}
           </div>
         )}
         {refreshWarning && !isLoading && (

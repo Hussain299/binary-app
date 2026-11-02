@@ -176,6 +176,11 @@ export async function runAllVerificationTests(): Promise<{
     if (normalized.inputRows !== 4 || normalized.candles.length !== 2 || normalized.rejectedRows !== 2) {
       throw new Error('Yahoo normalization must keep only rows with four complete valid OHLC values.');
     }
+    if (normalized.closeOnlyObservations.length !== 2 ||
+        normalized.closeOnlyObservations[0].close !== 1.1001 ||
+        normalized.closeOnlyObservations[1].close !== 1.1002) {
+      throw new Error('Incomplete OHLC rows must be retained only as explicit close-only observations for a line chart.');
+    }
     if (normalized.candles[0].volume !== 0 || normalized.candles[1].volume !== 0 ||
         normalized.missingVolumeRows !== 2) {
       throw new Error('Missing Yahoo FX volume must be represented as zero, never a fabricated constant.');
