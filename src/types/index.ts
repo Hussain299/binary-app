@@ -701,12 +701,12 @@ export interface SystemHealthState {
       eligibleTimeframes: number[];
       eligibleStrategyPoolCount?: number;
       sessionCompatibleStrategyCount?: number;
-      timeframeCompatibleStrategyCount?: number;
+      expiryCompatibleStrategyCount?: number;
       strategiesEvaluated?: number;
       regimeRejected?: number;
       activationPassed?: number;
       memoryVetoes?: number;
-      selectedTimeframe?: number | null;
+      selectedExpiryMinutes?: number | null;
       lastStrategyName?: string | null;
       signalPersisted?: boolean;
       signalCreationError?: string | null;
