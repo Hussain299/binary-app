@@ -178,6 +178,13 @@ export async function runAllVerificationTests(): Promise<{
     if (assessResearchPairReadiness(base, null, null, MINIMUM_RESEARCH_M1_CANDLES).status !== 'READY') {
       throw new Error('A never-researched pair may use its first qualifying 60k research history window.');
     }
+    const preflightOnly = assessResearchPairReadiness(base, null, null, MINIMUM_RESEARCH_M1_CANDLES);
+    if (preflightOnly.status !== 'READY') {
+      throw new Error('A retryable preflight must remain eligible when data quality becomes sufficient.');
+    }
+    // Preflight failures never write lastInspectedThroughUtc or consume a holdout.
+    // This contract is enforced in the scheduler before the worker dispatches.
+
     const inspected = assessResearchPairReadiness(base, null, holdoutEnd, MINIMUM_RESEARCH_M1_CANDLES - 1);
     if (inspected.status !== 'WAITING_FOR_NEW_HISTORY') {
       throw new Error('A batch-inspected window must not be replayed even if no finalist reserved a holdout.');
