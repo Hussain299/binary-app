@@ -7,10 +7,10 @@ import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { apiRouter } from './src/server/api.js';
-import { autonomousScheduler } from './src/server/scheduler.js';
-import { db } from './src/server/db.js';
-import { learningPlatform } from './src/server/learningPlatform.js';
+import { apiRouter } from './src/server/api.ts';
+import { autonomousScheduler } from './src/server/scheduler.ts';
+import { db } from './src/server/db.ts';
+import { learningPlatform } from './src/server/learningPlatform.ts';
 
 dotenv.config();
 

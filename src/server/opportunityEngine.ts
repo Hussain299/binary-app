@@ -16,18 +16,18 @@ import {
   OpportunityForecastPoint,
   OpportunityHypothesisType,
   TradeOpportunity,
-} from "../types/index.js";
-import { dataFeedEngine } from "./dataFeeds.js";
-import { historicalDataStore } from "./historicalData.js";
-import { db } from "./db.js";
-import { researchEngine } from "./researchEngine.js";
-import { fingerprintCandles, FEATURE_SCHEMA_VERSION, stableHash } from "./researchReproducibility.js";
+} from "../types/index.ts";
+import { dataFeedEngine } from "./dataFeeds.ts";
+import { historicalDataStore } from "./historicalData.ts";
+import { db } from "./db.ts";
+import { researchEngine } from "./researchEngine.ts";
+import { fingerprintCandles, FEATURE_SCHEMA_VERSION, stableHash } from "./researchReproducibility.ts";
 import {
   binaryBreakEvenWinRate,
   wilsonLowerBound,
-} from "./evolutionEngine.js";
-import { isForexMarketIntervalOpen, isForexMarketOpenAt } from "./marketHours.js";
-import { ADVANCE_NOTICE_MS, MAX_DECISION_PROCESSING_DELAY_MS, getNextCandleOpenMs } from "./tradingClock.js";
+} from "./evolutionEngine.ts";
+import { isForexMarketIntervalOpen, isForexMarketOpenAt } from "./marketHours.ts";
+import { ADVANCE_NOTICE_MS, MAX_DECISION_PROCESSING_DELAY_MS, getNextCandleOpenMs } from "./tradingClock.ts";
 
 const REAL_SOURCES = new Set(["biquote", "dukascopy", "yahoo", "imported"]);
 const M1_MS = 60_000;

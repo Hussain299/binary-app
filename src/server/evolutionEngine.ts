@@ -7,7 +7,7 @@ import type {
   StrategyDiscoveryMetrics,
   StrategyPaperMetrics,
   RuleFamily,
-} from "../types/index.js";
+} from "../types/index.ts";
 
 export type StrategyStyle = "TREND" | "MEAN_REVERSION" | "HYBRID" | "UNKNOWN";
 export type MarketRegime =

@@ -4,12 +4,12 @@
  * Research Trinity Audits, and System State.
  */
 
-import { Candle, ForexSymbol, LossAutopsy, ResearchSignal, SynthesizedStrategyGene, TradeOpportunity, VerificationTestResult } from '../types/index.js';
-import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.js';
-import { db } from './db.js';
-import { entryExitEngine } from './entryExitEngine.js';
-import { researchEngine } from './researchEngine.js';
-import { calculateBinarySettlement } from './binarySettlement.js';
+import { Candle, ForexSymbol, LossAutopsy, ResearchSignal, SynthesizedStrategyGene, TradeOpportunity, VerificationTestResult } from '../types/index.ts';
+import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.ts';
+import { db } from './db.ts';
+import { entryExitEngine } from './entryExitEngine.ts';
+import { researchEngine } from './researchEngine.ts';
+import { calculateBinarySettlement } from './binarySettlement.ts';
 import {
   assessNearestNeighbors,
   bayesianUcbScore,
@@ -28,24 +28,24 @@ import {
   wilsonLowerBound,
   outcomeFitsResearchWindow,
   doesResearchHoldoutOverlap,
-} from './evolutionEngine.js';
-import { findEligibleStartTimeframes, getNextCandleOpenMs } from './tradingClock.js';
-import { getForexMarketState, getReportingSessionFromTimestamp, isForexMarketIntervalOpen, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
+} from './evolutionEngine.ts';
+import { findEligibleStartTimeframes, getNextCandleOpenMs } from './tradingClock.ts';
+import { getForexMarketState, getReportingSessionFromTimestamp, isForexMarketIntervalOpen, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.ts';
 import {
   createSeededRandom,
   deriveResearchSeed,
   fingerprintCandles,
   stableHash,
-} from './researchReproducibility.js';
-import { sanitizeLossAutopsy, OBSERVATION_ONLY_LESSONS } from './researchGovernance.js';
-import { calibratePredictionScore } from './predictionCalibration.js';
-import { opportunityEngine, evaluateOpportunityHoldout, buildOpportunitySchedule } from './opportunityEngine.js';
-import { mapWithConcurrency, MARKET_SENSE_CONCURRENCY } from './scheduler.js';
+} from './researchReproducibility.ts';
+import { sanitizeLossAutopsy, OBSERVATION_ONLY_LESSONS } from './researchGovernance.ts';
+import { calibratePredictionScore } from './predictionCalibration.ts';
+import { opportunityEngine, evaluateOpportunityHoldout, buildOpportunitySchedule } from './opportunityEngine.ts';
+import { mapWithConcurrency, MARKET_SENSE_CONCURRENCY } from './scheduler.ts';
 import {
   assessPaperCapitalRisk,
   CONSERVATIVE_PAPER_RISK_POLICY,
   payoutBreakEvenProbability,
-} from './capitalRisk.js';
+} from './capitalRisk.ts';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {

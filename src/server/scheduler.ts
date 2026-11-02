@@ -12,21 +12,21 @@ import {
   ForexSymbol,
   ResearchExperiment,
   RuleFamily,
-} from '../types/index.js';
-import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.js';
-import { getForexMarketState, isForexMarketIntervalOpen } from './marketHours.js';
-import { db } from './db.js';
-import { entryExitEngine } from './entryExitEngine.js';
-import { researchEngine } from './researchEngine.js';
-import { historicalDataStore } from './historicalData.js';
+} from '../types/index.ts';
+import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.ts';
+import { getForexMarketState, isForexMarketIntervalOpen } from './marketHours.ts';
+import { db } from './db.ts';
+import { entryExitEngine } from './entryExitEngine.ts';
+import { researchEngine } from './researchEngine.ts';
+import { historicalDataStore } from './historicalData.ts';
 import {
   classifyMarketRegime,
   inferGenomeStyle,
   inferGenomeRuleFamily,
   isStrategyRegimeCompatible,
-} from './evolutionEngine.js';
-import { findEligibleStartTimeframes } from './tradingClock.js';
-import { FEATURE_SCHEMA_VERSION, RESEARCH_ENGINE_VERSION } from './researchReproducibility.js';
+} from './evolutionEngine.ts';
+import { findEligibleStartTimeframes } from './tradingClock.ts';
+import { FEATURE_SCHEMA_VERSION, RESEARCH_ENGINE_VERSION } from './researchReproducibility.ts';
 
 export const MARKET_SENSE_CONCURRENCY = 8;
 

@@ -21,11 +21,11 @@ import {
   LossAutopsy,
   StrategyPerformanceRecord,
   TradeOpportunity,
-} from '../types/index.js';
-import type { LearningPlatformPersistedState } from './learningPlatform.js';
-import { sanitizeLossAutopsy } from './researchGovernance.js';
-import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.js';
-import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.js';
+} from '../types/index.ts';
+import type { LearningPlatformPersistedState } from './learningPlatform.ts';
+import { sanitizeLossAutopsy } from './researchGovernance.ts';
+import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.ts';
+import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.ts';
 import {
   assessNearestNeighbors,
   EpisodicTradeMemory,
@@ -36,7 +36,7 @@ import {
   bayesianUcbScore,
   doesResearchHoldoutOverlap,
   hasSufficientHistoricalApprovalEvidence,
-} from './evolutionEngine.js';
+} from './evolutionEngine.ts';
 
 interface DatabaseSchema {
   candles: Record<string, Candle[]>;
