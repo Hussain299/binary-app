@@ -63,32 +63,45 @@ export default function App() {
           // Check for fresh signals generated within last 3 minutes (180s) to notify user.
           const nowMs = Date.now();
           for (const sig of sigRes.signals) {
-            if (!notifiedIdsRef.current.has(sig.id)) {
+            if (notifiedIdsRef.current.has(sig.id)) continue;
+
+            const predictionTimeMs = Date.parse(sig.predictionTimeUtc);
+            if (!Number.isFinite(predictionTimeMs)) continue;
+            const ageSec = Math.floor((nowMs - predictionTimeMs) / 1000);
+
+            // Do not mark a future-dated record as notified; it may become valid
+            // on a later poll. Only retire genuinely expired records.
+            if (ageSec > 180) {
               notifiedIdsRef.current.add(sig.id);
-              const ageSec = Math.floor((nowMs - Date.parse(sig.predictionTimeUtc)) / 1000);
-              if (!sig.paperOnly && ageSec <= 180 && ['WAITING_FOR_ENTRY', 'ACTIVE'].includes(sig.lifecycleState)) {
-                soundNotificationService.playSignalAlertSound();
-                soundNotificationService.sendBrowserNotification(
-                  `🔔 3-Min Advance Signal: ${sig.symbol} ${sig.direction}`,
-                  `Entry at ${sig.candleOpenTimeIst || '5M Open'} · Dynamic Expiry: ${sig.expiryMinutes}m`
-                );
-                setActiveNotification({
-                  id: `notif_${sig.id}`,
-                  signalId: sig.id,
-                  symbol: sig.symbol,
-                  direction: sig.direction,
-                  title: `🔔 3-Min Advance Signal: ${sig.symbol} ${sig.direction}`,
-                  message: `Scheduled entry at 5M candle open (${sig.candleOpenTimeIst}). Dynamic Expiry: ${sig.expiryMinutes} Min.`,
-                  timestamp: sig.predictionTimeUtc,
-                  triggerPrice: sig.triggerPrice,
-                  expiryMinutes: sig.expiryMinutes,
-                  read: false,
-                  candleOpenTimeIst: sig.candleOpenTimeIst,
-                  candleCloseTimeIst: sig.candleCloseTimeIst,
-                  advanceNoticeText: '3-Minute Advance Signal Alert',
-                });
-                break;
-              }
+              continue;
+            }
+            if (ageSec < 0) continue;
+
+            if (!sig.paperOnly &&
+                ageSec <= 180 &&
+                ['WAITING_FOR_ENTRY', 'ACTIVE'].includes(sig.lifecycleState)) {
+              notifiedIdsRef.current.add(sig.id);
+              soundNotificationService.playSignalAlertSound();
+              soundNotificationService.sendBrowserNotification(
+                `🔔 3-Min Advance Signal: ${sig.symbol} ${sig.direction}`,
+                `Entry at ${sig.candleOpenTimeIst || '5M Open'} · Dynamic Expiry: ${sig.expiryMinutes}m`
+              );
+              setActiveNotification({
+                id: `notif_${sig.id}`,
+                signalId: sig.id,
+                symbol: sig.symbol,
+                direction: sig.direction,
+                title: `🔔 3-Min Advance Signal: ${sig.symbol} ${sig.direction}`,
+                message: `Scheduled entry at 5M candle open (${sig.candleOpenTimeIst}). Dynamic Expiry: ${sig.expiryMinutes} Min.`,
+                timestamp: sig.predictionTimeUtc,
+                triggerPrice: sig.triggerPrice,
+                expiryMinutes: sig.expiryMinutes,
+                read: false,
+                candleOpenTimeIst: sig.candleOpenTimeIst,
+                candleCloseTimeIst: sig.candleCloseTimeIst,
+                advanceNoticeText: '3-Minute Advance Signal Alert',
+              });
+              break;
             }
           }
         }
