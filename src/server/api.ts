@@ -751,6 +751,7 @@ apiRouter.get('/system/health', (_req: Request, res: Response) => {
   const evolutionResearch = autonomousScheduler.getEvolutionResearchState();
   const storedStrategies = db.getSynthesizedStrategies();
   const eligibleStrategies = db.getPaperTradingStrategies();
+  const strategyEligibility = db.getStrategyEligibilityDiagnostics();
   const isCloudRun = Boolean(process.env.K_SERVICE);
 
   res.json({
@@ -775,6 +776,7 @@ apiRouter.get('/system/health', (_req: Request, res: Response) => {
       historicallyQualified: eligibleStrategies.length,
       promoted: eligibleStrategies.filter(gene => gene.status === 'PROMOTED_ACTIVE').length,
       paperTrading: eligibleStrategies.filter(gene => gene.status === 'PAPER_TRADING').length,
+      eligibilityDiagnostics: strategyEligibility,
       status: eligibleStrategies.length > 0 ? 'READY' : 'NO_HISTORICALLY_QUALIFIED_STRATEGY',
       researchStatus: evolutionResearch.status,
       researchMessage: evolutionResearch.message,

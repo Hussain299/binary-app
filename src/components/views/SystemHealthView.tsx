@@ -51,6 +51,13 @@ export const SystemHealthView: React.FC = () => {
     : schedulerLabel === 'STARTING'
       ? 'text-amber-400'
       : 'text-rose-400';
+  const strategyDiagnostics = health?.strategyReadiness?.eligibilityDiagnostics;
+  const leadingHistoricalBlockers = Object.entries(strategyDiagnostics?.historicalFailureCounts || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
+  const leadingForwardBlockers = Object.entries(strategyDiagnostics?.forwardFailureCounts || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4);
 
   return (
     <div className="sf-page">
@@ -146,6 +153,64 @@ export const SystemHealthView: React.FC = () => {
             </div>
           </div>
 
+          {strategyDiagnostics && (
+            <div className="rounded-lg border border-neutral-800 bg-neutral-900/60 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="text-sm font-semibold text-white">Why the strategy pool is or isn't producing signals</h4>
+                <span className={strategyDiagnostics.eligibleForPaperSignals > 0 ? 'text-emerald-300' : 'text-amber-300'}>
+                  {strategyDiagnostics.eligibleForPaperSignals} eligible for paper signals
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-[10px]">
+                {[
+                  ['Stored', strategyDiagnostics.storedCandidates],
+                  ['Paper candidates', strategyDiagnostics.paperTradingCandidates],
+                  ['Promoted', strategyDiagnostics.promotedCandidates],
+                  ['Experimenting', strategyDiagnostics.experimentingCandidates],
+                  ['Rejected', strategyDiagnostics.rejectedCandidates],
+                  ['Mutating', strategyDiagnostics.mutatingCandidates],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded bg-neutral-950 border border-neutral-800 p-2">
+                    <span className="block text-neutral-500">{label}</span>
+                    <strong className="mt-1 block text-base text-neutral-100 tabular-nums">{value}</strong>
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="rounded bg-neutral-950 border border-neutral-800 p-3">
+                  <strong className="text-[10px] text-neutral-300 uppercase">Historical approval blockers</strong>
+                  {leadingHistoricalBlockers.length ? (
+                    <div className="mt-2 space-y-1.5">
+                      {leadingHistoricalBlockers.map(([reason, count]) => (
+                        <div key={reason} className="flex justify-between gap-3 text-[10px]">
+                          <span className="text-neutral-400">{reason.replace(/_/g, ' ')}</span>
+                          <strong className="text-amber-300 tabular-nums">{count}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-[10px] text-neutral-500">No historical blockers recorded for paper/promoted candidates.</p>
+                  )}
+                </div>
+                <div className="rounded bg-neutral-950 border border-neutral-800 p-3">
+                  <strong className="text-[10px] text-neutral-300 uppercase">Forward promotion blockers</strong>
+                  {leadingForwardBlockers.length ? (
+                    <div className="mt-2 space-y-1.5">
+                      {leadingForwardBlockers.map(([reason, count]) => (
+                        <div key={reason} className="flex justify-between gap-3 text-[10px]">
+                          <span className="text-neutral-400">{reason.replace(/_/g, ' ')}</span>
+                          <strong className="text-amber-300 tabular-nums">{count}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-[10px] text-neutral-500">No forward-promotion blockers recorded.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {health.hosting?.warning && (
             <div className="rounded-lg border border-amber-900/60 bg-amber-950/20 p-4 text-xs text-amber-100">
               <strong className="block text-amber-300 mb-1">Hosting requirement</strong>
@@ -187,7 +252,7 @@ export const SystemHealthView: React.FC = () => {
               )}
 
               <div className="overflow-x-auto border border-neutral-800 rounded">
-                <table className="w-full text-left min-w-[760px]">
+                <table className="w-full text-left min-w-[1240px]">
                   <thead className="bg-neutral-950 text-neutral-400 uppercase text-[10px]">
                     <tr>
                       <th className="px-3 py-2">Pair</th>
@@ -195,6 +260,11 @@ export const SystemHealthView: React.FC = () => {
                       <th className="px-3 py-2">Age</th>
                       <th className="px-3 py-2">Candles</th>
                       <th className="px-3 py-2">Eligible TF</th>
+                      <th className="px-3 py-2">Pair-fit</th>
+                      <th className="px-3 py-2">Evaluated</th>
+                      <th className="px-3 py-2">Regime veto</th>
+                      <th className="px-3 py-2">Trigger</th>
+                      <th className="px-3 py-2">Memory veto</th>
                       <th className="px-3 py-2">Decision</th>
                     </tr>
                   </thead>
@@ -206,7 +276,17 @@ export const SystemHealthView: React.FC = () => {
                         <td className="px-3 py-2 text-neutral-400">{pair.ageSeconds === null ? '—' : `${pair.ageSeconds}s`}</td>
                         <td className="px-3 py-2 text-neutral-400">{pair.candleCount}</td>
                         <td className="px-3 py-2 text-neutral-400">{pair.eligibleTimeframes.length ? pair.eligibleTimeframes.join(', ') + 'm' : '—'}</td>
-                        <td className={`px-3 py-2 ${pair.result === 'SIGNAL_CREATED' ? 'text-emerald-300' : 'text-amber-300'}`}>{pair.result}</td>
+                        <td className="px-3 py-2 text-neutral-400" title="Session-compatible / timeframe-compatible">
+                          {pair.sessionCompatibleStrategyCount ?? 0}/{pair.timeframeCompatibleStrategyCount ?? 0}
+                        </td>
+                        <td className="px-3 py-2 text-neutral-400">{pair.strategiesEvaluated ?? 0}</td>
+                        <td className="px-3 py-2 text-amber-300">{pair.regimeRejected ?? 0}</td>
+                        <td className="px-3 py-2 text-emerald-300">{pair.activationPassed ?? 0}</td>
+                        <td className="px-3 py-2 text-rose-300">{pair.memoryVetoes ?? 0}</td>
+                        <td className="px-3 py-2 text-amber-300">
+                          <span>{pair.result}</span>
+                          {pair.signalCreationError && <span className="block max-w-[260px] whitespace-normal text-rose-300">{pair.signalCreationError}</span>}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

@@ -110,6 +110,40 @@ export interface HistoricalApprovalEvidence {
 }
 
 /** Payout-aware historical paper eligibility; this is not broker execution approval. */
+export function getHistoricalApprovalFailureReasons(
+  metrics?: HistoricalApprovalEvidence,
+  accuracyStatus?: string,
+  sampleCount = 0
+): string[] {
+  const reasons: string[] = [];
+  if (!metrics) return ['MISSING_BACKTEST_METRICS'];
+  if (accuracyStatus !== 'BACKTESTED') reasons.push('ACCURACY_NOT_BACKTESTED');
+  const breakEven = binaryBreakEvenWinRate(metrics.binaryPayoutPct);
+  if (!Number.isFinite(sampleCount) || sampleCount < 300) reasons.push('TOTAL_SAMPLE_BELOW_300');
+  if (!Number.isFinite(metrics.testScoredSampleSize) || metrics.testScoredSampleSize < 300) reasons.push('TEST_SCORED_SAMPLE_BELOW_300');
+  if (!Number.isFinite(metrics.trainScoredSampleSize) || metrics.trainScoredSampleSize < 150) reasons.push('TRAIN_SCORED_SAMPLE_BELOW_150');
+  if (!Number.isFinite(metrics.validationScoredSampleSize) || metrics.validationScoredSampleSize < 150) reasons.push('VALIDATION_SCORED_SAMPLE_BELOW_150');
+  if (!Number.isFinite(metrics.binaryPayoutPct) || metrics.binaryPayoutPct < 80) reasons.push('PAYOUT_BELOW_80');
+  if (!Number.isFinite(metrics.trainWinRate) || metrics.trainWinRate <= breakEven) reasons.push('TRAIN_WIN_RATE_NOT_ABOVE_BREAK_EVEN');
+  const validationLower = Number.isFinite(metrics.validationWinRate) && Number.isFinite(metrics.validationScoredSampleSize) && metrics.validationScoredSampleSize > 0
+    ? wilsonLowerBound(metrics.validationWinRate * metrics.validationScoredSampleSize, metrics.validationScoredSampleSize)
+    : NaN;
+  if (!Number.isFinite(validationLower) || validationLower <= breakEven) reasons.push('VALIDATION_BOUND_NOT_ABOVE_BREAK_EVEN');
+  if (!Number.isFinite(metrics.testWinRate) || metrics.testWinRate <= breakEven) reasons.push('TEST_WIN_RATE_NOT_ABOVE_BREAK_EVEN');
+  if (!Array.isArray(metrics.testBlockWinRates) || metrics.testBlockWinRates.length !== 3 || !metrics.testBlockWinRates.every(rate => Number.isFinite(rate) && rate > breakEven)) reasons.push('TEST_BLOCKS_NOT_ABOVE_BREAK_EVEN');
+  if (!Number.isFinite(metrics.expectedValueUnits) || metrics.expectedValueUnits <= 0) reasons.push('EXPECTED_VALUE_NOT_POSITIVE');
+  if (!Number.isFinite(metrics.profitFactor) || metrics.profitFactor < 1.15) reasons.push('PROFIT_FACTOR_BELOW_1_15');
+  const ciLower = Array.isArray(metrics.confidenceInterval95) && metrics.confidenceInterval95.length === 2 ? metrics.confidenceInterval95[0] : NaN;
+  if (!Number.isFinite(ciLower) || ciLower <= breakEven) reasons.push('CONFIDENCE_BOUND_NOT_ABOVE_BREAK_EVEN');
+  const adjustedLower = Number.isFinite(metrics.multipleTestingLowerBound)
+    ? metrics.multipleTestingLowerBound!
+    : Number.isFinite(metrics.testWinRate) && Number.isFinite(metrics.testScoredSampleSize) && metrics.testScoredSampleSize > 0
+      ? wilsonLowerBound(metrics.testWinRate * metrics.testScoredSampleSize, metrics.testScoredSampleSize, 2.576)
+      : NaN;
+  if (!Number.isFinite(adjustedLower) || adjustedLower <= breakEven) reasons.push('MULTIPLE_TESTING_BOUND_NOT_ABOVE_BREAK_EVEN');
+  return reasons;
+}
+
 export function hasSufficientHistoricalApprovalEvidence(
   metrics?: HistoricalApprovalEvidence,
   accuracyStatus?: string,

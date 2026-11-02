@@ -23,6 +23,7 @@ import {
   genomeSpeciesKey,
   hasSufficientForwardParentEvidence,
   hasSufficientHistoricalApprovalEvidence,
+  getHistoricalApprovalFailureReasons,
   evolutionaryParentFitness,
   binaryBreakEvenWinRate,
   wilsonLowerBound,
@@ -1075,6 +1076,54 @@ export async function runAllVerificationTests(): Promise<{
       expectedValueUnits: -0.01,
     }, 'BACKTESTED', 400)) {
       throw new Error('Positive accuracy without positive payout-adjusted expectancy must not qualify.');
+    }
+  });
+
+  await runTest('ML', 'historical approval diagnostics explain the exact failed gates without changing eligibility', () => {
+    const breakEven = binaryBreakEvenWinRate(80);
+    const adjustedTestLower = wilsonLowerBound(0.75 * 400, 400, 2.576);
+    const evidence = {
+      testScoredSampleSize: 400,
+      trainScoredSampleSize: 200,
+      validationScoredSampleSize: 200,
+      trainWinRate: 0.72,
+      validationWinRate: 0.75,
+      testWinRate: 0.75,
+      testBlockWinRates: [0.72, 0.74, 0.75],
+      binaryPayoutPct: 80,
+      expectedValueUnits: 0.35,
+      profitFactor: 1.35,
+      confidenceInterval95: [0.68, 0.81] as [number, number],
+      multipleTestingLowerBound: adjustedTestLower,
+    };
+    const passingReasons = getHistoricalApprovalFailureReasons(evidence, 'BACKTESTED', 400);
+    if (passingReasons.length !== 0) {
+      throw new Error('A fully approved candidate must have no diagnostic blockers: ' + passingReasons.join(', '));
+    }
+    const failingReasons = getHistoricalApprovalFailureReasons({
+      ...evidence,
+      testScoredSampleSize: 120,
+      binaryPayoutPct: 79,
+      expectedValueUnits: -0.01,
+      profitFactor: 0.9,
+      multipleTestingLowerBound: breakEven,
+    }, 'UNVALIDATED', 120);
+    for (const required of [
+      'ACCURACY_NOT_BACKTESTED',
+      'TOTAL_SAMPLE_BELOW_300',
+      'TEST_SCORED_SAMPLE_BELOW_300',
+      'PAYOUT_BELOW_80',
+      'EXPECTED_VALUE_NOT_POSITIVE',
+      'PROFIT_FACTOR_BELOW_1_15',
+      'MULTIPLE_TESTING_BOUND_NOT_ABOVE_BREAK_EVEN',
+    ]) {
+      if (!failingReasons.includes(required)) {
+        throw new Error('Missing diagnostic reason ' + required + '; found ' + failingReasons.join(', '));
+      }
+    }
+    if (hasSufficientHistoricalApprovalEvidence(evidence, 'BACKTESTED', 400) !==
+        (passingReasons.length === 0)) {
+      throw new Error('Diagnostic reason reporting must exactly match the existing historical eligibility decision.');
     }
   });
 

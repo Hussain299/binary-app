@@ -36,6 +36,7 @@ import {
   bayesianUcbScore,
   doesResearchHoldoutOverlap,
   hasSufficientHistoricalApprovalEvidence,
+  getHistoricalApprovalFailureReasons,
 } from './evolutionEngine.ts';
 
 interface DatabaseSchema {
@@ -825,6 +826,69 @@ class DatabaseService {
         this.hasHistoricalApprovalEvidence(gene) &&
         this.hasForwardApprovalEvidence(gene))
     );
+  }
+
+  /** Explain why stored strategy candidates are or are not eligible for live paper signals. */
+  public getStrategyEligibilityDiagnostics() {
+    const genes = this.state.synthesizedStrategies || [];
+    const eligible = this.getPaperTradingStrategies();
+    const statusCounts: Record<string, number> = {};
+    const historicalFailures: Record<string, number> = {};
+    const forwardFailures: Record<string, number> = {};
+
+    for (const gene of genes) {
+      statusCounts[gene.status] = (statusCounts[gene.status] || 0) + 1;
+      if (gene.status === 'PAPER_TRADING' || gene.status === 'PROMOTED_ACTIVE') {
+        const reasons = getHistoricalApprovalFailureReasons(
+          gene.backtestMetrics,
+          gene.accuracyStatus,
+          gene.sampleCount
+        );
+        for (const reason of reasons) {
+          historicalFailures[reason] = (historicalFailures[reason] || 0) + 1;
+        }
+      }
+      if (gene.status === 'PROMOTED_ACTIVE' && !this.hasForwardApprovalEvidence(gene)) {
+        const metrics = gene.paperMetrics;
+        const reasons: string[] = [];
+        if (!metrics) reasons.push('MISSING_FORWARD_METRICS');
+        else {
+          if (metrics.trades < 300) reasons.push('FORWARD_TRADES_BELOW_300');
+          if (metrics.scoredTrades < 300) reasons.push('FORWARD_SCORED_TRADES_BELOW_300');
+          if (metrics.minimumPayoutPct < 80) reasons.push('FORWARD_PAYOUT_BELOW_80');
+          if (metrics.netReturnUnits <= 0) reasons.push('FORWARD_EXPECTANCY_NOT_POSITIVE');
+          if (metrics.profitFactor < 1.15) reasons.push('FORWARD_PROFIT_FACTOR_BELOW_1_15');
+          if (!Array.isArray(metrics.rollingWinRates) || metrics.rollingWinRates.length !== 3) reasons.push('FORWARD_ROLLING_BLOCKS_MISSING');
+          if (!Array.isArray(metrics.confidenceInterval95) || metrics.confidenceInterval95.length !== 2 ||
+              !Number.isFinite(metrics.confidenceInterval95[0])) reasons.push('FORWARD_CONFIDENCE_BOUND_MISSING');
+          const breakEven = 1 / (1 + metrics.minimumPayoutPct / 100);
+          if (!Number.isFinite(metrics.winRate) || metrics.winRate <= breakEven) reasons.push('FORWARD_WIN_RATE_NOT_ABOVE_BREAK_EVEN');
+          if (Array.isArray(metrics.rollingWinRates) &&
+              !metrics.rollingWinRates.every(rate => Number.isFinite(rate) && rate > breakEven)) {
+            reasons.push('FORWARD_BLOCK_NOT_ABOVE_BREAK_EVEN');
+          }
+          if (Array.isArray(metrics.confidenceInterval95) &&
+              Number.isFinite(metrics.confidenceInterval95[0]) &&
+              metrics.confidenceInterval95[0] <= breakEven) reasons.push('FORWARD_BOUND_NOT_ABOVE_BREAK_EVEN');
+        }
+        for (const reason of reasons) {
+          forwardFailures[reason] = (forwardFailures[reason] || 0) + 1;
+        }
+      }
+    }
+
+    return {
+      storedCandidates: genes.length,
+      eligibleForPaperSignals: eligible.length,
+      paperTradingCandidates: statusCounts.PAPER_TRADING || 0,
+      promotedCandidates: statusCounts.PROMOTED_ACTIVE || 0,
+      experimentingCandidates: statusCounts.EXPERIMENTING || 0,
+      rejectedCandidates: statusCounts.REJECTED || 0,
+      mutatingCandidates: statusCounts.MUTATING || 0,
+      statusCounts,
+      historicalFailureCounts: historicalFailures,
+      forwardFailureCounts: forwardFailures,
+    };
   }
 
   public getSynthesizedStrategyById(id: string): SynthesizedStrategyGene | undefined {
