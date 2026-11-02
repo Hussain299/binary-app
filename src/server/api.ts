@@ -881,9 +881,7 @@ apiRouter.get('/intelligence/overview', (_req: Request, res: Response) => {
       counts[item.regime] = (counts[item.regime] || 0) + 1;
       return counts;
     }, {});
-    const resolvedPredictions = learning.predictions.filter((item: any) => item.status === 'RESOLVED');
-    const pendingPredictions = learning.predictions.filter((item: any) => item.status === 'PENDING');
-    const invalidPredictions = learning.predictions.filter((item: any) => item.status === 'INVALID_DATA');
+    const summary = learning.summary;
     return res.json({
       generatedAt: new Date().toISOString(),
       researchOnly: true,
@@ -897,11 +895,11 @@ apiRouter.get('/intelligence/overview', (_req: Request, res: Response) => {
       memory: {
         episodicExperiences: db.getEpisodicMemoryCount(),
         lossAutopsies: autopsies.length,
-        forwardPredictions: learning.predictions.length,
-        resolvedPredictions: resolvedPredictions.length,
-        pendingPredictions: pendingPredictions.length,
-        invalidPredictions: invalidPredictions.length,
-        events: learning.events.length,
+        forwardPredictions: summary.predictions,
+        resolvedPredictions: summary.resolved,
+        pendingPredictions: summary.pending,
+        invalidPredictions: summary.invalidData,
+        recentLearningEvents: learning.latestEvents.length,
       },
       research: {
         opportunities: opportunities.length,
@@ -909,8 +907,8 @@ apiRouter.get('/intelligence/overview', (_req: Request, res: Response) => {
         generations: generations.length,
         agentReviews: reviews.length,
         signalsObserved: signals.length,
-        latestExperimentAt: experiments[0]?.completedAt || experiments[0]?.createdAt || null,
-        latestGenerationAt: generations[0]?.timestamp || null,
+        latestExperimentAt: (experiments[0] as any)?.completedAt || (experiments[0] as any)?.createdAt || null,
+        latestGenerationAt: (generations[0] as any)?.timestamp || (generations[0] as any)?.createdAt || null,
       },
       governance: {
         immutablePredictionLedger: true,
