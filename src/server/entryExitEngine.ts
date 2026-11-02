@@ -17,7 +17,17 @@ import { db } from './db.ts';
 import { getSessionFromTimestamp } from './dataFeeds.ts';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.ts';
 import { isForexMarketOpenAt, isForexMarketIntervalOpen, isForexSignalScheduleValid } from './marketHours.ts';
-import { ADVANCE_NOTICE_MS, CLOCK_ALIGNMENT_TOLERANCE_MS, MAX_DECISION_PROCESSING_DELAY_MS, M1_CANDLE_MS, getNextCandleOpenMs, isAlignedCandleOpen, type TradingTimeframeMinutes } from './tradingClock.ts';
+import {
+  ADVANCE_NOTICE_MS,
+  CLOCK_ALIGNMENT_TOLERANCE_MS,
+  ENTRY_CANDLE_TIMEFRAME_MINUTES,
+  isSupportedExpiryMinutes,
+  MAX_DECISION_PROCESSING_DELAY_MS,
+  M1_CANDLE_MS,
+  getNextCandleOpenMs,
+  isAlignedCandleOpen,
+  type TradingTimeframeMinutes,
+} from './tradingClock.ts';
 
 export interface SignalCreationParams {
   symbol: ForexSymbol;
@@ -78,7 +88,7 @@ export class EntryExitEngine {
 
   /**
    * Factory for creating a research signal in DETECTED state, moving to WAITING_FOR_ENTRY.
-   * Every trade is synchronized to its explicitly selected 5–30 minute entry candle.
+   * Every new trade enters on the fixed M5 candle; the selected expiry is independently 5–30 minutes.
    */
   public createResearchSignal(params: SignalCreationParams): ResearchSignal {
     const isJpy = params.symbol.includes('JPY');
@@ -91,8 +101,8 @@ export class EntryExitEngine {
     const signalHigh = params.signalCandle.high;
     const signalLow = params.signalCandle.low;
 
-    // The selected genome controls a 5–30 minute starting candle and matching expiry horizon.
-    const expiryMinutes = params.expiryMinutes || (
+    // The genome selects expiry only. All new contracts enter on the fixed M5 candle.
+    const expiryMinutes = params.expiryMinutes ?? (
       params.ruleFamily.includes('momentum')
         ? 5
         : params.ruleFamily.includes('wick')
@@ -105,26 +115,26 @@ export class EntryExitEngine {
         ? 25
         : 15
     );
+    if (!isSupportedExpiryMinutes(expiryMinutes)) {
+      throw new Error('Expiry must be 5, 10, 15, 20, 25 or 30 minutes.');
+    }
 
-    // Entry candle timeframe is explicit (5–30m). The scheduler supplies the
-    // exact aligned boundary after checking the closed M1 decision candle is T-3m.
+    // The scheduler supplies the next 5-minute candle open exactly three
+    // minutes after the fully closed M1 decision candle.
     const isTest = params.ruleFamily.startsWith('test_');
     const signalCandleMs = params.signalCandle.timestampMs || Date.now();
-    const entryTimeframeMinutes = params.entryTimeframeMinutes ?? 5;
-    if (!isTest && params.entryTimeframeMinutes !== undefined && entryTimeframeMinutes !== expiryMinutes) {
-      throw new Error('The research entry timeframe and expiry horizon must match so training and forward outcomes use the same contract.');
-    }
-    if (![5, 10, 15, 20, 25, 30].includes(entryTimeframeMinutes)) {
-      throw new Error('Entry timeframe must be one of 5, 10, 15, 20, 25 or 30 minutes.');
+    const entryTimeframeMinutes = params.entryTimeframeMinutes ?? ENTRY_CANDLE_TIMEFRAME_MINUTES;
+    if (entryTimeframeMinutes !== ENTRY_CANDLE_TIMEFRAME_MINUTES) {
+      throw new Error('New signals may enter only on a 5-minute candle. Expiry is selected independently from 5 to 30 minutes.');
     }
     const refMs = isTest ? signalCandleMs : Date.now();
-    const calculatedEntryOpenMs = getNextCandleOpenMs(refMs, entryTimeframeMinutes);
+    const calculatedEntryOpenMs = getNextCandleOpenMs(refMs, ENTRY_CANDLE_TIMEFRAME_MINUTES);
     const suppliedEntryOpenMs = params.candleOpenTimeUtc
       ? Date.parse(params.candleOpenTimeUtc)
       : calculatedEntryOpenMs;
     if (!Number.isFinite(suppliedEntryOpenMs) ||
-        !isAlignedCandleOpen(suppliedEntryOpenMs, entryTimeframeMinutes)) {
-      throw new Error('Scheduled entry time is invalid or not aligned to the selected 5–30 minute candle.');
+        !isAlignedCandleOpen(suppliedEntryOpenMs, ENTRY_CANDLE_TIMEFRAME_MINUTES)) {
+      throw new Error('Scheduled entry time must align to a 5-minute candle open.');
     }
     const nextCandleOpenMs = suppliedEntryOpenMs;
     if (!isTest && params.candleOpenTimeUtc) {
@@ -155,7 +165,7 @@ export class EntryExitEngine {
     }
 
     const candleOpenTimeUtc = new Date(nextCandleOpenMs).toISOString();
-    const candleCloseTimeUtc = params.candleCloseTimeUtc || new Date(nextCandleCloseMs).toISOString();
+    const candleCloseTimeUtc = new Date(nextCandleCloseMs).toISOString();
     if (params.candleCloseTimeUtc &&
         Math.abs(Date.parse(params.candleCloseTimeUtc) - nextCandleCloseMs) > 5_000) {
       throw new Error('Scheduled close time must equal the entry boundary plus the selected expiry.');

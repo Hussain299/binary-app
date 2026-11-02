@@ -568,10 +568,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                   ? 'bg-amber-950/80 border-amber-500/80 text-amber-300 animate-pulse'
                   : 'bg-neutral-900 border-neutral-800 text-neutral-400'
               }`}
-              title="Signals are accepted only from a closed M1 candle exactly three minutes before an aligned 5–30 minute entry candle."
+              title="Signals are decided from a closed M1 candle exactly 3 minutes before the next 5-minute entry candle; expiry is selected independently from 5 to 30 minutes."
             >
               <Clock className="w-3 h-3 text-amber-400" />
-              {nextDecisionActive ? 'T−3m WINDOW ACTIVE' : '5–30M START CANDLES'}
+              {nextDecisionActive ? 'T−3m WINDOW ACTIVE' : '5M ENTRY · 5–30M EXPIRY'}
             </span>
           </div>
         </div>
@@ -780,12 +780,12 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <h3 className="text-lg font-bold text-white">
               {filterState === 'CLOSED'
                 ? 'No Closed Trades in History Yet'
-                : 'Waiting for the next valid 5–30 minute entry window'}
+                : 'Waiting for the next 5-minute entry candle'}
             </h3>
             <p className="mt-2 text-xs sm:text-sm text-neutral-400 max-w-md leading-relaxed">
               {filterState === 'CLOSED'
                 ? 'When paper contracts reach their scheduled expiry, the observed result and payout-adjusted stake return will appear here.'
-                : 'Every signal is decided from a fully closed M1 candle exactly three minutes before its selected 5–30 minute entry candle opens. The starting candle and expiry horizon must match.'}
+                : 'Every signal is decided from a fully closed M1 candle exactly three minutes before the next 5-minute candle opens. The model chooses a separately validated expiry from 5 to 30 minutes (in 5-minute steps). Entry timeframe and expiry are independent.'}
             </p>
             <button
               onClick={() => setFilterState(filterState === 'CLOSED' ? 'ACTIVE' : 'ALL')}
@@ -875,7 +875,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                               🔔 3-MIN ADVANCE NOTICE
                             </span>
                             <span className="text-[10px] text-amber-400/90 font-mono">
-                              Entry at {sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M Candle Open ({sig.candleOpenTimeIst || formatIST(sig.candleOpenTimeUtc)})
+                              Entry at {sig.entryTimeframeMinutes ?? 5}M Candle Open ({sig.candleOpenTimeIst || formatIST(sig.candleOpenTimeUtc)})
                             </span>
                           </div>
                         </div>
@@ -980,12 +980,12 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       <div className="bg-neutral-950 p-2.5 rounded-xl border border-neutral-800 flex flex-col justify-between">
                         <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          ENTRY ({sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M OPEN)
+                          ENTRY ({sig.entryTimeframeMinutes ?? 5}M OPEN)
                         </span>
                         <div className="text-sm sm:text-base font-extrabold text-white mt-1 tabular-nums">
                           {sig.candleOpenTimeIst || formatIST(sig.actualEntryTimeUtc || sig.entryWindowStartUtc)}
                         </div>
-                        <span className="text-[10px] text-neutral-400 mt-0.5">Strict {sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M Open</span>
+                        <span className="text-[10px] text-neutral-400 mt-0.5">Strict {sig.entryTimeframeMinutes ?? 5}M Open</span>
                       </div>
 
                       {/* EXIT / EXPIRY BOX */}
@@ -1446,16 +1446,16 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             {/* Timings */}
             <div className="bg-neutral-950 p-3.5 rounded-xl border border-neutral-800 space-y-2">
               <div className="text-neutral-400 text-[10px] uppercase font-bold tracking-wider">
-                {selectedSignal.entryTimeframeMinutes ?? selectedSignal.expiryMinutes ?? 5}-MINUTE ENTRY CANDLE SCHEDULE
+                5-MINUTE ENTRY CANDLE SCHEDULE
               </div>
               <div className="flex justify-between text-neutral-200 text-xs">
-                <span>Entry Time ({selectedSignal.entryTimeframeMinutes ?? selectedSignal.expiryMinutes ?? 5}M Open):</span>
+                <span>Entry Time (5M Open):</span>
                 <strong className="text-emerald-400">
                   {selectedSignal.candleOpenTimeIst || formatIST(selectedSignal.actualEntryTimeUtc || selectedSignal.entryWindowStartUtc)}
                 </strong>
               </div>
               <div className="flex justify-between text-neutral-200 text-xs">
-                <span>Expiry Time ({selectedSignal.expiryMinutes || 5}M Close):</span>
+                <span>Expiry ({selectedSignal.expiryMinutes || 5}M after entry):</span>
                 <strong className="text-rose-400">
                   {selectedSignal.candleCloseTimeIst || formatIST(selectedSignal.plannedExitTimeUtc)}
                 </strong>

@@ -24,6 +24,7 @@ import type {
 } from '../types/index.ts';
 import type { LearningPlatformPersistedState } from './learningPlatform.ts';
 import { sanitizeLossAutopsy } from './researchGovernance.ts';
+import { FEATURE_SCHEMA_VERSION, RESEARCH_ENGINE_VERSION } from './researchReproducibility.ts';
 import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.ts';
 import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid, type ReportingSession } from './marketHours.ts';
 import {
@@ -788,6 +789,11 @@ class DatabaseService {
   }
 
   private hasHistoricalApprovalEvidence(gene: SynthesizedStrategyGene): boolean {
+    // Historical approval is bound to the exact entry/expiry execution contract.
+    // Legacy genes were tested with N-minute entry candles and cannot be reused
+    // after the engine changes to fixed M5 entry plus independent 5–30m expiry.
+    if (gene.featureSchemaVersion !== FEATURE_SCHEMA_VERSION ||
+        gene.researchEngineVersion !== RESEARCH_ENGINE_VERSION) return false;
     return hasSufficientHistoricalApprovalEvidence(
       gene.backtestMetrics,
       gene.accuracyStatus,
@@ -844,6 +850,12 @@ class DatabaseService {
           gene.accuracyStatus,
           gene.sampleCount
         );
+        if (gene.featureSchemaVersion !== FEATURE_SCHEMA_VERSION) {
+          reasons.push('FEATURE_SCHEMA_VERSION_MISMATCH');
+        }
+        if (gene.researchEngineVersion !== RESEARCH_ENGINE_VERSION) {
+          reasons.push('RESEARCH_CONTRACT_VERSION_MISMATCH');
+        }
         for (const reason of reasons) {
           historicalFailures[reason] = (historicalFailures[reason] || 0) + 1;
         }

@@ -27,7 +27,12 @@ import {
   wilsonLowerBound,
 } from "./evolutionEngine.ts";
 import { isForexMarketIntervalOpen, isForexMarketOpenAt } from "./marketHours.ts";
-import { ADVANCE_NOTICE_MS, MAX_DECISION_PROCESSING_DELAY_MS, getNextCandleOpenMs } from "./tradingClock.ts";
+import {
+  ADVANCE_NOTICE_MS,
+  ENTRY_CANDLE_TIMEFRAME_MINUTES,
+  MAX_DECISION_PROCESSING_DELAY_MS,
+  getNextCandleOpenMs,
+} from "./tradingClock.ts";
 
 const REAL_SOURCES = new Set(["biquote", "dukascopy", "yahoo", "imported"]);
 const M1_MS = 60_000;
@@ -38,8 +43,10 @@ const MIN_ANALOGUES_FOR_FORECAST = 40;
 const MIN_ANALOGUES_FOR_SHORTLIST = 100;
 const MAX_SHORTLIST = 30;
 const PAYOUT_FLOOR = 80;
-const OPPORTUNITY_MODEL_VERSION = "opportunity-research-v1";
-const OPPORTUNITY_HOLDOUT_CANDIDATE_KEY = `${OPPORTUNITY_MODEL_VERSION}|${FEATURE_SCHEMA_VERSION}|ALL_HYPOTHESIS_FAMILIES`;
+const OPPORTUNITY_MODEL_VERSION = "opportunity-research-v2-fixed-m5-entry-dynamic-expiry";
+// Keep the existing holdout-family key so the M5-contract revision cannot
+// reopen chronological windows already inspected by the v1 opportunity engine.
+const OPPORTUNITY_HOLDOUT_CANDIDATE_KEY = `opportunity-research-v1|${FEATURE_SCHEMA_VERSION}|ALL_HYPOTHESIS_FAMILIES`;
 const HOLDOUT_MULTIPLE_TEST_Z = 4.0;
 const FEATURE_NAMES = [
   "return_1", "return_3", "return_5", "return_13",
@@ -76,7 +83,7 @@ export function buildOpportunitySchedule(
     throw new Error("A finite candle snapshot and current time are required.");
   }
   const decisionTimeMs = snapshotMs;
-  const entryTimeMs = getNextCandleOpenMs(decisionTimeMs, horizon);
+  const entryTimeMs = getNextCandleOpenMs(decisionTimeMs, ENTRY_CANDLE_TIMEFRAME_MINUTES);
   const expiryTimeMs = entryTimeMs + horizon * M1_MS;
   const exactAdvanceWindow = entryTimeMs - decisionTimeMs === ADVANCE_NOTICE_MS;
   const withinProcessingWindow = nowMs >= decisionTimeMs &&
@@ -84,7 +91,7 @@ export function buildOpportunitySchedule(
   const marketIntervalOpen = isForexMarketIntervalOpen(entryTimeMs, expiryTimeMs);
   const valid = exactAdvanceWindow && withinProcessingWindow && marketIntervalOpen;
   const reason = !exactAdvanceWindow
-    ? "This snapshot is not an exact T−3-minute decision point for the selected entry timeframe."
+    ? "This snapshot is not an exact T−3-minute decision point for the next 5-minute entry candle."
     : !withinProcessingWindow
       ? "The snapshot is outside the live 25-second decision-processing window."
       : !marketIntervalOpen
@@ -276,9 +283,9 @@ export function evaluateOpportunityHoldout(
   for (const row of historicalRows) {
     if (row.index < holdoutStartIndex || row.index >= candles.length) continue;
     const decisionTimeMs = candles[row.index].timestampMs + M1_MS;
-    const entryTimeMs = getNextCandleOpenMs(decisionTimeMs, horizon);
-    // Match the actual bot contract: decision exactly three minutes before
-    // an aligned N-minute entry candle. Non-matching M1 rows are not trades.
+    const entryTimeMs = getNextCandleOpenMs(decisionTimeMs, ENTRY_CANDLE_TIMEFRAME_MINUTES);
+    // Match the actual bot contract: enter at the next M5 open and settle at
+    // the independently selected expiry horizon from that same entry.
     if (entryTimeMs - decisionTimeMs !== ADVANCE_NOTICE_MS) continue;
     const expiryTimeMs = entryTimeMs + horizon * M1_MS;
     if (entryTimeMs < busyUntilMs) continue;
@@ -378,7 +385,7 @@ function makeForecast(
       // Their full outcome interval must end before the sealed holdout begins.
       if (index >= context.trainEndIndex) continue;
       const decisionTimeMs = candles[index].timestampMs + M1_MS;
-      const entryTimeMs = getNextCandleOpenMs(decisionTimeMs, horizon);
+      const entryTimeMs = getNextCandleOpenMs(decisionTimeMs, ENTRY_CANDLE_TIMEFRAME_MINUTES);
       if (entryTimeMs - decisionTimeMs !== ADVANCE_NOTICE_MS) continue;
       const expiryTimeMs = entryTimeMs + horizon * M1_MS;
       const entryIndex = context.timestampIndex.get(entryTimeMs);

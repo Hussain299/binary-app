@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Candle } from '../types/index.ts';
 
 export const FEATURE_SCHEMA_VERSION = 'causal-market-features-v1';
-export const RESEARCH_ENGINE_VERSION = 'research-engine-v1';
+export const RESEARCH_ENGINE_VERSION = 'research-engine-v2-fixed-5m-entry-dynamic-expiry';
 
 export function stableHash(input: string): string {
   return createHash('sha256').update(input).digest('hex');
