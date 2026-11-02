@@ -205,7 +205,7 @@ apiRouter.post('/analyze', (_req: Request, res: Response) => {
 apiRouter.get('/history', (req: Request, res: Response) => {
   const supplied = typeof req.query.date === 'string' ? req.query.date.trim() : '';
   const date = supplied || getIstDateString(Date.now()) || '';
-  const parsedDate = date === 'ALL' ? null : new Date(\`${date}T00:00:00.000Z\`);
+  const parsedDate = date === 'ALL' ? null : new Date(date + 'T00:00:00.000Z');
   if (date !== 'ALL' && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !parsedDate || !Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date)) {
     return res.status(400).json({ error: 'date must be a real calendar date in YYYY-MM-DD format or ALL.' });
   }
