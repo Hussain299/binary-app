@@ -27,7 +27,6 @@ import {
 } from './evolutionEngine.ts';
 import {
   ENTRY_CANDLE_TIMEFRAME_MINUTES,
-  EXPIRY_HORIZONS_MINUTES,
   findEligibleStartTimeframes,
   isSupportedExpiryMinutes,
 } from './tradingClock.ts';
