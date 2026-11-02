@@ -407,6 +407,38 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
+  await runTest('SCHEDULER', 'collapsed Yahoo quote batches are rejected before strategy evaluation', () => {
+    const nowMs = Date.parse('2026-11-02T15:00:00.000Z');
+    const collapsed: Candle[] = Array.from({ length: 8 }, (_, index) => {
+      const close = 1.1209 + index * 0.00001;
+      const timestampMs = nowMs - (7 - index) * 60_000;
+      return {
+        symbol: 'EUR/USD',
+        timestamp: new Date(timestampMs).toISOString(),
+        timestampMs,
+        open: close,
+        high: close,
+        low: close,
+        close,
+        volume: 0,
+        source: 'yahoo' as const,
+      };
+    });
+    const snapshot = getTrustedFreshCandleSnapshot(collapsed, nowMs);
+    if (snapshot.isCandleStructureValid) {
+      throw new Error('Collapsed Yahoo quote rows must fail the scheduler OHLC integrity gate.');
+    }
+    if (snapshot.isFresh || snapshot.candles.length !== 0) {
+      throw new Error('Collapsed Yahoo quotes must never be passed as fresh OHLC strategy input.');
+    }
+    if (snapshot.newestCandle?.timestampMs !== nowMs) {
+      throw new Error('The scheduler must retain the quote timestamp for diagnostics even when OHLC is ineligible.');
+    }
+    if (getTrustedMarketCandles(collapsed).length !== 0) {
+      throw new Error('Collapsed Yahoo history must be excluded from the lifecycle and strategy candle maps.');
+    }
+  });
+
   await runTest('RESEARCH', 'Seeded evolutionary search is deterministic and dataset-bound', () => {
     const seed = 'reproducibility-test-seed';
     const first = createSeededRandom(seed);
