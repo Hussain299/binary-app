@@ -769,7 +769,7 @@ export class AutonomousScheduler {
       }
 
       // 3. Evolved-genome paper discovery only. The shared trading clock and
-      // signal factory enforce exactly T-3m and matching 5–30m entry/expiry.
+      // signal factory enforces exactly T-3m before M5 entry and a separate 5–30m expiry.
       const createdSignals: any[] = [];
       // EXIT_PENDING contracts remain eligible for candle reconciliation but do
       // not consume a new-entry slot once their scheduled expiry has passed.
