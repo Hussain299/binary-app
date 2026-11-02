@@ -45,8 +45,11 @@ export function getTrustedFreshCandleSnapshot(candles: Candle[], nowMs: number):
     .filter(candle => TRUSTED_MARKET_SOURCES.has(candle.source))
     .sort((a, b) => a.timestampMs - b.timestampMs);
   const isCandleStructureValid = isBatchCandleStructureValid(rawTrustedCandles);
-  const trustedCandles = isCandleStructureValid ? rawTrustedCandles : [];
-  const newestCandle = rawTrustedCandles[rawTrustedCandles.length - 1] || null;
+  const trustedCandles = isCandleStructureValid
+    ? getTrustedMarketCandles(rawTrustedCandles)
+    : [];
+  const newestCandle = trustedCandles[trustedCandles.length - 1] ||
+    rawTrustedCandles[rawTrustedCandles.length - 1] || null;
   const ageMs = newestCandle ? nowMs - newestCandle.timestampMs : null;
   const isRecent = ageMs !== null && ageMs >= -60_000 && ageMs <= 120_000;
   return {
