@@ -674,9 +674,22 @@ export interface SystemHealthState {
     paperStrategiesEligible: number;
     storedStrategyCandidates: number;
     strategyReadiness: string;
+    strategyEligibility?: {
+      storedCandidates: number;
+      eligibleForPaperSignals: number;
+      paperTradingCandidates: number;
+      promotedCandidates: number;
+      experimentingCandidates: number;
+      rejectedCandidates: number;
+      mutatingCandidates: number;
+      statusCounts: Record<string, number>;
+      historicalFailureCounts: Record<string, number>;
+      forwardFailureCounts: Record<string, number>;
+    };
     freshPairs: number;
     pairsScanned: number;
     blockedPairReasons: Array<{ reason: string; count: number }>;
+    lastPulseResult?: { durationMs: number; pairsProcessed: number; signalsCreated: number; signalsUpdated: number } | null;
     pairDiagnostics: Array<{
       symbol: ForexSymbol;
       source: string;
@@ -685,6 +698,16 @@ export interface SystemHealthState {
       ageSeconds: number | null;
       candleCount: number;
       eligibleTimeframes: number[];
+      eligibleStrategyPoolCount?: number;
+      sessionCompatibleStrategyCount?: number;
+      timeframeCompatibleStrategyCount?: number;
+      strategiesEvaluated?: number;
+      regimeRejected?: number;
+      activationPassed?: number;
+      memoryVetoes?: number;
+      selectedTimeframe?: number | null;
+      lastStrategyName?: string | null;
+      signalPersisted?: boolean;
       result: string;
     }>;
   };
@@ -699,6 +722,7 @@ export interface SystemHealthState {
     historicallyQualified: number;
     promoted: number;
     paperTrading: number;
+    eligibilityDiagnostics?: SystemHealthState['scheduler'] extends infer T ? any : never;
     status: string;
     researchStatus: string;
     researchMessage: string;
