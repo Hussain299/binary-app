@@ -182,8 +182,15 @@ export async function runAllVerificationTests(): Promise<{
     if (preflightOnly.status !== 'READY') {
       throw new Error('A retryable preflight must remain eligible when data quality becomes sufficient.');
     }
-    // Preflight failures never write lastInspectedThroughUtc or consume a holdout.
-    // This contract is enforced in the scheduler before the worker dispatches.
+    const retryAfterPreflight = assessResearchPairReadiness(
+      base,
+      null,
+      null,
+      MINIMUM_RESEARCH_M1_CANDLES,
+    );
+    if (retryAfterPreflight.status !== 'READY') {
+      throw new Error('A preflight-only failure must not force a 60k-new-candle wait on retry.');
+    }
 
     const inspected = assessResearchPairReadiness(base, null, holdoutEnd, MINIMUM_RESEARCH_M1_CANDLES - 1);
     if (inspected.status !== 'WAITING_FOR_NEW_HISTORY') {
