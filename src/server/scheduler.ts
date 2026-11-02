@@ -564,7 +564,9 @@ export class AutonomousScheduler {
           ? 'INSUFFICIENT_HISTORY'
           : 'LOW_CONTINUITY';
         pair.queuePosition = null;
-        pair.lastInspectedThroughUtc = pair.lastTimestamp;
+        // A failed preflight did not inspect candidate outcomes or reserve a holdout.
+        // Do not advance lastInspectedThroughUtc here; that would incorrectly force
+        // this pair to wait for another 60,000 candles before it can be retried.
         pair.readinessMessage = usableWindow.length < MINIMUM_RESEARCH_M1_CANDLES
           ? `Latest ${RESEARCH_HISTORY_WINDOW_LIMIT.toLocaleString()}-candle research window contains only ${usableWindow.length.toLocaleString()} usable M1 rows; at least ${MINIMUM_RESEARCH_M1_CANDLES.toLocaleString()} are required.`
           : `Latest research window continuity is ${(windowContinuity * 100).toFixed(1)}%; at least 75% is required. No holdout was consumed.`;
