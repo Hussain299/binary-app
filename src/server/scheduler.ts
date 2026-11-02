@@ -198,10 +198,23 @@ export class AutonomousScheduler {
       }
       pair.updatedAt = new Date().toISOString();
     }
+    const recoveredRecord = queue.currentSymbol
+      ? db.getGenerations().find(item => item.researchBatchId === queue.pairs[queue.currentSymbol!]?.lastBatchId)
+      : undefined;
     queue.currentSymbol = null;
-    queue.lastRunStatus = 'INTERRUPTED';
     queue.lastBatchFinishedAt = new Date().toISOString();
-    queue.lastRunMessage = 'Recovered an interrupted research worker. Queue cursor and consumed history windows were preserved.';
+    if (recoveredRecord?.status === 'COMPLETED') {
+      queue.lastRunStatus = 'COMPLETED';
+      queue.batchesCompleted++;
+      queue.lastRunMessage = 'Recovered a batch whose generation record was safely committed before process replacement.';
+    } else if (recoveredRecord?.status === 'FAILED') {
+      queue.lastRunStatus = 'FAILED';
+      queue.batchesFailed++;
+      queue.lastRunMessage = 'Recovered a failed batch record; the pair history boundary remains consumed.';
+    } else {
+      queue.lastRunStatus = 'INTERRUPTED';
+      queue.lastRunMessage = 'Recovered an interrupted research worker. Queue cursor and consumed history windows were preserved.';
+    }
     queue.nextRunAt = new Date(Date.now() + this.researchIntervalMs).toISOString();
     db.setAutonomousResearchQueueState(queue, true);
   }
@@ -231,7 +244,7 @@ export class AutonomousScheduler {
     this.researchTimer = setInterval(() => {
       void this.checkAutonomousEvolutionResearch();
     }, this.researchIntervalMs);
-    this.nextResearchScanAt = new Date(Date.now() + 90_000).toISOString();
+    this.nextResearchScanAt = new Date(Date.now() + this.researchIntervalMs).toISOString();
     this.researchState = {
       ...this.researchState,
       status: 'SCANNING',
@@ -551,6 +564,7 @@ export class AutonomousScheduler {
           ? 'INSUFFICIENT_HISTORY'
           : 'LOW_CONTINUITY';
         pair.queuePosition = null;
+        pair.lastInspectedThroughUtc = pair.lastTimestamp;
         pair.readinessMessage = usableWindow.length < MINIMUM_RESEARCH_M1_CANDLES
           ? `Latest ${RESEARCH_HISTORY_WINDOW_LIMIT.toLocaleString()}-candle research window contains only ${usableWindow.length.toLocaleString()} usable M1 rows; at least ${MINIMUM_RESEARCH_M1_CANDLES.toLocaleString()} are required.`
           : `Latest research window continuity is ${(windowContinuity * 100).toFixed(1)}%; at least 75% is required. No holdout was consumed.`;
@@ -598,7 +612,8 @@ export class AutonomousScheduler {
       queue.batchesStarted++;
       queue.lastRunStatus = 'RUNNING';
       queue.lastRunMessage = `Researching ${symbol}: 300 candidates, one worker, no holdout reuse.`;
-      queue.nextRunAt = new Date(Date.now() + this.researchIntervalMs).toISOString();
+      // No next-run time is advertised while the worker is still running.
+      queue.nextRunAt = null;
       pair.status = 'RUNNING';
       pair.queuePosition = 0;
       pair.lastInspectedThroughUtc = new Date(latestInspectedMs).toISOString();
@@ -614,7 +629,7 @@ export class AutonomousScheduler {
       pair.readinessMessage = 'A dedicated 300-candidate batch is running on this pair. The same history window will not be replayed after interruption.';
       pair.updatedAt = startedAt;
       db.setAutonomousResearchQueueState(queue, true);
-      this.nextResearchScanAt = queue.nextRunAt;
+      this.nextResearchScanAt = null;
 
       const latestResearchGeneration = Math.max(
         latestCandidateGeneration,
