@@ -201,7 +201,7 @@ export async function runAllVerificationTests(): Promise<{
   await runTest('SCHEDULER', 'manual candidate searches share the autonomous single-worker admission guard', () => {
     // The coordinator admission helper is intentionally covered at the service
     // boundary by asserting the shared queue state used by the helper.
-    const queue: ReturnType<typeof createInitialAutonomousResearchQueueState> & { currentSymbol: ForexSymbol | null } = createInitialAutonomousResearchQueueState();
+    const queue: { currentSymbol: ForexSymbol | null } = createInitialAutonomousResearchQueueState();
     if (queue.currentSymbol !== null) {
       throw new Error('An idle queue must not block a manual discovery batch.');
     }
