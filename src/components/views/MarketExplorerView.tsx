@@ -83,126 +83,187 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
         )
       : 0;
 
-  // Render SVG Candlestick Chart
+  // Responsive SVG candlestick chart. Synthetic continuity candles are
+  // deliberately rendered in muted grey so they cannot be mistaken for live quotes.
   const renderChart = () => {
     if (candles.length < 2) {
       return (
-        <div className="h-72 flex items-center justify-center text-neutral-500 font-mono text-xs">
-          Loading candle series...
+        <div className="flex h-[330px] items-center justify-center text-neutral-500 font-mono text-xs">
+          Waiting for at least two valid M1 candles…
         </div>
       );
     }
 
-    const minPrice = Math.min(...candles.map(c => c.low));
-    const maxPrice = Math.max(...candles.map(c => c.high));
-    const priceRange = Math.max(0.0001, maxPrice - minPrice);
+    const rawMin = Math.min(...candles.map(c => c.low));
+    const rawMax = Math.max(...candles.map(c => c.high));
+    const isJpy = selectedPair.includes('JPY');
+    const minimumRange = isJpy ? 0.04 : 0.0004;
+    const dataRange = Math.max(rawMax - rawMin, minimumRange);
+    const padding = dataRange * 0.08;
+    const minPrice = (rawMin + rawMax) / 2 - dataRange / 2 - padding;
+    const maxPrice = (rawMin + rawMax) / 2 + dataRange / 2 + padding;
+    const priceRange = Math.max(Number.EPSILON, maxPrice - minPrice);
 
-    const chartHeight = 280;
-    const chartWidth = 900;
-    const candleWidth = Math.max(3, Math.min(10, (chartWidth / candles.length) * 0.7));
-    const spacing = chartWidth / candles.length;
-
-    const getY = (price: number) => {
-      return chartHeight - ((price - minPrice) / priceRange) * (chartHeight - 40) - 20;
-    };
+    const chartWidth = 1000;
+    const chartHeight = 330;
+    const plotLeft = 18;
+    const plotRight = 890;
+    const plotTop = 22;
+    const plotBottom = 265;
+    const plotHeight = plotBottom - plotTop;
+    const slotWidth = (plotRight - plotLeft) / candles.length;
+    const candleWidth = Math.max(3, Math.min(9, slotWidth * 0.62));
+    const getY = (price: number) =>
+      plotBottom - ((price - minPrice) / priceRange) * plotHeight;
+    const formatPrice = (price: number) => price.toFixed(isJpy ? 3 : 5);
+    const formatUtcTime = (timestampMs: number) =>
+      new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'UTC',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(new Date(timestampMs));
+    const selectedIndex = hoveredCandle
+      ? candles.findIndex(item => item.timestampMs === hoveredCandle.timestampMs)
+      : -1;
+    const inspectedCandle = selectedIndex >= 0 ? candles[selectedIndex] : candles[candles.length - 1];
+    const latestY = getY(latestCandle?.close ?? inspectedCandle.close);
+    const tickIndices = Array.from(new Set([
+      0,
+      Math.round((candles.length - 1) * 0.25),
+      Math.round((candles.length - 1) * 0.5),
+      Math.round((candles.length - 1) * 0.75),
+      candles.length - 1,
+    ]));
 
     return (
-      <div className="relative w-full overflow-x-auto bg-neutral-950 p-4 border border-neutral-800 rounded">
-        <svg
-          viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-          className="w-full h-72 overflow-visible select-none"
-        >
-          {/* Horizontal Grid lines */}
-          {[0.2, 0.4, 0.6, 0.8].map(ratio => {
-            const price = maxPrice - ratio * priceRange;
-            const y = getY(price);
-            return (
-              <g key={ratio}>
-                <line
-                  x1="0"
-                  y1={y}
-                  x2={chartWidth}
-                  y2={y}
-                  stroke="#1f2937"
-                  strokeDasharray="3 3"
-                  strokeWidth="1"
-                />
-                <text
-                  x={chartWidth - 55}
-                  y={y - 4}
-                  fill="#64748b"
-                  fontSize="9"
-                  fontFamily="monospace"
+      <div className="sf-chart-frame p-3 sm:p-4">
+        <div className="sf-chart-scroll">
+          <svg
+            viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+            preserveAspectRatio="none"
+            role="img"
+            aria-label={`${selectedPair} one-minute candlestick chart with ${candles.length} candles`}
+          >
+            <defs>
+              <linearGradient id="sf-latest-price-fill" x1="0" x2="1" y1="0" y2="0">
+                <stop offset="0%" stopColor="#8ce7b9" stopOpacity=".04" />
+                <stop offset="100%" stopColor="#8ce7b9" stopOpacity=".16" />
+              </linearGradient>
+            </defs>
+
+            {/* Price grid and right-hand price scale. */}
+            {[0, 0.25, 0.5, 0.75, 1].map(ratio => {
+              const y = plotTop + ratio * plotHeight;
+              const price = maxPrice - ratio * priceRange;
+              return (
+                <g key={ratio}>
+                  <line className="sf-chart-grid" x1={plotLeft} y1={y} x2={plotRight} y2={y} />
+                  <text className="sf-chart-axis" x={plotRight + 12} y={y + 3.5}>
+                    {formatPrice(price)}
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* Latest traded/observed close. */}
+            {latestCandle && (
+              <g>
+                <rect x={plotLeft} y={latestY - 10} width={plotRight - plotLeft} height="20" fill="url(#sf-latest-price-fill)" />
+                <line x1={plotLeft} y1={latestY} x2={plotRight} y2={latestY}
+                  stroke="#8ce7b9" strokeWidth="1" strokeDasharray="5 5" opacity=".72" />
+              </g>
+            )}
+
+            {/* Candle wicks and bodies. */}
+            {candles.map((candle, index) => {
+              const isSynthetic = candle.source === 'synthetic';
+              const isUp = candle.close >= candle.open;
+              const tone = isSynthetic ? '#7d8b98' : isUp ? '#43cf99' : '#f17480';
+              const x = plotLeft + (index + 0.5) * slotWidth;
+              const yHigh = getY(candle.high);
+              const yLow = getY(candle.low);
+              const yOpen = getY(candle.open);
+              const yClose = getY(candle.close);
+              const bodyY = Math.min(yOpen, yClose);
+              const bodyHeight = Math.max(1.8, Math.abs(yClose - yOpen));
+              const isSelected = index === selectedIndex;
+              return (
+                <g
+                  key={candle.timestampMs}
+                  className="sf-chart-candle"
+                  opacity={isSynthetic ? 0.5 : 1}
+                  onMouseEnter={() => setHoveredCandle(candle)}
+                  onMouseLeave={() => setHoveredCandle(null)}
+                  onFocus={() => setHoveredCandle(candle)}
+                  onClick={() => setHoveredCandle(candle)}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`${formatUtcTime(candle.timestampMs)} UTC. Open ${formatPrice(candle.open)}, high ${formatPrice(candle.high)}, low ${formatPrice(candle.low)}, close ${formatPrice(candle.close)}. ${isSynthetic ? 'Synthetic continuity candle' : 'Provider candle'}.`}
                 >
-                  {price.toFixed(selectedPair.includes('JPY') ? 3 : 5)}
-                </text>
-              </g>
-            );
-          })}
+                  <title>
+                    {formatUtcTime(candle.timestampMs)} UTC · O {formatPrice(candle.open)} · H {formatPrice(candle.high)} · L {formatPrice(candle.low)} · C {formatPrice(candle.close)} · {candle.source}
+                  </title>
+                  {isSelected && (
+                    <line className="sf-chart-crosshair" x1={x} y1={plotTop} x2={x} y2={plotBottom} />
+                  )}
+                  <line x1={x} y1={yHigh} x2={x} y2={yLow}
+                    stroke={tone} strokeWidth={isSelected ? 1.8 : 1.25} vectorEffect="non-scaling-stroke" />
+                  <rect
+                    x={x - candleWidth / 2}
+                    y={bodyY}
+                    width={candleWidth}
+                    height={bodyHeight}
+                    fill={isUp && !isSynthetic ? tone : isSynthetic ? 'rgba(125,139,152,.42)' : tone}
+                    stroke={tone}
+                    strokeWidth={isSelected ? 1.6 : 0.6}
+                    rx="1"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                </g>
+              );
+            })}
 
-          {/* Candle Elements */}
-          {candles.map((c, i) => {
-            const isGreen = c.close >= c.open;
-            const x = i * spacing + spacing / 2;
-            const yHigh = getY(c.high);
-            const yLow = getY(c.low);
-            const yOpen = getY(c.open);
-            const yClose = getY(c.close);
-            const bodyY = Math.min(yOpen, yClose);
-            const bodyHeight = Math.max(2, Math.abs(yClose - yOpen));
+            {/* Time axis in UTC. */}
+            <line x1={plotLeft} y1={plotBottom + 7} x2={plotRight} y2={plotBottom + 7}
+              stroke="rgba(148,163,184,.22)" strokeWidth="1" />
+            {tickIndices.map(index => {
+              const candle = candles[index];
+              const x = plotLeft + (index + 0.5) * slotWidth;
+              return (
+                <g key={candle.timestampMs}>
+                  <line x1={x} y1={plotBottom + 7} x2={x} y2={plotBottom + 12}
+                    stroke="rgba(148,163,184,.3)" />
+                  <text className="sf-chart-axis" x={x} y={plotBottom + 29} textAnchor="middle">
+                    {formatUtcTime(candle.timestampMs)}
+                  </text>
+                </g>
+              );
+            })}
+            <text className="sf-chart-axis" x={plotRight + 12} y={plotBottom + 29}>UTC</text>
+          </svg>
+        </div>
 
-            return (
-              <g
-                key={c.timestampMs}
-                className="cursor-pointer"
-                onMouseEnter={() => setHoveredCandle(c)}
-                onMouseLeave={() => setHoveredCandle(null)}
-              >
-                {/* Wick */}
-                <line
-                  x1={x}
-                  y1={yHigh}
-                  x2={x}
-                  y2={yLow}
-                  stroke={isGreen ? '#10b981' : '#f43f5e'}
-                  strokeWidth="1.2"
-                />
-                {/* Candle Body */}
-                <rect
-                  x={x - candleWidth / 2}
-                  y={bodyY}
-                  width={candleWidth}
-                  height={bodyHeight}
-                  fill={isGreen ? '#10b981' : '#f43f5e'}
-                  rx="0.5"
-                />
-              </g>
-            );
-          })}
-        </svg>
-
-        {/* OHLC Bar Inspector */}
-        <div className="mt-3 pt-2 border-t border-neutral-850 flex items-center justify-between text-xs font-mono text-neutral-400">
-          <div className="flex items-center gap-4">
-            <span>
-              O: <strong className="text-white">{(hoveredCandle || latestCandle)?.open}</strong>
-            </span>
-            <span>
-              H: <strong className="text-white">{(hoveredCandle || latestCandle)?.high}</strong>
-            </span>
-            <span>
-              L: <strong className="text-white">{(hoveredCandle || latestCandle)?.low}</strong>
-            </span>
-            <span>
-              C: <strong className="text-white">{(hoveredCandle || latestCandle)?.close}</strong>
-            </span>
-            <span>
-              Vol: <strong className="text-white">{(hoveredCandle || latestCandle)?.volume}</strong>
+        <div className="sf-chart-inspector mt-3 font-mono text-[11px]">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 text-neutral-400">
+            <span>O <strong className="text-neutral-100">{formatPrice(inspectedCandle.open)}</strong></span>
+            <span>H <strong className="text-neutral-100">{formatPrice(inspectedCandle.high)}</strong></span>
+            <span>L <strong className="text-neutral-100">{formatPrice(inspectedCandle.low)}</strong></span>
+            <span>C <strong className="text-neutral-100">{formatPrice(inspectedCandle.close)}</strong></span>
+            <span>VOL <strong className="text-neutral-100">{Number(inspectedCandle.volume || 0).toLocaleString()}</strong></span>
+          </div>
+          <div className="flex items-center gap-2 text-neutral-500">
+            <span>{formatUtcTime(inspectedCandle.timestampMs)} UTC</span>
+            <span className={inspectedCandle.source === 'synthetic' ? 'text-amber-300' : 'text-emerald-300'}>
+              {inspectedCandle.source}
             </span>
           </div>
-          <div className="text-[11px] text-neutral-500">
-            Time: {(hoveredCandle || latestCandle)?.timestamp?.substring(11, 19) || '—'} UTC
-          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-4 text-[10px] text-neutral-500">
+          <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-sm bg-emerald-400" /> Up</span>
+          <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-sm bg-rose-400" /> Down</span>
+          <span className="inline-flex items-center gap-1.5"><i className="h-2 w-2 rounded-sm bg-slate-500" /> Synthetic continuity</span>
+          <span className="ml-auto">Hover or tap a candle to inspect · UTC</span>
         </div>
       </div>
     );
