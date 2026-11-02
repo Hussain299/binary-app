@@ -261,6 +261,7 @@ export const SystemHealthView: React.FC = () => {
                       <th className="px-3 py-2">Candles</th>
                       <th className="px-3 py-2">Entry candle</th>
                       <th className="px-3 py-2">Session / expiry fit</th>
+                      <th className="px-3 py-2">Last expiry evaluated</th>
                       <th className="px-3 py-2">Evaluated</th>
                       <th className="px-3 py-2">Regime veto</th>
                       <th className="px-3 py-2">Trigger</th>
@@ -278,6 +279,9 @@ export const SystemHealthView: React.FC = () => {
                         <td className="px-3 py-2 text-neutral-400">{pair.eligibleTimeframes.length ? pair.eligibleTimeframes.map(value => `${value}m`).join(', ') : '5m entry — no current T−3 window'}</td>
                         <td className="px-3 py-2 text-neutral-400" title="Session-compatible / expiry-compatible strategies">
                           {pair.sessionCompatibleStrategyCount ?? 0}/{pair.expiryCompatibleStrategyCount ?? 0}
+                        </td>
+                        <td className="px-3 py-2 text-neutral-400">
+                          {pair.selectedExpiryMinutes ? `${pair.selectedExpiryMinutes}m` : '—'}
                         </td>
                         <td className="px-3 py-2 text-neutral-400">{pair.strategiesEvaluated ?? 0}</td>
                         <td className="px-3 py-2 text-amber-300">{pair.regimeRejected ?? 0}</td>
