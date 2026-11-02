@@ -21,7 +21,14 @@ import type {
 import { db } from './db.ts';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.ts';
 import { binaryBreakEvenWinRate, calculateAdaptiveMutationRate, outcomeFitsResearchWindow, selectEvolutionParents, wilsonLowerBound } from './evolutionEngine.ts';
-import { ADVANCE_NOTICE_MS, M1_CANDLE_MS, getNextCandleOpenMs, type TradingTimeframeMinutes } from './tradingClock.ts';
+import {
+  ADVANCE_NOTICE_MS,
+  ENTRY_CANDLE_TIMEFRAME_MINUTES,
+  EXPIRY_HORIZONS_MINUTES,
+  M1_CANDLE_MS,
+  getNextCandleOpenMs,
+  type ExpiryHorizonMinutes,
+} from './tradingClock.ts';
 import {
   createSeededRandom,
   deriveResearchSeed,
@@ -31,12 +38,12 @@ import {
   stableHash,
 } from './researchReproducibility.ts';
 
-type StrategyHorizon = 5 | 10 | 15 | 20 | 25 | 30;
+type StrategyHorizon = ExpiryHorizonMinutes;
 type GeneFeatureVector = Record<StrategyFeatureName, number>;
 
 interface GeneResearchRow {
   decisionIndex: number;
-  entryTimeframeMinutes: StrategyHorizon;
+  expiryMinutes: StrategyHorizon;
   candle: Candle;
   previousCandle: Candle;
   entryIndex: number;
@@ -102,7 +109,7 @@ export class ResearchEngine {
    */
   public extractFeatures(
     candles: Candle[],
-    entryTimeframeMinutes: StrategyHorizon = 5
+    expiryMinutes: StrategyHorizon = 5
   ): Array<{
     candle: Candle;
     features: number[];
@@ -111,12 +118,13 @@ export class ResearchEngine {
     entryTimeMs: number;
     expiryTimeMs: number;
     exitCandleTimeMs: number;
-    entryTimeframeMinutes: StrategyHorizon;
+    entryTimeframeMinutes: typeof ENTRY_CANDLE_TIMEFRAME_MINUTES;
+    expiryMinutes: StrategyHorizon;
   }> {
     const n = candles.length;
     if (n < 70) return [];
-    if (![5, 10, 15, 20, 25, 30].includes(entryTimeframeMinutes)) {
-      throw new Error('Research entry timeframe must be between 5 and 30 minutes.');
+    if (!(EXPIRY_HORIZONS_MINUTES as readonly number[]).includes(expiryMinutes)) {
+      throw new Error('Research expiry must be between 5 and 30 minutes in 5-minute steps.');
     }
 
     const isJpy = candles[0].symbol.includes('JPY');
@@ -129,7 +137,8 @@ export class ResearchEngine {
       entryTimeMs: number;
       expiryTimeMs: number;
       exitCandleTimeMs: number;
-      entryTimeframeMinutes: StrategyHorizon;
+      entryTimeframeMinutes: typeof ENTRY_CANDLE_TIMEFRAME_MINUTES;
+      expiryMinutes: StrategyHorizon;
     }> = [];
 
     const closes = candles.map(item => item.close);
@@ -138,16 +147,16 @@ export class ResearchEngine {
     const rsi14 = this.calculateRSI(closes, 14);
     const atr14 = this.calculateATR(candles, 14);
 
-    // The M1 decision candle must be fully closed at exactly T-3m. Entry is
-    // at the next aligned N-minute candle open; settlement uses the M1 bar
-    // whose close equals entry + N minutes (not the following minute).
-    for (let i = 25; i < n - 40; i++) {
+    // The M1 decision candle closes exactly three minutes before the next M5
+    // entry candle opens. The strategy's independent expiry horizon is measured
+    // from that M5 open and settles on the exact M1 candle at entry + expiry.
+    for (let i = 25; i < n - expiryMinutes - 5; i++) {
       const candle = candles[i];
       const previous = candles[i - 1];
       const decisionTime = candle.timestampMs + M1_CANDLE_MS;
       const entryTime = getNextCandleOpenMs(
         decisionTime,
-        entryTimeframeMinutes as TradingTimeframeMinutes
+        ENTRY_CANDLE_TIMEFRAME_MINUTES
       );
       if (Math.abs(entryTime - decisionTime - ADVANCE_NOTICE_MS) > 5_000) continue;
 
@@ -155,7 +164,7 @@ export class ResearchEngine {
       while (entryIndex < n && candles[entryIndex].timestampMs < entryTime - 5_000) entryIndex++;
       if (entryIndex >= n || Math.abs(candles[entryIndex].timestampMs - entryTime) > 5_000) continue;
 
-      const expiryTime = entryTime + entryTimeframeMinutes * M1_CANDLE_MS;
+      const expiryTime = entryTime + expiryMinutes * M1_CANDLE_MS;
       const exitCandleTime = expiryTime - M1_CANDLE_MS;
       let exitIndex = entryIndex;
       while (exitIndex < n && candles[exitIndex].timestampMs < exitCandleTime - 5_000) exitIndex++;
@@ -186,12 +195,13 @@ export class ResearchEngine {
       samples.push({
         candle,
         features,
-        labels: { [entryTimeframeMinutes]: move > 0 ? 1 : 0 },
-        futureMoves: { [entryTimeframeMinutes]: move },
+        labels: { [expiryMinutes]: move > 0 ? 1 : 0 },
+        futureMoves: { [expiryMinutes]: move },
         entryTimeMs: entryTime,
         expiryTimeMs: expiryTime,
         exitCandleTimeMs: candles[exitIndex].timestampMs,
-        entryTimeframeMinutes,
+        entryTimeframeMinutes: ENTRY_CANDLE_TIMEFRAME_MINUTES,
+        expiryMinutes,
       });
     }
     return samples;
@@ -243,9 +253,9 @@ export class ResearchEngine {
       throw new Error(`Insufficient eligible scheduled-entry samples (${total}). Import more suitable one-minute historical candles.`);
     }
 
-    // One eligible observation represents one M5 entry opportunity. Purge enough
-    // M5 opportunities to cover the forward label horizon between every split.
-    const purgeSamples = 1; // One full N-minute opportunity is embargoed because samples now use the N-minute entry timeframe.
+    // Samples occur at each M5 entry boundary, regardless of expiry. Purge
+    // enough M5 opportunities to cover the selected forward expiry label.
+    const purgeSamples = Math.ceil(horizonMinutes / ENTRY_CANDLE_TIMEFRAME_MINUTES);
     const trainEnd = Math.floor(total * 0.60);
     const validationStart = trainEnd + purgeSamples;
     const validationEnd = Math.min(total, validationStart + Math.floor(total * 0.20));
@@ -1079,16 +1089,18 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     ordered.forEach((candle, index) => timestampIndex.set(candle.timestampMs, index));
 
     const rows: GeneResearchRow[] = [];
-    const horizons: StrategyHorizon[] = [5, 10, 15, 20, 25, 30];
+    const horizons: StrategyHorizon[] = [...EXPIRY_HORIZONS_MINUTES];
 
-    // Every candidate horizon is evaluated on its own aligned N-minute entry
-    // candle: decision exactly three minutes before that candle opens; binary
-    // settlement on the M1 close at entry + N minutes.
+    // Every expiry candidate shares the same M5 entry opportunity. Each genome
+    // selects a separate 5–30m expiry, settled on the exact M1 candle at entry+N.
     for (const horizon of horizons) {
       for (let i = 60; i < ordered.length - horizon - 5; i++) {
         const candle = ordered[i];
         const decisionTime = candle.timestampMs + M1_CANDLE_MS;
-        const entryTime = getNextCandleOpenMs(decisionTime, horizon as TradingTimeframeMinutes);
+        const entryTime = getNextCandleOpenMs(
+          decisionTime,
+          ENTRY_CANDLE_TIMEFRAME_MINUTES
+        );
         if (entryTime - decisionTime !== ADVANCE_NOTICE_MS) continue;
 
         const entryIndex = timestampIndex.get(entryTime);
@@ -1099,7 +1111,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
 
         rows.push({
           decisionIndex: i,
-          entryTimeframeMinutes: horizon,
+          expiryMinutes: horizon,
           candle,
           previousCandle: ordered[i - 1],
           entryIndex,
@@ -1112,7 +1124,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     }
     rows.sort((a, b) =>
       a.entryTimeMs - b.entryTimeMs ||
-      a.entryTimeframeMinutes - b.entryTimeframeMinutes
+      a.expiryMinutes - b.expiryMinutes
     );
 
     let trainEndMs: number;
@@ -1163,7 +1175,7 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
     const horizon = gene.optimalHorizonMinutes;
     const triggerThreshold = Math.max(0.50, Math.min(0.95, gene.genome?.activationThreshold ?? gene.operatorParameters?.threshold ?? 0.682));
     for (const row of rows) {
-      if (row.entryTimeframeMinutes !== horizon) continue;
+      if (row.expiryMinutes !== horizon) continue;
       if (row.entryTimeMs < busyUntil) continue;
       if (gene.sessionAffinity !== 'ALL' && gene.sessionAffinity !== row.session) continue;
       const activation = gene.genome
