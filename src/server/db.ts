@@ -144,13 +144,19 @@ class DatabaseService {
         if (!Array.isArray(parsed.processedOutcomeIds)) parsed.processedOutcomeIds = [];
         if (!Array.isArray(parsed.researchHoldoutWindows)) parsed.researchHoldoutWindows = [];
         if (!Array.isArray(parsed.opportunityHoldoutWindows)) parsed.opportunityHoldoutWindows = [];
-        if (!parsed.autonomousResearchQueue || typeof parsed.autonomousResearchQueue !== 'object') {
-          parsed.autonomousResearchQueue = createInitialAutonomousResearchQueueState();
-        }
-        if (!parsed.autonomousResearchQueue.pairs ||
-            typeof parsed.autonomousResearchQueue.pairs !== 'object') {
-          parsed.autonomousResearchQueue.pairs = {};
-        }
+        const defaultResearchQueue = createInitialAutonomousResearchQueueState();
+        const storedResearchQueue =
+          parsed.autonomousResearchQueue && typeof parsed.autonomousResearchQueue === 'object'
+            ? parsed.autonomousResearchQueue
+            : {};
+        parsed.autonomousResearchQueue = {
+          ...defaultResearchQueue,
+          ...storedResearchQueue,
+          schemaVersion: 1,
+          pairs: storedResearchQueue.pairs && typeof storedResearchQueue.pairs === 'object'
+            ? storedResearchQueue.pairs
+            : {},
+        };
         if (!Number.isInteger(parsed.autonomousResearchQueue.nextPairIndex) ||
             parsed.autonomousResearchQueue.nextPairIndex < 0) {
           parsed.autonomousResearchQueue.nextPairIndex = 0;
