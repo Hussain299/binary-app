@@ -46,6 +46,11 @@ import {
   CONSERVATIVE_PAPER_RISK_POLICY,
   payoutBreakEvenProbability,
 } from './capitalRisk.ts';
+import {
+  getLatestObservedCandle,
+  getMarketChartPriceDomain,
+  getTrustedMarketCandles,
+} from '../utils/marketChart.ts';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -121,6 +126,58 @@ export async function runAllVerificationTests(): Promise<{
     }
     if (!rejected) throw new Error('Invalid scheduler concurrency must fail explicitly.');
   });
+  await runTest('DATA', 'market chart excludes synthetic continuity from observed quote metrics', () => {
+    const makeCandle = (timestampMs: number, source: Candle['source'], close: number): Candle => ({
+      symbol: 'EUR/USD',
+      timestamp: new Date(timestampMs).toISOString(),
+      timestampMs,
+      open: close,
+      high: close + 0.0002,
+      low: close - 0.0002,
+      close,
+      volume: 100,
+      source,
+    });
+    const realOld = makeCandle(1_800_000_000_000, 'biquote', 1.1000);
+    const syntheticTail = makeCandle(1_800_000_060_000, 'synthetic', 1.1010);
+    const importedNewer = makeCandle(1_800_000_030_000, 'imported', 1.1005);
+    const trusted = getTrustedMarketCandles([realOld, syntheticTail, importedNewer]);
+    if (trusted.length !== 2 || trusted[0].timestampMs !== realOld.timestampMs ||
+        trusted[1].timestampMs !== importedNewer.timestampMs) {
+      throw new Error('Trusted market candles must exclude synthetic bars and remain chronological.');
+    }
+    if (getLatestObservedCandle([realOld, syntheticTail, importedNewer])?.timestampMs !== importedNewer.timestampMs) {
+      throw new Error('Synthetic continuity must never become the displayed last observed quote.');
+    }
+    if (getLatestObservedCandle([syntheticTail]) !== null) {
+      throw new Error('Synthetic-only market data must not be reported as an observed quote.');
+    }
+  });
+
+  await runTest('DATA', 'market chart price domain remains finite for flat and near-flat markets', () => {
+    const flatEur: Candle = {
+      symbol: 'EUR/USD', timestamp: '2026-11-02T10:00:00.000Z', timestampMs: 1793613600000,
+      open: 1.1000, high: 1.1000, low: 1.1000, close: 1.1000, volume: 0, source: 'biquote',
+    };
+    const flatJpy: Candle = {
+      ...flatEur, symbol: 'USD/JPY', open: 150, high: 150, low: 150, close: 150,
+    };
+    const eurDomain = getMarketChartPriceDomain([flatEur], false);
+    const jpyDomain = getMarketChartPriceDomain([flatJpy], true);
+    if (!eurDomain || !jpyDomain ||
+        ![eurDomain.min, eurDomain.max, eurDomain.range, jpyDomain.min, jpyDomain.max, jpyDomain.range].every(Number.isFinite)) {
+      throw new Error('Flat market domains must contain finite, drawable price scales.');
+    }
+    if (eurDomain.range <= 0 || jpyDomain.range <= 0 ||
+        !(eurDomain.min < flatEur.close && flatEur.close < eurDomain.max) ||
+        !(jpyDomain.min < flatJpy.close && flatJpy.close < jpyDomain.max)) {
+      throw new Error('The price domain must pad a flat market instead of collapsing the candlestick plot.');
+    }
+    if (getMarketChartPriceDomain([], false) !== null) {
+      throw new Error('An empty candle set must not produce a fake price domain.');
+    }
+  });
+
 
   await runTest('SCHEDULER', 'market scan cadence stays inside the strict T-3 processing window', () => {
     if (AUTOPILOT_SCAN_INTERVAL_MS <= 0 || AUTOPILOT_SCAN_INTERVAL_MS > 10_000) {
