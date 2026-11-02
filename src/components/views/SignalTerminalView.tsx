@@ -980,12 +980,12 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       <div className="bg-neutral-950 p-2.5 rounded-xl border border-neutral-800 flex flex-col justify-between">
                         <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          ENTRY ({sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M OPEN)
+                          ENTRY ({sig.entryTimeframeMinutes ?? 5}M OPEN)
                         </span>
                         <div className="text-sm sm:text-base font-extrabold text-white mt-1 tabular-nums">
                           {sig.candleOpenTimeIst || formatIST(sig.actualEntryTimeUtc || sig.entryWindowStartUtc)}
                         </div>
-                        <span className="text-[10px] text-neutral-400 mt-0.5">Strict {sig.entryTimeframeMinutes ?? sig.expiryMinutes ?? 5}M Open</span>
+                        <span className="text-[10px] text-neutral-400 mt-0.5">Strict {sig.entryTimeframeMinutes ?? 5}M Open</span>
                       </div>
 
                       {/* EXIT / EXPIRY BOX */}
