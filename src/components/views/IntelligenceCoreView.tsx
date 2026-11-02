@@ -7,7 +7,7 @@ type IntelligenceOverview = {
   brokerExecutionEnabled: boolean;
   scheduler: any;
   worldModel: { regimeSnapshots: number; regimeCounts: Record<string, number>; assessedPairs: Array<{symbol:string;regime:string;session:string;assessedAt:string;observationCount:number;directionalEfficiency:number|null;atrRatio:number|null}> };
-  memory: { episodicExperiences:number; lossAutopsies:number; forwardPredictions:number; resolvedPredictions:number; pendingPredictions:number; invalidPredictions:number; events:number };
+  memory: { episodicExperiences:number; lossAutopsies:number; forwardPredictions:number; resolvedPredictions:number; pendingPredictions:number; invalidPredictions:number; recentLearningEvents:number };
   research: { opportunities:number; experiments:number; generations:number; agentReviews:number; signalsObserved:number; latestExperimentAt:string|null; latestGenerationAt:string|null };
   governance: Record<string, boolean>;
 };
