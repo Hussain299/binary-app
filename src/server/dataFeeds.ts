@@ -4,9 +4,9 @@
  * Includes gap detection, duplicate elimination, UTC normalization, and health scoring.
  */
 
-import { Candle, ForexSymbol, ProviderHealth } from '../types/index.js';
-import { db } from './db.js';
-import { getForexMarketState, isForexMarketOpenAt, getReportingSessionFromTimestamp } from './marketHours.js';
+import { Candle, ForexSymbol, ProviderHealth } from '../types/index.ts';
+import { db } from './db.ts';
+import { getForexMarketState, isForexMarketOpenAt, getReportingSessionFromTimestamp } from './marketHours.ts';
 
 interface RawCandle {
   timestamp: number | string;

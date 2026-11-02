@@ -5,17 +5,17 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { EvolutionGeneration, EvolutionSubGenerationMetrics, FOREX_PAIRS, ForexSymbol, OpportunityDirection, OpportunityHumanStatus, RuleFamily, SynthesizedStrategyGene } from '../types/index.js';
-import { dataFeedEngine } from './dataFeeds.js';
-import { db } from './db.js';
-import { entryExitEngine } from './entryExitEngine.js';
-import { researchEngine } from './researchEngine.js';
-import { opportunityEngine } from './opportunityEngine.js';
-import { learningPlatform, runLearningPlatformVerificationTests } from './learningPlatform.js';
-import { autonomousScheduler } from './scheduler.js';
-import { runAllVerificationTests } from './tests.js';
-import { historicalDataStore } from './historicalData.js';
-import { binaryBreakEvenWinRate, genomeSpeciesKey, hasSufficientForwardParentEvidence, wilsonLowerBound } from './evolutionEngine.js';
+import { EvolutionGeneration, EvolutionSubGenerationMetrics, FOREX_PAIRS, ForexSymbol, OpportunityDirection, OpportunityHumanStatus, RuleFamily, SynthesizedStrategyGene } from '../types/index.ts';
+import { dataFeedEngine } from './dataFeeds.ts';
+import { db } from './db.ts';
+import { entryExitEngine } from './entryExitEngine.ts';
+import { researchEngine } from './researchEngine.ts';
+import { opportunityEngine } from './opportunityEngine.ts';
+import { learningPlatform, runLearningPlatformVerificationTests } from './learningPlatform.ts';
+import { autonomousScheduler } from './scheduler.ts';
+import { runAllVerificationTests } from './tests.ts';
+import { historicalDataStore } from './historicalData.ts';
+import { binaryBreakEvenWinRate, genomeSpeciesKey, hasSufficientForwardParentEvidence, wilsonLowerBound } from './evolutionEngine.ts';
 
 interface StrategySearchJob {
   jobId: string;
