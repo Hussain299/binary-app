@@ -3,6 +3,7 @@ name: Research integrity checks
 on:
   push:
     branches:
+      - main
       - research-integrity-overhaul
       - research-intelligence-foundation
   pull_request:
@@ -32,6 +33,9 @@ jobs:
 
       - name: Production build
         run: npm run build
+
+      - name: Production server startup smoke test
+        run: npm run test:startup
 
       - name: Research verification suite
         run: npm run test:verify

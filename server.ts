@@ -18,8 +18,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
 const HOST = '0.0.0.0';
+
+function resolvePort(): number {
+  const rawPort = process.env.PORT;
+  if (rawPort === undefined || rawPort.trim() === '') return 3000;
+
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`Invalid PORT environment value: ${rawPort}`);
+  }
+  return port;
+}
 
 // Historical OHLC imports can be several megabytes; keep an explicit bounded limit.
 app.use(express.json({ limit: '100mb' }));
@@ -69,8 +79,14 @@ async function startServer() {
   reconcileLearningOutcomes();
   setInterval(reconcileLearningOutcomes, 15_000);
 
-  app.listen(PORT, HOST, () => {
-    console.log(`[SignalForge ML] Server running at http://${HOST}:${PORT}`);
+  const port = resolvePort();
+  const server = app.listen(port, HOST, () => {
+    console.log(`[SignalForge ML] Server running at http://${HOST}:${port}`);
+  });
+
+  server.on('error', error => {
+    console.error('[SignalForge ML] HTTP server failed to listen:', error);
+    process.exitCode = 1;
   });
 }
 
