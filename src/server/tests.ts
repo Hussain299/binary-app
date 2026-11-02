@@ -73,6 +73,7 @@ import {
   isLegacyFabricatedYahooFlatCandle,
   normalizeYahooChartCandles,
 } from '../utils/yahooCandles.ts';
+import { aggregateSignalPerformance, getEconomicConclusionIstDate, getIstDateString } from '../utils/signalAnalytics.ts';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -118,6 +119,40 @@ export async function runAllVerificationTests(): Promise<{
       });
     }
   };
+
+  await runTest('ENTRY_EXIT', 'trade analytics count settled outcomes and retain unresolved contracts', () => {
+    const makeSignal = (id: string, outcomeResult: 'WIN' | 'LOSS' | 'SCRATCH', netReturnUnits: number, ruleFamily = 'momentum_5'): ResearchSignal => ({
+      id, symbol: 'EUR/USD', direction: 'BUY',
+      predictionTimeUtc: '2026-11-02T18:55:00.000Z', predictionTimeIst: '',
+      signalCandleTime: '', entryCondition: '', entryWindowStartUtc: '',
+      entryWindowEndUtc: '2026-11-02T19:00:00.000Z', triggerPrice: 1.1,
+      invalidationPrice: 1.09, actualEntryTimeUtc: '2026-11-02T19:00:00.000Z',
+      actualEntryPrice: 1.1, entrySource: 'test', expiryMinutes: 5,
+      plannedExitTimeUtc: '2026-11-02T19:05:00.000Z',
+      actualExitTimeUtc: '2026-11-02T19:05:00.000Z', actualExitPrice: 1.1,
+      confidence: 0.5, calibrationStatus: 'UNCALIBRATED',
+      lifecycleState: 'CLOSED', lifecycleHistory: [],
+      grossReturnPips: null, estimatedSpreadPips: 0, netReturnPips: null,
+      netReturnUnits, outcomeResult, ruleFamily, modelVersion: 'test',
+    } as ResearchSignal);
+    const rows = [
+      makeSignal('win', 'WIN', 0.8),
+      makeSignal('loss', 'LOSS', -1),
+      makeSignal('scratch', 'SCRATCH', 0),
+      makeSignal('internal-fixture', 'WIN', 0.8, 'test_fixture'),
+      { ...makeSignal('pending', 'WIN', 0.8), lifecycleState: 'EXIT_PENDING', outcomeResult: 'PENDING' } as ResearchSignal,
+    ];
+    const report = aggregateSignalPerformance(rows, '2026-11-03');
+    if (getIstDateString('2026-11-02T19:05:00.000Z') !== '2026-11-03' ||
+        getEconomicConclusionIstDate(rows[0]) !== '2026-11-03') {
+      throw new Error('Economic conclusion dates must use Asia/Kolkata, including UTC-to-IST midnight rollover.');
+    }
+    if (report.totalTrades !== 3 || report.wins !== 1 || report.losses !== 1 ||
+        report.scratches !== 1 || report.decidedTrades !== 2 || report.winRate !== 50 ||
+        report.netReturnUnits !== -0.2 || report.pendingCount !== 1 || report.unresolvedCount !== 1) {
+      throw new Error('Trade totals, scratch handling, net return or unresolved counts are inconsistent.');
+    }
+  });
 
   await runTest('SCHEDULER', 'multi-pair queue rotates fairly and persists a stable round-robin cursor', () => {
     const pairs: ForexSymbol[] = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'EUR/JPY'];
