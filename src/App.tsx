@@ -207,6 +207,7 @@ export default function App() {
             <SignalTerminalView
               signals={signals}
               autopilotLogs={autopilotLogs}
+              autopilotStatus={autopilotStatus}
               onEvaluateSignals={handleEvaluateSignals}
               isEvaluating={isEvaluating}
             />
