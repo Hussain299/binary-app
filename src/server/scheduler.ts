@@ -4,11 +4,11 @@
  * on imported history, and records forward paper-trading outcomes.
  */
 
-import {
+import { FOREX_PAIRS } from '../types/index.ts';
+import type {
   AutopilotLog,
   Candle,
   EvolutionGeneration,
-  FOREX_PAIRS,
   ForexSymbol,
   ResearchExperiment,
   RuleFamily,

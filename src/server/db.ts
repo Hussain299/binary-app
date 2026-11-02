@@ -5,7 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import {
+import type {
   Candle,
   ForexSymbol,
   MarketSessionId,
@@ -25,13 +25,13 @@ import {
 import type { LearningPlatformPersistedState } from './learningPlatform.ts';
 import { sanitizeLossAutopsy } from './researchGovernance.ts';
 import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.ts';
-import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid, ReportingSession } from './marketHours.ts';
+import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid, type ReportingSession } from './marketHours.ts';
 import {
   assessNearestNeighbors,
-  EpisodicTradeMemory,
-  BetaPosterior,
-  NeighborAssessment,
-  MarketRegimeSnapshot,
+  type EpisodicTradeMemory,
+  type BetaPosterior,
+  type NeighborAssessment,
+  type MarketRegimeSnapshot,
   updateBetaPosterior,
   bayesianUcbScore,
   doesResearchHoldoutOverlap,

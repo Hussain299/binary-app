@@ -10,7 +10,7 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { Candle, ForexSymbol } from '../types/index.ts';
+import type { Candle, ForexSymbol } from '../types/index.ts';
 
 const ROOT = path.resolve(process.cwd(), 'data', 'historical');
 const MAX_CANDLES_PER_PAIR = 1_900_000;

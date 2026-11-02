@@ -18,15 +18,34 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const HOST = '0.0.0.0';
+
+function parseArg(flag: string): string | undefined {
+  const idx = process.argv.indexOf(flag);
+  if (idx !== -1 && idx + 1 < process.argv.length) {
+    return process.argv[idx + 1];
+  }
+  const prefix = `${flag}=`;
+  const match = process.argv.find(arg => arg.startsWith(prefix));
+  if (match) {
+    return match.slice(prefix.length);
+  }
+  return undefined;
+}
+
+function resolveHost(): string {
+  const cliHost = parseArg('--host');
+  if (cliHost && cliHost.trim() !== '') return cliHost.trim();
+  return process.env.HOST || '0.0.0.0';
+}
 
 function resolvePort(): number {
-  const rawPort = process.env.PORT;
+  const cliPort = parseArg('--port');
+  const rawPort = cliPort ?? process.env.PORT;
   if (rawPort === undefined || rawPort.trim() === '') return 3000;
 
   const port = Number(rawPort);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error(`Invalid PORT environment value: ${rawPort}`);
+    return 3000;
   }
   return port;
 }
@@ -51,6 +70,19 @@ async function startServer() {
       appType: 'spa',
     });
     app.use(vite.middlewares);
+
+    app.use('*', async (req, res, next) => {
+      const url = req.originalUrl;
+      if (url.startsWith('/api')) return next();
+      try {
+        const fs = await import('fs/promises');
+        let template = await fs.readFile(path.resolve(__dirname, 'index.html'), 'utf-8');
+        template = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e) {
+        next(e);
+      }
+    });
   } else {
     const distPath = path.resolve(__dirname, 'dist');
     app.use(express.static(distPath));
@@ -81,8 +113,9 @@ async function startServer() {
   setInterval(reconcileLearningOutcomes, 15_000);
 
   const port = resolvePort();
-  const server = app.listen(port, HOST, () => {
-    console.log(`[SignalForge ML] Server running at http://${HOST}:${port}`);
+  const host = resolveHost();
+  const server = app.listen(port, host, () => {
+    console.log(`[SignalForge ML] Server running at http://${host}:${port}`);
   });
 
   server.on('error', error => {

@@ -4,7 +4,7 @@
  * Includes gap detection, duplicate elimination, UTC normalization, and health scoring.
  */
 
-import { Candle, ForexSymbol, ProviderHealth } from '../types/index.ts';
+import type { Candle, ForexSymbol, ProviderHealth } from '../types/index.ts';
 import { db } from './db.ts';
 import { getForexMarketState, isForexMarketOpenAt, getReportingSessionFromTimestamp } from './marketHours.ts';
 

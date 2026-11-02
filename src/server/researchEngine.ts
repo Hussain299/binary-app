@@ -2,7 +2,7 @@
  * SignalForge ML — Historical research and strategy-validation engine.
  * Trains local models on chronological data and evaluates untouched outcomes.
  */
-import {
+import type {
   AgentReview,
   Candle,
   ExperimentMetrics,
@@ -21,7 +21,7 @@ import {
 import { db } from './db.ts';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.ts';
 import { binaryBreakEvenWinRate, calculateAdaptiveMutationRate, outcomeFitsResearchWindow, selectEvolutionParents, wilsonLowerBound } from './evolutionEngine.ts';
-import { ADVANCE_NOTICE_MS, M1_CANDLE_MS, getNextCandleOpenMs, TradingTimeframeMinutes } from './tradingClock.ts';
+import { ADVANCE_NOTICE_MS, M1_CANDLE_MS, getNextCandleOpenMs, type TradingTimeframeMinutes } from './tradingClock.ts';
 import {
   createSeededRandom,
   deriveResearchSeed,

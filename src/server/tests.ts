@@ -4,7 +4,7 @@
  * Research Trinity Audits, and System State.
  */
 
-import { Candle, ForexSymbol, LossAutopsy, ResearchSignal, SynthesizedStrategyGene, TradeOpportunity, VerificationTestResult } from '../types/index.ts';
+import type { Candle, ForexSymbol, LossAutopsy, ResearchSignal, SynthesizedStrategyGene, TradeOpportunity, VerificationTestResult } from '../types/index.ts';
 import { dataFeedEngine, getSessionFromTimestamp } from './dataFeeds.ts';
 import { db } from './db.ts';
 import { entryExitEngine } from './entryExitEngine.ts';
@@ -18,7 +18,7 @@ import {
   inferGenomeStyle,
   isStrategyRegimeCompatible,
   updateBetaPosterior,
-  EpisodicTradeMemory,
+  type EpisodicTradeMemory,
   calculateAdaptiveMutationRate,
   genomeSpeciesKey,
   hasSufficientForwardParentEvidence,

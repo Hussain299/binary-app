@@ -6,9 +6,9 @@
  * Outputs are research cards only: this module does not create signals or orders.
  */
 
-import {
+import { FOREX_PAIRS } from "../types/index.ts";
+import type {
   Candle,
-  FOREX_PAIRS,
   ForexSymbol,
   OpportunityAudit,
   OpportunityDirection,

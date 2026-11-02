@@ -4,7 +4,7 @@
  * dynamic entry-to-exit timing, ambiguity detection, and transaction cost modelling.
  */
 
-import {
+import type {
   Candle,
   ForexSymbol,
   MarketSessionId,
@@ -17,7 +17,7 @@ import { db } from './db.ts';
 import { getSessionFromTimestamp } from './dataFeeds.ts';
 import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.ts';
 import { isForexMarketOpenAt, isForexMarketIntervalOpen, isForexSignalScheduleValid } from './marketHours.ts';
-import { ADVANCE_NOTICE_MS, CLOCK_ALIGNMENT_TOLERANCE_MS, MAX_DECISION_PROCESSING_DELAY_MS, M1_CANDLE_MS, getNextCandleOpenMs, isAlignedCandleOpen, TradingTimeframeMinutes } from './tradingClock.ts';
+import { ADVANCE_NOTICE_MS, CLOCK_ALIGNMENT_TOLERANCE_MS, MAX_DECISION_PROCESSING_DELAY_MS, M1_CANDLE_MS, getNextCandleOpenMs, isAlignedCandleOpen, type TradingTimeframeMinutes } from './tradingClock.ts';
 
 export interface SignalCreationParams {
   symbol: ForexSymbol;
