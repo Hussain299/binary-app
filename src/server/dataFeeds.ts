@@ -255,7 +255,19 @@ export class DataFeedEngine {
     // 4. If all public endpoints fail or are closed (weekend/rate limit), use realistic high-fidelity continuity generator
     if (candles.length === 0 && closeOnlySeries.length === 0) {
       const stored = db.getCandles(symbol, limit);
-      if (stored.length > 0) {
+      if (stored.length > 0 && isCollapsedYahooQuoteCandleBatch(stored)) {
+        // Older releases persisted collapsed Yahoo quotes as OHLC rows. Recover
+        // only their real Close observations for the display-only line chart.
+        closeOnlySeries = stored
+          .filter(candle => candle.source === 'yahoo')
+          .map(candle => ({
+            timestamp: candle.timestamp,
+            timestampMs: candle.timestampMs,
+            close: candle.close,
+            source: 'yahoo-close-only' as const,
+          }));
+        activeSource = closeOnlySeries.length > 0 ? 'yahoo-close-only-cache' : 'none';
+      } else if (stored.length > 0) {
         candles = this.extendFromStored(symbol, stored, limit);
         if (activeSource === 'none') activeSource = 'synthetic';
       } else {
