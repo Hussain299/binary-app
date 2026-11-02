@@ -661,7 +661,7 @@ export interface SystemHealthState {
 }
 
 export interface VerificationTestResult {
-  category: 'DATA' | 'ML' | 'ENTRY_EXIT' | 'RESEARCH' | 'SYSTEM' | 'MARKET_HOURS';
+  category: 'DATA' | 'ML' | 'ENTRY_EXIT' | 'RESEARCH' | 'SYSTEM' | 'MARKET_HOURS' | 'SCHEDULER';
   name: string;
   passed: boolean;
   durationMs: number;
