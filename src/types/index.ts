@@ -348,6 +348,14 @@ export interface ResearchSignal {
   /** Binary-option profit/loss in stake units: +payout on win, -1 on loss, 0 on push. */
   netReturnUnits?: number | null;
   outcomeResult: 'WIN' | 'LOSS' | 'SCRATCH' | 'PENDING' | 'CANCELLED';
+  settlementProvider?: string | null;
+  settlementTimeframe?: string | null;
+  settlementCandleOpenTimeUtc?: string | null;
+  settlementCandleSealTimeUtc?: string | null;
+  settlementPricingMethod?: 'CANDLE_CLOSE_APPROXIMATION' | 'CANDLE_OPEN_APPROXIMATION' | 'TICK_EXACT';
+  settlementStalenessMs?: number | null;
+  resolvedAtUtc?: string | null;
+  resolutionPendingReason?: string | null;
   
   // Model metadata and 5–30 minute entry-candle synchronization
   ruleFamily: string;
