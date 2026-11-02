@@ -27,6 +27,7 @@ import type { LearningPlatformPersistedState } from './learningPlatform.ts';
 import { sanitizeLossAutopsy } from './researchGovernance.ts';
 import { FEATURE_SCHEMA_VERSION, RESEARCH_ENGINE_VERSION } from './researchReproducibility.ts';
 import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.ts';
+import { createInitialAutonomousResearchQueueState } from './researchQueue.ts';
 import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid, type ReportingSession } from './marketHours.ts';
 import {
   assessNearestNeighbors,
@@ -144,23 +145,7 @@ class DatabaseService {
         if (!Array.isArray(parsed.researchHoldoutWindows)) parsed.researchHoldoutWindows = [];
         if (!Array.isArray(parsed.opportunityHoldoutWindows)) parsed.opportunityHoldoutWindows = [];
         if (!parsed.autonomousResearchQueue || typeof parsed.autonomousResearchQueue !== 'object') {
-          parsed.autonomousResearchQueue = {
-            schemaVersion: 1,
-            nextPairIndex: 0,
-            currentSymbol: null,
-            lastScanAt: null,
-            lastScanFinishedAt: null,
-            lastBatchStartedAt: null,
-            lastBatchFinishedAt: null,
-            nextRunAt: null,
-            cooldownSeconds: 60,
-            batchesStarted: 0,
-            batchesCompleted: 0,
-            batchesFailed: 0,
-            lastRunStatus: 'IDLE',
-            lastRunMessage: 'Multi-pair research queue initialized.',
-            pairs: {},
-          };
+          parsed.autonomousResearchQueue = createInitialAutonomousResearchQueueState();
         }
         if (!parsed.autonomousResearchQueue.pairs ||
             typeof parsed.autonomousResearchQueue.pairs !== 'object') {
@@ -306,23 +291,7 @@ class DatabaseService {
       processedOutcomeIds: [],
       researchHoldoutWindows: [],
       opportunityHoldoutWindows: [],
-      autonomousResearchQueue: {
-        schemaVersion: 1,
-        nextPairIndex: 0,
-        currentSymbol: null,
-        lastScanAt: null,
-        lastScanFinishedAt: null,
-        lastBatchStartedAt: null,
-        lastBatchFinishedAt: null,
-        nextRunAt: null,
-        cooldownSeconds: 60,
-        batchesStarted: 0,
-        batchesCompleted: 0,
-        batchesFailed: 0,
-        lastRunStatus: 'IDLE',
-        lastRunMessage: 'Multi-pair research queue initialized.',
-        pairs: {},
-      },
+      autonomousResearchQueue: createInitialAutonomousResearchQueueState(),
       cronState: {
         lastRun: null,
         nextRun: null,
