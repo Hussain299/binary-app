@@ -8,7 +8,6 @@ import { FOREX_PAIRS } from '../types/index.ts';
 import type {
   AutopilotLog,
   AutonomousResearchPairState,
-  AutonomousResearchQueueState,
   Candle,
   EvolutionGeneration,
   ForexSymbol,
