@@ -374,9 +374,26 @@ export class AutonomousScheduler {
     if (this.researchCoordinatorRunning || researchEngine.isEvolutionBatchRunning()) return;
     this.researchCoordinatorRunning = true;
     const checkedAt = new Date().toISOString();
-    this.nextResearchScanAt = new Date(Date.now() + this.researchIntervalMs).toISOString();
+    let queue = db.getAutonomousResearchQueueState();
+    const nowMs = Date.now();
+
+    // Respect the persisted cooldown after a completed/failed batch, including
+    // process restarts. A single CPU/memory-heavy evolutionary worker is allowed.
+    const nextRunMs = queue.nextRunAt ? Date.parse(queue.nextRunAt) : NaN;
+    if (Number.isFinite(nextRunMs) && nextRunMs > nowMs) {
+      this.nextResearchScanAt = queue.nextRunAt;
+      this.researchCoordinatorRunning = false;
+      return;
+    }
+
+    this.nextResearchScanAt = new Date(nowMs + this.researchIntervalMs).toISOString();
+    queue.lastScanAt = checkedAt;
+    queue.nextRunAt = this.nextResearchScanAt;
+    queue.lastRunStatus = 'SCANNING';
+    queue.lastRunMessage = 'Assessing history volume, candle continuity and unconsumed research windows for every currency pair.';
     let anyHistory = false;
-    let hasPriorHoldout = false;
+    let anyUsableHistory = false;
+    let eligibleSymbols = new Set<ForexSymbol>();
 
     try {
       this.researchState = {
@@ -384,45 +401,122 @@ export class AutonomousScheduler {
         status: 'SCANNING',
         checkedAt,
         nextScanAt: this.nextResearchScanAt,
-        message: 'Checking imported M1 history and unused chronological windows. No synthetic candles are eligible.',
+        message: 'Scanning all 20 pairs using bounded monthly history reads. Exactly one eligible pair can run a 300-candidate batch at a time.',
         error: undefined,
       };
 
-      let selected: { symbol: ForexSymbol; candles: Candle[] } | null = null;
-      for (let offset = 0; offset < FOREX_PAIRS.length; offset++) {
-        const index = (this.nextResearchPairIndex + offset) % FOREX_PAIRS.length;
-        const symbol = FOREX_PAIRS[index];
-        const candles = historicalDataStore.getLatestCandles(symbol, 120_000);
-        if (candles.length > 0) anyHistory = true;
-        if (candles.length < 60_000) continue;
-
+      // First pass is metadata-only from the scheduler's perspective: the store
+      // streams one month partition at a time and never keeps all 20 histories
+      // resident in memory.
+      for (const symbol of FOREX_PAIRS) {
+        const previous = queue.pairs[symbol];
         const previousHoldoutEndMs = db.getLatestResearchHoldoutEndMs(symbol);
-        if (previousHoldoutEndMs !== null) {
-          hasPriorHoldout = true;
-          const genuinelyNewBars = candles.filter(candle =>
-            candle.timestampMs >= previousHoldoutEndMs - 5_000
-          ).length;
-          if (genuinelyNewBars < 60_000) continue;
-        }
+        const lastInspectedThroughMs = previous?.lastInspectedThroughUtc
+          ? Date.parse(previous.lastInspectedThroughUtc)
+          : null;
+        const consumedThroughMs = Math.max(
+          previousHoldoutEndMs ?? 0,
+          Number.isFinite(lastInspectedThroughMs) ? lastInspectedThroughMs! : 0,
+        );
+        const stats = historicalDataStore.getStats(
+          symbol,
+          consumedThroughMs > 0 ? consumedThroughMs - 5_000 : null,
+        );
+        if (stats.count > 0) anyHistory = true;
+        if (stats.usableM1Count > 0) anyUsableHistory = true;
 
-        selected = { symbol, candles };
-        this.nextResearchPairIndex = (index + 1) % FOREX_PAIRS.length;
-        break;
+        const readiness = assessResearchPairReadiness(
+          stats,
+          previousHoldoutEndMs,
+          Number.isFinite(lastInspectedThroughMs) ? lastInspectedThroughMs : null,
+          stats.usableM1CandlesSince,
+        );
+        if (readiness.status === 'READY') eligibleSymbols.add(symbol);
+
+        const nextPair: AutonomousResearchPairState = {
+          symbol,
+          status: readiness.status,
+          historyCount: stats.count,
+          usableM1Count: stats.usableM1Count,
+          zeroVolumeFlatRows: stats.zeroVolumeFlatRows,
+          continuityRatio: stats.continuityRatio,
+          firstTimestamp: stats.firstTimestamp,
+          lastTimestamp: stats.lastTimestamp,
+          monthsStored: stats.monthsStored,
+          sources: stats.sources,
+          previousHoldoutEndUtc: previousHoldoutEndMs
+            ? new Date(previousHoldoutEndMs).toISOString()
+            : null,
+          lastInspectedThroughUtc: previous?.lastInspectedThroughUtc ?? null,
+          genuinelyNewM1Candles: readiness.genuinelyNewM1Candles,
+          queuePosition: null,
+          lastBatchId: previous?.lastBatchId ?? null,
+          lastBatchStartedAt: previous?.lastBatchStartedAt ?? null,
+          lastBatchFinishedAt: previous?.lastBatchFinishedAt ?? null,
+          lastBatchCompletedCandidates: previous?.lastBatchCompletedCandidates ?? 0,
+          lastBatchHistoricalPasses: previous?.lastBatchHistoricalPasses ?? 0,
+          lastBatchRejected: previous?.lastBatchRejected ?? 0,
+          lastBatchFinalists: previous?.lastBatchFinalists ?? 0,
+          lastBatchStatus: previous?.lastBatchStatus ?? null,
+          lastError: previous?.lastError ?? null,
+          readinessMessage: readiness.readinessMessage,
+          updatedAt: checkedAt,
+        };
+        queue.pairs[symbol] = nextPair;
       }
 
-      if (!selected) {
-        const status = !anyHistory ? 'WAITING_FOR_HISTORY' : 'WAITING_FOR_NEW_HISTORY';
-        const message = !anyHistory
-          ? 'No imported M1 history is available. Import at least 60,000 genuine one-minute candles for a pair.'
-          : hasPriorHoldout
-            ? 'Existing pairs have already used their current holdout. Another batch waits for 60,000 genuinely newer M1 candles; previous test windows are never recycled.'
-            : 'Imported histories are below the 60,000-candle research minimum. No undersampled search was started.';
+      const positions = assignResearchQueuePositions(
+        FOREX_PAIRS,
+        queue.nextPairIndex,
+        eligibleSymbols,
+      );
+      for (const [symbol, position] of positions.entries()) {
+        const pair = queue.pairs[symbol]!;
+        pair.status = 'QUEUED';
+        pair.queuePosition = position;
+        pair.updatedAt = checkedAt;
+      }
+
+      const selection = selectNextResearchPair(
+        FOREX_PAIRS,
+        queue.nextPairIndex,
+        eligibleSymbols,
+      );
+
+      if (!selection) {
+        const allNoHistory = FOREX_PAIRS.every(symbol =>
+          queue.pairs[symbol]?.status === 'NO_HISTORY'
+        );
+        const waitingForNewHistory = FOREX_PAIRS.filter(symbol =>
+          queue.pairs[symbol]?.status === 'WAITING_FOR_NEW_HISTORY'
+        ).length;
+        const insufficient = FOREX_PAIRS.filter(symbol =>
+          ['INSUFFICIENT_HISTORY', 'LOW_CONTINUITY'].includes(queue.pairs[symbol]?.status || '')
+        ).length;
+        const status = !anyHistory || !anyUsableHistory
+          ? 'WAITING_FOR_HISTORY'
+          : waitingForNewHistory > 0
+            ? 'WAITING_FOR_NEW_HISTORY'
+            : 'WAITING_FOR_HISTORY';
+        const message = allNoHistory
+          ? 'No imported M1 history exists for any pair. Import at least 60,000 usable, continuous M1 candles for each pair you want researched.'
+          : `No pair is currently eligible. ${waitingForNewHistory} pair(s) are waiting for 60,000 genuinely new M1 candles; ${insufficient} pair(s) need more usable history or better continuity. Previously inspected windows are never recycled.`;
+
+        queue.currentSymbol = null;
+        queue.lastScanFinishedAt = new Date().toISOString();
+        queue.lastRunStatus = 'WAITING';
+        queue.lastRunMessage = message;
+        queue.nextRunAt = new Date(Date.now() + this.researchIntervalMs).toISOString();
+        this.nextResearchScanAt = queue.nextRunAt;
+        db.setAutonomousResearchQueueState(queue, true);
+
         this.researchState = {
           ...this.researchState,
           status,
           checkedAt,
-          nextScanAt: this.nextResearchScanAt,
+          nextScanAt: queue.nextRunAt,
           completedCandidates: 0,
+          totalCandidates: RESEARCH_CANDIDATES_PER_BATCH,
           historicalPasses: 0,
           rejected: 0,
           finalists: 0,
@@ -431,7 +525,56 @@ export class AutonomousScheduler {
         return;
       }
 
-      const { symbol, candles } = selected;
+      const { symbol } = selection;
+      const pair = queue.pairs[symbol]!;
+      const candles = historicalDataStore.getLatestCandles(symbol, RESEARCH_HISTORY_WINDOW_LIMIT);
+      const usableWindow = candles.filter(candle =>
+        TRUSTED_MARKET_SOURCES.has(candle.source) &&
+        !(candle.volume === 0 &&
+          candle.open === candle.high &&
+          candle.high === candle.low &&
+          candle.low === candle.close)
+      );
+      let consecutiveMinuteSteps = 0;
+      for (let index = 1; index < usableWindow.length; index++) {
+        if (Math.abs(
+          (usableWindow[index].timestampMs - usableWindow[index - 1].timestampMs) - 60_000
+        ) <= 5_000) consecutiveMinuteSteps++;
+      }
+      const windowContinuity = consecutiveMinuteSteps / Math.max(1, usableWindow.length - 1);
+
+      // A pair may have 60k candles in its full archive while its bounded latest
+      // research window is still insufficient. Check before consuming any window.
+      if (usableWindow.length < MINIMUM_RESEARCH_M1_CANDLES ||
+          windowContinuity < 0.75 ||
+          candles.some(candle => candle.source === 'synthetic' || candle.source === 'test_fixture')) {
+        pair.status = usableWindow.length < MINIMUM_RESEARCH_M1_CANDLES
+          ? 'INSUFFICIENT_HISTORY'
+          : 'LOW_CONTINUITY';
+        pair.queuePosition = null;
+        pair.readinessMessage = usableWindow.length < MINIMUM_RESEARCH_M1_CANDLES
+          ? `Latest ${RESEARCH_HISTORY_WINDOW_LIMIT.toLocaleString()}-candle research window contains only ${usableWindow.length.toLocaleString()} usable M1 rows; at least ${MINIMUM_RESEARCH_M1_CANDLES.toLocaleString()} are required.`
+          : `Latest research window continuity is ${(windowContinuity * 100).toFixed(1)}%; at least 75% is required. No holdout was consumed.`;
+        pair.updatedAt = new Date().toISOString();
+        queue.nextPairIndex = selection.nextPairIndex;
+        queue.currentSymbol = null;
+        queue.lastScanFinishedAt = new Date().toISOString();
+        queue.lastRunStatus = 'WAITING';
+        queue.lastRunMessage = `${symbol} failed latest-window preflight; it remains visible in the queue and the next pair will get the next turn.`;
+        queue.nextRunAt = new Date(Date.now() + this.researchIntervalMs).toISOString();
+        this.nextResearchScanAt = queue.nextRunAt;
+        db.setAutonomousResearchQueueState(queue, true);
+        this.researchState = {
+          ...this.researchState,
+          status: 'WAITING_FOR_HISTORY',
+          checkedAt,
+          nextScanAt: queue.nextRunAt,
+          message: queue.lastRunMessage,
+        };
+        return;
+      }
+
+      const latestInspectedMs = usableWindow[usableWindow.length - 1].timestampMs;
       const latestCandidateGeneration = db.getSynthesizedStrategies().reduce(
         (maximum, gene) => Math.max(maximum, gene.generation || 0),
         0
@@ -440,31 +583,68 @@ export class AutonomousScheduler {
         (maximum, generation) => Math.max(maximum, generation.generation || 0),
         0
       );
-      const batchGeneration = Math.max(latestCandidateGeneration, latestBatchGeneration, this.currentGeneration - 1) + 1;
+      const batchGeneration = Math.max(
+        latestCandidateGeneration,
+        latestBatchGeneration,
+        this.currentGeneration - 1,
+      ) + 1;
       const batchId = `autonomous_${symbol.replace('/', '')}_${Date.now().toString(36)}`;
       const startedAt = new Date().toISOString();
+
+      // Persist the consumed data boundary and queue cursor before the expensive
+      // worker starts, so a process restart cannot silently replay this window.
+      queue.nextPairIndex = selection.nextPairIndex;
+      queue.currentSymbol = symbol;
+      queue.lastBatchStartedAt = startedAt;
+      queue.batchesStarted++;
+      queue.lastRunStatus = 'RUNNING';
+      queue.lastRunMessage = `Researching ${symbol}: 300 candidates, one worker, no holdout reuse.`;
+      queue.nextRunAt = new Date(Date.now() + this.researchIntervalMs).toISOString();
+      pair.status = 'RUNNING';
+      pair.queuePosition = 0;
+      pair.lastInspectedThroughUtc = new Date(latestInspectedMs).toISOString();
+      pair.lastBatchId = batchId;
+      pair.lastBatchStartedAt = startedAt;
+      pair.lastBatchFinishedAt = null;
+      pair.lastBatchCompletedCandidates = 0;
+      pair.lastBatchHistoricalPasses = 0;
+      pair.lastBatchRejected = 0;
+      pair.lastBatchFinalists = 0;
+      pair.lastBatchStatus = null;
+      pair.lastError = null;
+      pair.readinessMessage = 'A dedicated 300-candidate batch is running on this pair. The same history window will not be replayed after interruption.';
+      pair.updatedAt = startedAt;
+      db.setAutonomousResearchQueueState(queue, true);
+      this.nextResearchScanAt = queue.nextRunAt;
+
+      const latestResearchGeneration = Math.max(
+        latestCandidateGeneration,
+        latestBatchGeneration,
+        this.currentGeneration - 1,
+      ) + 1;
+      const actualBatchGeneration = Math.max(batchGeneration, latestResearchGeneration);
       this.researchState = {
         status: 'RUNNING',
         symbol,
         batchId,
         startedAt,
         checkedAt,
-        nextScanAt: this.nextResearchScanAt,
+        nextScanAt: queue.nextRunAt,
         completedCandidates: 0,
-        totalCandidates: 300,
+        totalCandidates: RESEARCH_CANDIDATES_PER_BATCH,
         historicalPasses: 0,
         rejected: 0,
         finalists: 0,
-        message: `Running 10 generations × 30 symbolic candidates for ${symbol}. Validation ranks the finalists; the reserved test window is opened only once.`,
+        message: `Running 10 generations × 30 symbolic candidates for ${symbol}. The queue keeps every other pair in order while this single worker runs.`,
       };
-      this.logMind('SCIENTIST', `Autonomous evolutionary batch started for ${symbol}. 300 candidates across ten generations; only unused imported M1 history is eligible.`, symbol);
+      this.logMind('SCIENTIST', `Autonomous multi-pair research started for ${symbol}: 300 candidates; queue cursor persisted; single-worker resource guard active.`, symbol);
 
       try {
         const results = await researchEngine.runNovelStrategySearchBatch(
           symbol,
           candles,
           batchId,
-          batchGeneration,
+          actualBatchGeneration,
           progress => {
             this.researchState = {
               ...this.researchState,
@@ -472,8 +652,16 @@ export class AutonomousScheduler {
               historicalPasses: progress.passedHistorical,
               rejected: progress.rejected,
               finalists: progress.replicationFinalists,
-              message: `Generation search ${progress.completed}/300. ${progress.passedHistorical} historical passes; ${progress.rejected} rejected; ${progress.replicationFinalists} pre-registered holdout finalists.`,
+              message: `${symbol}: ${progress.completed}/300 candidates; ${progress.passedHistorical} historical passes, ${progress.rejected} rejected, ${progress.replicationFinalists} replication finalists. Other pairs remain queued.`,
             };
+            if (progress.completed % 10 === 0 || progress.completed === RESEARCH_CANDIDATES_PER_BATCH) {
+              pair.lastBatchCompletedCandidates = progress.completed;
+              pair.lastBatchHistoricalPasses = progress.passedHistorical;
+              pair.lastBatchRejected = progress.rejected;
+              pair.lastBatchFinalists = progress.replicationFinalists;
+              pair.updatedAt = new Date().toISOString();
+              db.setAutonomousResearchQueueState(queue);
+            }
           }
         );
         const finishedAt = new Date().toISOString();
@@ -487,7 +675,7 @@ export class AutonomousScheduler {
             (b.discoveryMetrics!.validationWinRate - a.discoveryMetrics!.validationWinRate)
           )[0];
         const batchRecord: EvolutionGeneration = {
-          generation: batchGeneration,
+          generation: actualBatchGeneration,
           timestamp: finishedAt,
           totalExperiments: results.length,
           acceptedCount: passed,
@@ -516,30 +704,55 @@ export class AutonomousScheduler {
         };
         db.addGeneration(batchRecord);
         db.saveStateSync();
-        this.currentGeneration = batchGeneration + 10;
+        this.currentGeneration = actualBatchGeneration + 10;
+        const summary = batchRecord.summary;
+
+        pair.status = 'COMPLETED';
+        pair.lastBatchFinishedAt = finishedAt;
+        pair.lastBatchCompletedCandidates = results.length;
+        pair.lastBatchHistoricalPasses = passed;
+        pair.lastBatchRejected = rejected;
+        pair.lastBatchFinalists = this.researchState.finalists;
+        pair.lastBatchStatus = 'COMPLETED';
+        pair.previousHoldoutEndUtc = consumedHoldout?.endUtc ?? pair.previousHoldoutEndUtc;
+        pair.readinessMessage = summary;
+        pair.lastError = null;
+        pair.updatedAt = finishedAt;
+        pair.queuePosition = null;
+
+        queue.currentSymbol = null;
+        queue.lastBatchFinishedAt = finishedAt;
+        queue.lastScanFinishedAt = finishedAt;
+        queue.batchesCompleted++;
+        queue.lastRunStatus = 'COMPLETED';
+        queue.lastRunMessage = summary;
+        queue.nextRunAt = new Date(Date.now() + this.researchIntervalMs).toISOString();
+        this.nextResearchScanAt = queue.nextRunAt;
+        db.setAutonomousResearchQueueState(queue, true);
+
         this.researchState = {
           status: 'COMPLETED',
           symbol,
           batchId,
           startedAt,
           finishedAt,
-          checkedAt,
-          nextScanAt: this.nextResearchScanAt,
+          checkedAt: finishedAt,
+          nextScanAt: queue.nextRunAt,
           completedCandidates: results.length,
-          totalCandidates: 300,
+          totalCandidates: RESEARCH_CANDIDATES_PER_BATCH,
           historicalPasses: passed,
           rejected,
           finalists: this.researchState.finalists,
-          message: batchRecord.summary,
+          message: summary,
         };
-        this.logMind('AUDITOR', batchRecord.summary, symbol);
+        this.logMind('AUDITOR', summary, symbol);
       } catch (error: any) {
         const finishedAt = new Date().toISOString();
         const consumedHoldout = db.getResearchHoldoutWindow(batchId);
         const alreadyRecorded = db.getGenerations().some(record => record.researchBatchId === batchId);
         if (!alreadyRecorded) {
           const failedRecord: EvolutionGeneration = {
-            generation: batchGeneration,
+            generation: actualBatchGeneration,
             timestamp: finishedAt,
             totalExperiments: this.researchState.completedCandidates,
             acceptedCount: this.researchState.historicalPasses,
@@ -564,34 +777,67 @@ export class AutonomousScheduler {
           db.addGeneration(failedRecord);
           db.saveStateSync();
         }
+
+        const message = error?.message || 'Unknown research failure';
+        pair.status = 'FAILED';
+        pair.lastBatchFinishedAt = finishedAt;
+        pair.lastBatchCompletedCandidates = this.researchState.completedCandidates;
+        pair.lastBatchHistoricalPasses = this.researchState.historicalPasses;
+        pair.lastBatchRejected = this.researchState.rejected;
+        pair.lastBatchFinalists = this.researchState.finalists;
+        pair.lastBatchStatus = 'FAILED';
+        pair.previousHoldoutEndUtc = consumedHoldout?.endUtc ?? pair.previousHoldoutEndUtc;
+        pair.lastError = message;
+        pair.readinessMessage = `Batch failed. Its inspected history boundary remains consumed; wait for new history before another attempt. ${message}`;
+        pair.updatedAt = finishedAt;
+        pair.queuePosition = null;
+
+        queue.currentSymbol = null;
+        queue.lastBatchFinishedAt = finishedAt;
+        queue.lastScanFinishedAt = finishedAt;
+        queue.batchesFailed++;
+        queue.lastRunStatus = 'FAILED';
+        queue.lastRunMessage = `${symbol} batch failed; the pair remains visible and will only re-enter after new unconsumed M1 history is available. ${message}`;
+        queue.nextRunAt = new Date(Date.now() + this.researchIntervalMs).toISOString();
+        this.nextResearchScanAt = queue.nextRunAt;
+        db.setAutonomousResearchQueueState(queue, true);
+
         this.researchState = {
           status: 'FAILED',
           symbol,
           batchId,
           startedAt,
           finishedAt,
-          checkedAt,
-          nextScanAt: this.nextResearchScanAt,
+          checkedAt: finishedAt,
+          nextScanAt: queue.nextRunAt,
           completedCandidates: this.researchState.completedCandidates,
-          totalCandidates: 300,
+          totalCandidates: RESEARCH_CANDIDATES_PER_BATCH,
           historicalPasses: this.researchState.historicalPasses,
           rejected: this.researchState.rejected,
           finalists: this.researchState.finalists,
-          message: 'The batch failed; no incomplete run was promoted.',
-          error: error?.message || 'Unknown research failure',
+          message: 'The batch failed; no incomplete run was promoted and its inspected window will not be replayed.',
+          error: message,
         };
-        this.logMind('AUDITOR', `Autonomous research batch failed for ${symbol}: ${error?.message || 'Unknown failure'}.`, symbol);
+        this.logMind('AUDITOR', `Autonomous research batch failed for ${symbol}: ${message}.`, symbol);
       }
     } catch (error: any) {
+      const finishedAt = new Date().toISOString();
+      queue.lastScanFinishedAt = finishedAt;
+      queue.currentSymbol = null;
+      queue.lastRunStatus = 'FAILED';
+      queue.lastRunMessage = error?.message || 'The multi-pair queue scan failed.';
+      queue.nextRunAt = new Date(Date.now() + this.researchIntervalMs).toISOString();
+      this.nextResearchScanAt = queue.nextRunAt;
+      db.setAutonomousResearchQueueState(queue, true);
       this.researchState = {
         ...this.researchState,
         status: 'FAILED',
-        checkedAt,
-        nextScanAt: this.nextResearchScanAt,
-        message: 'The autonomous research scan itself failed; the signal loop remains independent.',
-        error: error?.message || 'Unknown scan failure',
+        checkedAt: finishedAt,
+        nextScanAt: queue.nextRunAt,
+        message: 'The multi-pair research queue scan failed; market sensing remains independent.',
+        error: error?.message || 'Unknown queue scan failure',
       };
-      this.logMind('AUDITOR', `Autonomous research scan failed: ${error?.message || 'Unknown failure'}.`);
+      this.logMind('AUDITOR', `Autonomous multi-pair research scan failed: ${error?.message || 'Unknown failure'}.`);
     } finally {
       this.researchCoordinatorRunning = false;
     }
