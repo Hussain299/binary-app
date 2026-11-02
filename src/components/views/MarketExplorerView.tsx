@@ -11,6 +11,7 @@ import {
   ArrowDown,
 } from 'lucide-react';
 import { Candle, FOREX_PAIRS, ForexSymbol, ProviderHealth } from '../../types/index.js';
+import { getLatestObservedCandle, getMarketChartPriceDomain, getTrustedMarketCandles } from '../../utils/marketChart.ts';
 
 interface MarketExplorerViewProps {
   providers: ProviderHealth[];
@@ -24,12 +25,15 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [hoveredCandle, setHoveredCandle] = useState<Candle | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshWarning, setRefreshWarning] = useState<string | null>(null);
   const requestSequence = useRef(0);
 
   const fetchPairData = useCallback(async (symbol: ForexSymbol, showLoader = true) => {
     const requestId = ++requestSequence.current;
-    if (showLoader) setIsLoading(true);
-    setLoadError(null);
+    if (showLoader) {
+      setIsLoading(true);
+      setLoadError(null);
+    }
     try {
       const res = await fetch(`/api/forex-candles?symbol=${encodeURIComponent(symbol.replace('/', ''))}&limit=80`);
       const data = await res.json().catch(() => ({}));
@@ -51,17 +55,27 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
       setHoveredCandle(null);
       setActiveSource(data.source || '—');
       setQualityScore(Number.isFinite(data.qualityScore) ? data.qualityScore : null);
-      if (validCandles.length < 2) setLoadError('Not enough valid candles are available for this pair yet.');
+      setRefreshWarning(null);
+      if (validCandles.length < 2) {
+        setLoadError('Not enough valid candles are available for this pair yet.');
+      } else {
+        setLoadError(null);
+      }
     } catch (error) {
       if (requestId !== requestSequence.current) return;
       console.error('Failed to fetch candles:', error);
-      setCandles([]);
-      setActiveSource('—');
-      setQualityScore(null);
-      setLoadError(error instanceof Error ? error.message : 'Market data is temporarily unavailable.');
+      const message = error instanceof Error ? error.message : 'Market data is temporarily unavailable.';
+      if (showLoader) {
+        setCandles([]);
+        setActiveSource('—');
+        setQualityScore(null);
+        setLoadError(message);
+      } else {
+        // A transient polling failure must not erase the last valid chart.
+        setRefreshWarning('Live refresh failed. Showing the last successfully received market snapshot.');
+      }
     } finally {
-      if (requestId === requestSequence.current && showLoader) setIsLoading(false);
-      else if (requestId === requestSequence.current) setIsLoading(false);
+      if (requestId === requestSequence.current) setIsLoading(false);
     }
   }, []);
 
@@ -74,8 +88,13 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
     };
   }, [selectedPair, fetchPairData]);
 
-  const latestCandle = candles[candles.length - 1];
-  const firstCandle = candles[0];
+  const trustedCandles = getTrustedMarketCandles(candles);
+  const latestCandle = getLatestObservedCandle(candles);
+  const firstCandle = trustedCandles[0] ?? null;
+  const syntheticCount = candles.filter(candle => candle.source === 'synthetic').length;
+  const latestAgeSeconds = latestCandle
+    ? Math.max(0, Math.floor((Date.now() - latestCandle.timestampMs) / 1000))
+    : null;
   const changePips =
     latestCandle && firstCandle
       ? Number(
@@ -94,15 +113,14 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
       );
     }
 
-    const rawMin = Math.min(...candles.map(c => c.low));
-    const rawMax = Math.max(...candles.map(c => c.high));
     const isJpy = selectedPair.includes('JPY');
-    const minimumRange = isJpy ? 0.04 : 0.0004;
-    const dataRange = Math.max(rawMax - rawMin, minimumRange);
-    const padding = dataRange * 0.08;
-    const minPrice = (rawMin + rawMax) / 2 - dataRange / 2 - padding;
-    const maxPrice = (rawMin + rawMax) / 2 + dataRange / 2 + padding;
-    const priceRange = Math.max(Number.EPSILON, maxPrice - minPrice);
+    const priceDomain = getMarketChartPriceDomain(candles, isJpy);
+    if (!priceDomain) {
+      return <div className="flex h-[330px] items-center justify-center text-xs text-rose-300">Chart price scale is unavailable for this candle set.</div>;
+    }
+    const minPrice = priceDomain.min;
+    const maxPrice = priceDomain.max;
+    const priceRange = priceDomain.range;
 
     const chartWidth = 1000;
     const chartHeight = 330;
@@ -307,22 +325,20 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
       {/* Main Chart Section */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h3 className="text-base font-bold text-white font-mono">{selectedPair} M1 Continuous</h3>
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <h3 className="text-base font-bold text-white font-mono">{selectedPair} M1</h3>
             <span className="text-xs font-mono text-neutral-400">
-              Last: <strong className="text-white">{latestCandle?.close}</strong>
+              Last observed: <strong className="text-white">{latestCandle?.close?.toFixed(selectedPair.includes('JPY') ? 3 : 5) ?? '—'}</strong>
             </span>
-            <span
-              className={`text-xs font-mono font-medium flex items-center ${
-                changePips >= 0 ? 'text-emerald-400' : 'text-rose-400'
-              }`}
-            >
-              {changePips >= 0 ? '+' : ''}
-              {changePips} pips
+            <span className={`text-xs font-mono font-medium ${changePips >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {changePips >= 0 ? '+' : ''}{changePips} pips
+            </span>
+            <span className="rounded-md border border-white/[0.08] bg-white/[0.035] px-2 py-1 text-[9px] uppercase tracking-wide text-neutral-300">
+              {activeSource || 'Feed pending'}
             </span>
           </div>
-          <div className="text-xs font-mono text-neutral-500">
-            {candles.length} One-Minute Candles Cached
+          <div className="text-[10px] font-mono text-neutral-500">
+            {trustedCandles.length} trusted · {candles.length} displayed · {latestAgeSeconds === null ? 'no provider candle' : `${latestAgeSeconds}s old`}
           </div>
         </div>
 
@@ -337,6 +353,14 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
             <button type="button" onClick={() => void fetchPairData(selectedPair)} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-white hover:bg-white/5">Retry market data</button>
           </div>
         ) : renderChart()}
+        {syntheticCount > 0 && !isLoading && (
+          <div className="sf-market-source-warning">
+            {syntheticCount} synthetic continuity candle{syntheticCount === 1 ? '' : 's'} are shown in muted grey because the provider feed was delayed. They are not live market observations. “Last observed” and the pip change use trusted provider/imported candles only.
+          </div>
+        )}
+        {refreshWarning && !isLoading && (
+          <p className="text-[10px] text-amber-300">{refreshWarning}</p>
+        )}
       </div>
 
       {/* Feed status: only measured provider states are shown. */}
