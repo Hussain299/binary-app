@@ -606,7 +606,7 @@ export class ResearchEngine {
       : `Research pipeline configuration for generation ${exp.generation}.
 - Model: logistic regression fitted only on the chronological training partition.
 - Threshold: selected from a fixed candidate set using validation EV, then frozen before the untouched test.
-- Execution alignment: closed M1 decision exactly three minutes before the ${exp.horizonMinutes}m entry candle open and matching expiry.
+- Execution alignment: closed M1 decision exactly three minutes before the M5 entry candle open, then settlement after the ${exp.horizonMinutes}m expiry.
 - Purged embargo: ${exp.purgedWindowCandles} M1 candles between partitions.
 - Test opportunities: n=${exp.metrics.sampleSize}; scored WIN/LOSS outcomes: n=${exp.metrics.scoredTradeSampleSize}.`;
 
