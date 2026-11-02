@@ -51,6 +51,10 @@ import {
   getMarketChartPriceDomain,
   getTrustedMarketCandles,
 } from '../utils/marketChart.ts';
+import {
+  isLegacyFabricatedYahooFlatCandle,
+  normalizeYahooChartCandles,
+} from '../utils/yahooCandles.ts';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -151,6 +155,64 @@ export async function runAllVerificationTests(): Promise<{
     }
     if (getLatestObservedCandle([syntheticTail]) !== null) {
       throw new Error('Synthetic-only market data must not be reported as an observed quote.');
+    }
+  });
+
+  await runTest('DATA', 'Yahoo close-only rows are rejected instead of fabricated into flat candles', () => {
+    const base = 1_800_000_000;
+    const normalized = normalizeYahooChartCandles('EUR/USD', {
+      timestamp: [base, base + 60, base + 120, base + 180],
+      indicators: {
+        quote: [{
+          open: [1.1000, null, undefined, 1.1000],
+          high: [1.1004, null, undefined, 1.1000],
+          low: [1.0998, null, undefined, 1.1000],
+          close: [1.1002, 1.1001, 1.1002, 1.1000],
+          volume: [null, null, null, null],
+        }],
+      },
+    });
+
+    if (normalized.inputRows !== 4 || normalized.candles.length !== 2 || normalized.rejectedRows !== 2) {
+      throw new Error('Yahoo normalization must keep only rows with four complete valid OHLC values.');
+    }
+    if (normalized.candles[0].volume !== 0 || normalized.candles[1].volume !== 0 ||
+        normalized.missingVolumeRows !== 2) {
+      throw new Error('Missing Yahoo FX volume must be represented as zero, never a fabricated constant.');
+    }
+    if (normalized.candles[0].open !== 1.1000 || normalized.candles[0].high !== 1.1004 ||
+        normalized.candles[0].low !== 1.0998 || normalized.candles[0].close !== 1.1002) {
+      throw new Error('Complete Yahoo OHLC values must be preserved exactly.');
+    }
+  });
+
+  await runTest('DATA', 'legacy Yahoo fallback dojis are removed from cached trusted candles', () => {
+    const fake: Candle = {
+      symbol: 'EUR/USD',
+      timestamp: '2026-11-02T10:00:00.000Z',
+      timestampMs: 1_800_000_000_000,
+      open: 1.1000,
+      high: 1.1000,
+      low: 1.1000,
+      close: 1.1000,
+      volume: 150,
+      source: 'yahoo',
+    };
+    const legitimate: Candle = {
+      ...fake,
+      timestampMs: fake.timestampMs + 60_000,
+      timestamp: new Date(fake.timestampMs + 60_000).toISOString(),
+      volume: 0,
+    };
+    if (!isLegacyFabricatedYahooFlatCandle(fake)) {
+      throw new Error('The old Yahoo fallback marker must be recognized.');
+    }
+    if (isLegacyFabricatedYahooFlatCandle(legitimate)) {
+      throw new Error('A genuine complete flat candle with no reported volume must not be discarded.');
+    }
+    const trusted = getTrustedMarketCandles([fake, legitimate]);
+    if (trusted.length !== 1 || trusted[0].timestampMs !== legitimate.timestampMs) {
+      throw new Error('Legacy fake Yahoo dojis must not be shown or used as trusted candles.');
     }
   });
 

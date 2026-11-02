@@ -6,6 +6,7 @@
 
 import type { Candle, ForexSymbol, ProviderHealth } from '../types/index.ts';
 import { db } from './db.ts';
+import { isLegacyFabricatedYahooFlatCandle, normalizeYahooChartCandles } from '../utils/yahooCandles.ts';
 import { getForexMarketState, isForexMarketOpenAt, getReportingSessionFromTimestamp } from './marketHours.ts';
 
 interface RawCandle {
@@ -162,17 +163,38 @@ export class DataFeedEngine {
           const data = await res.json() as any;
           const result = data?.chart?.result?.[0];
           if (result && result.timestamp && result.indicators?.quote?.[0]) {
-            candles = this.normalizeYahoo(symbol, result);
-            activeSource = 'yahoo';
-            db.updateFeedHealth({
-              provider: 'yahoo',
-              symbol,
-              status: 'ONLINE',
-              latencyMs: Date.now() - start,
-              lastSuccess: new Date().toISOString(),
-              consecutiveFailures: 0,
-              attribution: 'Yahoo Finance Chart Feed',
-            });
+            const normalized = normalizeYahooChartCandles(symbol, result);
+            candles = normalized.candles;
+
+            if (candles.length >= 2) {
+              activeSource = 'yahoo';
+              const isDegraded = normalized.rejectedRows > 0;
+              db.updateFeedHealth({
+                provider: 'yahoo',
+                symbol,
+                status: isDegraded ? 'DEGRADED' : 'ONLINE',
+                latencyMs: Date.now() - start,
+                lastSuccess: new Date().toISOString(),
+                consecutiveFailures: 0,
+                attribution: 'Yahoo Finance Chart Feed (complete OHLC rows only)',
+                errorMessage: isDegraded
+                  ? `Rejected ${normalized.rejectedRows}/${normalized.inputRows} incomplete or invalid OHLC rows; ${normalized.missingVolumeRows} rows had no reported volume (stored as 0, not estimated).`
+                  : undefined,
+              });
+            } else {
+              // Do not label a close-only/invalid response as an online candle feed.
+              candles = [];
+              db.updateFeedHealth({
+                provider: 'yahoo',
+                symbol,
+                status: 'DEGRADED',
+                latencyMs: Date.now() - start,
+                lastSuccess: new Date().toISOString(),
+                consecutiveFailures: 0,
+                attribution: 'Yahoo Finance Chart Feed (rejected incomplete OHLC)',
+                errorMessage: `Yahoo returned ${normalized.inputRows} rows but only ${normalized.candles.length} complete valid OHLC candles. At least two are required; close-only rows are not converted into fake doji candles.`,
+              });
+            }
           }
         }
       } catch (err: any) {
@@ -261,39 +283,11 @@ export class DataFeedEngine {
       .filter(c => !isNaN(c.timestampMs) && !isNaN(c.close));
   }
 
-  private normalizeYahoo(symbol: ForexSymbol, chartResult: any): Candle[] {
-    const timestamps = chartResult.timestamp || [];
-    const quote = chartResult.indicators?.quote?.[0] || {};
-    const opens = quote.open || [];
-    const highs = quote.high || [];
-    const lows = quote.low || [];
-    const closes = quote.close || [];
-    const volumes = quote.volume || [];
-
-    const candles: Candle[] = [];
-    for (let i = 0; i < timestamps.length; i++) {
-      if (closes[i] !== null && closes[i] !== undefined && !isNaN(closes[i])) {
-        const tsMs = timestamps[i] * 1000;
-        candles.push({
-          symbol,
-          timestamp: new Date(tsMs).toISOString(),
-          timestampMs: tsMs,
-          open: Number(opens[i] ?? closes[i]),
-          high: Number(highs[i] ?? closes[i]),
-          low: Number(lows[i] ?? closes[i]),
-          close: Number(closes[i]),
-          volume: Number(volumes[i] || 150),
-          source: 'yahoo' as const,
-        });
-      }
-    }
-    return candles;
-  }
-
   private validateAndDeduplicate(candles: Candle[]): Candle[] {
     const map = new Map<number, Candle>();
     for (const c of candles) {
       if (
+        !isLegacyFabricatedYahooFlatCandle(c) &&
         !isNaN(c.timestampMs) &&
         !isNaN(c.open) &&
         !isNaN(c.high) &&

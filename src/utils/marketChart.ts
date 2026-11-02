@@ -1,11 +1,15 @@
 import type { Candle } from '../types/index.js';
+import { isLegacyFabricatedYahooFlatCandle } from './yahooCandles.ts';
 
 const TRUSTED_MARKET_SOURCES = new Set(['biquote', 'dukascopy', 'yahoo', 'imported']);
 
-/** Keep provider/imported observations separate from synthetic continuity bars. */
+/** Keep provider/imported observations separate from synthetic and known-fake legacy bars. */
 export function getTrustedMarketCandles(candles: Candle[]): Candle[] {
   return candles
-    .filter(candle => TRUSTED_MARKET_SOURCES.has(candle.source))
+    .filter(candle =>
+      TRUSTED_MARKET_SOURCES.has(candle.source) &&
+      !isLegacyFabricatedYahooFlatCandle(candle)
+    )
     .sort((a, b) => a.timestampMs - b.timestampMs);
 }
 
