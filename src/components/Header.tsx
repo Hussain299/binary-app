@@ -49,7 +49,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
           <div className="min-w-0">
             <div className="sf-brand-name truncate">SIGNALFORGE</div>
-            <div className="sf-brand-caption hidden sm:block">Daily paper audit</div>
+            <div className="sf-brand-caption hidden sm:block">Autonomous research intelligence</div>
           </div>
         </div>
         <span className="sf-status-pill hidden md:inline-flex">
