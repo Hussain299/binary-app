@@ -1,0 +1,28 @@
+name: SignalForge verification
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "fix/signal-lifecycle-cosmic-ui"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: TypeScript check
+        run: npm run lint
+      - name: Production build
+        run: npm run build
+      - name: Verification suite
+        run: npm run test:verify
+      - name: Server startup smoke test
+        run: npm run test:startup
