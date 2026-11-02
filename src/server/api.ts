@@ -777,7 +777,7 @@ apiRouter.get('/system/health', (_req: Request, res: Response) => {
     },
     storage: {
       mode: 'LOCAL_JSON_FILES',
-      durableAcrossInstanceReplacement: !isCloudRun,
+      durableAcrossInstanceReplacement: isCloudRun ? false : null,
       multiInstanceSafe: false,
       warning: isCloudRun
         ? 'The database and imported M1 partitions are stored in the container filesystem. They are not durable across instance replacement and are not shared between Cloud Run instances; use persistent external storage before relying on restarts or scaling.'
