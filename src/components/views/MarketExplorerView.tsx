@@ -106,6 +106,12 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
   const lastObservedPrice = latestCandle?.close ?? latestCloseOnly?.close ?? null;
   const lastObservedAtMs = latestCandle?.timestampMs ?? latestCloseOnly?.timestampMs ?? null;
   const syntheticCount = candles.filter(candle => candle.source === 'synthetic').length;
+  // Render only integrity-checked provider candles plus explicitly synthetic
+  // continuity bars. Collapsed Yahoo quote batches stay in the separate line series.
+  const displayCandles = [
+    ...trustedCandles,
+    ...candles.filter(candle => candle.source === 'synthetic'),
+  ].sort((a, b) => a.timestampMs - b.timestampMs);
   const latestAgeSeconds = lastObservedAtMs !== null
     ? Math.max(0, Math.floor((Date.now() - lastObservedAtMs) / 1000))
     : null;
@@ -219,7 +225,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
         </div>
         <div className="sf-chart-inspector mt-3 font-mono text-[11px]">
           <span className="text-neutral-400">Latest close <strong className="text-neutral-100">{formatPrice(lastPoint.close)}</strong></span>
-          <span className="text-neutral-500">{formatTime(lastPoint.timestampMs)} UTC · Yahoo</span>
+          <span className="text-neutral-500">{formatTime(lastPoint.timestampMs)} UTC · Yahoo · VOL N/A</span>
         </div>
         <p className="mt-3 text-[10px] leading-relaxed text-amber-200/75">
           Yahoo did not provide complete Open, High and Low values. This line uses only its reported Close values. No candle bodies, wicks, volume, or trading signals are fabricated from this series.
@@ -234,7 +240,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
     if (trustedCandles.length < 2 && closeOnlySeries.length >= 2) {
       return renderCloseOnlyChart();
     }
-    if (candles.length < 2) {
+    if (displayCandles.length < 2) {
       return (
         <div className="flex h-[330px] items-center justify-center text-neutral-500 font-mono text-xs">
           Waiting for at least two valid M1 candles…
@@ -243,7 +249,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
     }
 
     const isJpy = selectedPair.includes('JPY');
-    const priceDomain = getMarketChartPriceDomain(candles, isJpy);
+    const priceDomain = getMarketChartPriceDomain(displayCandles, isJpy);
     if (!priceDomain) {
       return <div className="flex h-[330px] items-center justify-center text-xs text-rose-300">Chart price scale is unavailable for this candle set.</div>;
     }
@@ -258,7 +264,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
     const plotTop = 22;
     const plotBottom = 265;
     const plotHeight = plotBottom - plotTop;
-    const slotWidth = (plotRight - plotLeft) / candles.length;
+    const slotWidth = (plotRight - plotLeft) / displayCandles.length;
     const candleWidth = Math.max(3, Math.min(9, slotWidth * 0.62));
     const getY = (price: number) =>
       plotBottom - ((price - minPrice) / priceRange) * plotHeight;
@@ -270,9 +276,9 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
         minute: '2-digit',
       }).format(new Date(timestampMs));
     const selectedIndex = hoveredCandle
-      ? candles.findIndex(item => item.timestampMs === hoveredCandle.timestampMs)
+      ? displayCandles.findIndex(item => item.timestampMs === hoveredCandle.timestampMs)
       : -1;
-    const inspectedCandle = selectedIndex >= 0 ? candles[selectedIndex] : candles[candles.length - 1];
+    const inspectedCandle = selectedIndex >= 0 ? candles[selectedIndex] : displayCandles[displayCandles.length - 1];
     const latestY = getY(latestCandle?.close ?? inspectedCandle.close);
     const tickIndices = Array.from(new Set([
       0,
@@ -289,7 +295,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
             viewBox={`0 0 ${chartWidth} ${chartHeight}`}
             preserveAspectRatio="none"
             role="img"
-            aria-label={`${selectedPair} one-minute candlestick chart with ${candles.length} candles`}
+            aria-label={`${selectedPair} one-minute candlestick chart with ${displayCandles.length} candles`}
           >
             <defs>
               <linearGradient id="sf-latest-price-fill" x1="0" x2="1" y1="0" y2="0">
@@ -322,7 +328,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
             )}
 
             {/* Candle wicks and bodies. */}
-            {candles.map((candle, index) => {
+            {displayCandles.map((candle, index) => {
               const isSynthetic = candle.source === 'synthetic';
               const isUp = candle.close >= candle.open;
               const tone = isSynthetic ? '#7d8b98' : isUp ? '#43cf99' : '#f17480';
@@ -374,7 +380,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
             <line x1={plotLeft} y1={plotBottom + 7} x2={plotRight} y2={plotBottom + 7}
               stroke="rgba(148,163,184,.22)" strokeWidth="1" />
             {tickIndices.map(index => {
-              const candle = candles[index];
+              const candle = displayCandles[index];
               const x = plotLeft + (index + 0.5) * slotWidth;
               return (
                 <g key={candle.timestampMs}>
@@ -396,7 +402,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
             <span>H <strong className="text-neutral-100">{formatPrice(inspectedCandle.high)}</strong></span>
             <span>L <strong className="text-neutral-100">{formatPrice(inspectedCandle.low)}</strong></span>
             <span>C <strong className="text-neutral-100">{formatPrice(inspectedCandle.close)}</strong></span>
-            <span>VOL <strong className="text-neutral-100">{Number(inspectedCandle.volume || 0).toLocaleString()}</strong></span>
+            <span>VOL <strong className="text-neutral-100">{inspectedCandle.volume > 0 ? inspectedCandle.volume.toLocaleString() : 'N/A'}</strong></span>
           </div>
           <div className="flex items-center gap-2 text-neutral-500">
             <span>{formatUtcTime(inspectedCandle.timestampMs)} UTC</span>
