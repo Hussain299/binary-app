@@ -252,10 +252,7 @@ class DatabaseService {
             if (existingIndex >= 0) parsed.lossAutopsies[existingIndex] = observationOnly;
             else parsed.lossAutopsies.unshift(observationOnly);
           }
-          // Cap history at 1000 records
-          if (parsed.signals.length > 1000) {
-            parsed.signals = parsed.signals.slice(0, 1000);
-          }
+          // Signal history is an audit ledger: never truncate settled or unresolved trades.
         }
         if (parsed.candles) {
           delete parsed.candles['USD/CHF'];
@@ -542,7 +539,7 @@ class DatabaseService {
         s =>
           s.symbol === signal.symbol &&
           !s.ruleFamily?.startsWith('test_') &&
-          ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE'].includes(s.lifecycleState)
+          ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE', 'EXIT_PENDING'].includes(s.lifecycleState)
       );
       if (activeForPair) {
         return activeForPair;
@@ -569,10 +566,7 @@ class DatabaseService {
     }
 
     this.state.signals.unshift(signal);
-    // Keep max 1000 signals in persistent history
-    if (this.state.signals.length > 1000) {
-      this.state.signals = this.state.signals.slice(0, 1000);
-    }
+    // Keep the complete signal ledger; retention limits silently lose trade outcomes.
     this.scheduleSave();
     return signal;
   }
