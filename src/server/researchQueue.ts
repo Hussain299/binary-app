@@ -60,7 +60,7 @@ export function assessResearchPairReadiness(
   lastInspectedThroughMs: number | null,
   genuinelyNewM1Candles: number,
 ): ResearchReadiness {
-  if (stats.count === 0 || stats.usableM1Count === 0) {
+  if (stats.count === 0) {
     return {
       status: 'NO_HISTORY',
       genuinelyNewM1Candles: 0,
