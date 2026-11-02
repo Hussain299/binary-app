@@ -1,16 +1,32 @@
 import type { Candle } from '../types/index.js';
-import { isLegacyFabricatedYahooFlatCandle } from './yahooCandles.ts';
+import {
+  isCollapsedYahooQuoteCandleBatch,
+  isLegacyFabricatedYahooFlatCandle,
+} from './yahooCandles.ts';
 
 const TRUSTED_MARKET_SOURCES = new Set(['biquote', 'dukascopy', 'yahoo', 'imported']);
 
-/** Keep provider/imported observations separate from synthetic and known-fake legacy bars. */
+/** True when a Yahoo batch has the structure of sampled quotes, not OHLC bars. */
+export function isBatchCandleStructureValid(candles: Candle[]): boolean {
+  return !isCollapsedYahooQuoteCandleBatch(candles);
+}
+
+/**
+ * Return only trustworthy provider/imported candles. A single genuine doji is
+ * retained; a collapsed Yahoo batch is removed as a batch, not candle by candle.
+ */
 export function getTrustedMarketCandles(candles: Candle[]): Candle[] {
-  return candles
+  const sorted = candles
     .filter(candle =>
       TRUSTED_MARKET_SOURCES.has(candle.source) &&
       !isLegacyFabricatedYahooFlatCandle(candle)
     )
     .sort((a, b) => a.timestampMs - b.timestampMs);
+
+  if (isCollapsedYahooQuoteCandleBatch(sorted)) {
+    return sorted.filter(candle => candle.source !== 'yahoo');
+  }
+  return sorted;
 }
 
 export function getLatestObservedCandle(candles: Candle[]): Candle | null {
