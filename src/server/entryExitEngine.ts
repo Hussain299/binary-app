@@ -88,7 +88,7 @@ export class EntryExitEngine {
 
   /**
    * Factory for creating a research signal in DETECTED state, moving to WAITING_FOR_ENTRY.
-   * Every trade is synchronized to its explicitly selected 5–30 minute entry candle.
+   * Every new trade enters on the fixed M5 candle; the selected expiry is independently 5–30 minutes.
    */
   public createResearchSignal(params: SignalCreationParams): ResearchSignal {
     const isJpy = params.symbol.includes('JPY');
