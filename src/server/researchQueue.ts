@@ -4,6 +4,26 @@ import type {
   ForexSymbol,
 } from '../types/index.ts';
 
+export function createInitialAutonomousResearchQueueState() {
+  return {
+    schemaVersion: 1 as const,
+    nextPairIndex: 0,
+    currentSymbol: null,
+    lastScanAt: null,
+    lastScanFinishedAt: null,
+    lastBatchStartedAt: null,
+    lastBatchFinishedAt: null,
+    nextRunAt: null,
+    cooldownSeconds: 60,
+    batchesStarted: 0,
+    batchesCompleted: 0,
+    batchesFailed: 0,
+    lastRunStatus: 'IDLE' as const,
+    lastRunMessage: 'Multi-pair research queue initialized.',
+    pairs: {},
+  };
+}
+
 export const MINIMUM_RESEARCH_M1_CANDLES = 60_000;
 export const RESEARCH_HISTORY_WINDOW_LIMIT = 120_000;
 export const RESEARCH_CANDIDATES_PER_BATCH = 300;
