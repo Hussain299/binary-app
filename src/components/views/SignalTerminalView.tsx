@@ -20,7 +20,6 @@ import {
   ChevronUp,
   RefreshCw,
   Sparkles,
-  Trash2,
   Globe,
   Layers,
   Dna,
@@ -155,8 +154,6 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const [showSessionsModal, setShowSessionsModal] = useState<boolean>(false);
   const [showGenesisModal, setShowGenesisModal] = useState<boolean>(false);
   const [showLogsAccordion, setShowLogsAccordion] = useState<boolean>(false);
-  const [isClearingHistory, setIsClearingHistory] = useState<boolean>(false);
-  const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
   const [sessionData, setSessionData] = useState<MarketSessionInfo[]>([]);
   const [synthesizedStrategies, setSynthesizedStrategies] = useState<SynthesizedStrategyGene[]>([]);
   const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformanceRecord[]>([]);
@@ -510,19 +507,6 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     return true;
   });
 
-  const handleClearHistory = async () => {
-    setIsClearingHistory(true);
-    try {
-      await fetch('/api/signals/clear-history', { method: 'POST' });
-      onEvaluateSignals();
-      setShowClearConfirm(false);
-    } catch (err) {
-      console.error('Failed to clear history:', err);
-    } finally {
-      setIsClearingHistory(false);
-    }
-  };
-
   const getSignalAge = (isoString: string) => {
     const diffSec = Math.max(0, Math.floor((nowMs - Date.parse(isoString)) / 1000));
     if (diffSec < 60) return `${diffSec}s ago`;
@@ -647,18 +631,6 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
         {/* Secondary Actions & Clear History */}
         <div className="flex items-center gap-2">
-          {filterState === 'CLOSED' && historySignals.length > 0 && (
-            <button
-              onClick={() => setShowClearConfirm(true)}
-              disabled={isClearingHistory}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 text-xs text-rose-300 font-medium transition-colors disabled:opacity-50"
-              title="Clear completed trade history"
-            >
-              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-              <span>{isClearingHistory ? 'Clearing...' : 'Clear History'}</span>
-            </button>
-          )}
-
           <button
             onClick={() => setShowGenesisModal(true)}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-600/80 text-xs text-cyan-200 font-bold transition-all shadow-xs"
@@ -1635,36 +1607,6 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             >
               Close
             </button>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 4: CLEAR HISTORY CONFIRMATION */}
-      {showClearConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-neutral-900 border border-neutral-700 rounded-2xl max-w-sm w-full p-5 text-neutral-200 space-y-4 shadow-2xl">
-            <div className="flex items-center gap-2 text-rose-400">
-              <Trash2 className="w-5 h-5" />
-              <h3 className="text-base font-bold text-white">Clear Trade History?</h3>
-            </div>
-            <p className="text-xs text-neutral-400 leading-relaxed">
-              This will remove all {historySignals.length} completed trade records and reset win/loss statistics. Active trades in progress will not be affected.
-            </p>
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                onClick={() => setShowClearConfirm(false)}
-                className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleClearHistory}
-                disabled={isClearingHistory}
-                className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-colors disabled:opacity-50"
-              >
-                {isClearingHistory ? 'Clearing...' : 'Yes, Clear History'}
-              </button>
-            </div>
           </div>
         </div>
       )}
