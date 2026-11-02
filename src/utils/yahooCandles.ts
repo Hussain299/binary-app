@@ -60,18 +60,9 @@ export function normalizeYahooChartCandles(
       Number.isFinite(date.getTime()) &&
       rawTimestamp > 0;
 
-    if (hasUsableTimestamp && Number.isFinite(close) && close > 0) {
-      closeOnlyObservations.push({
-        timestamp: date.toISOString(),
-        timestampMs,
-        close,
-        source: 'yahoo-close-only',
-      });
-    }
-
     // All four OHLC values must be supplied by Yahoo and pass the candle
-    // envelope. Close-only records remain available for a price-line view,
-    // but are never converted into OHLC candles or passed to signal logic.
+    // envelope. Incomplete rows may still supply a genuine close observation
+    // for a read-only line chart, but never become OHLC candles.
     if (
       !hasUsableTimestamp ||
       ![open, high, low, close].every(value => Number.isFinite(value) && value > 0) ||
@@ -79,6 +70,14 @@ export function normalizeYahooChartCandles(
       low > Math.min(open, close, high)
     ) {
       rejectedRows++;
+      if (hasUsableTimestamp && Number.isFinite(close) && close > 0) {
+        closeOnlyObservations.push({
+          timestamp: date.toISOString(),
+          timestampMs,
+          close,
+          source: 'yahoo-close-only',
+        });
+      }
       continue;
     }
 
