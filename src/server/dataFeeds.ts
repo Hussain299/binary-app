@@ -7,11 +7,11 @@
 import type { Candle, ForexSymbol, ProviderHealth } from '../types/index.ts';
 import { db } from './db.ts';
 import {
-  isCollapsedYahooQuoteCandleBatch,
   isLegacyFabricatedYahooFlatCandle,
   normalizeYahooChartCandles,
   type YahooCloseObservation,
 } from '../utils/yahooCandles.ts';
+import { getTrustedMarketCandles } from '../utils/marketChart.ts';
 import { getForexMarketState, isForexMarketOpenAt, getReportingSessionFromTimestamp } from './marketHours.ts';
 
 interface RawCandle {
@@ -58,21 +58,22 @@ export class DataFeedEngine {
       const cachedRealCandles = db.getCandles(symbol, limit).filter(candle =>
         ['biquote', 'dukascopy', 'yahoo', 'imported'].includes(candle.source)
       );
-      const cachedYahooIsCollapsed = isCollapsedYahooQuoteCandleBatch(cachedRealCandles);
-      const closeOnlySeries: YahooCloseObservation[] = cachedYahooIsCollapsed
-        ? cachedRealCandles
-            .filter(candle => candle.source === 'yahoo')
-            .map(candle => ({
-              timestamp: candle.timestamp,
-              timestampMs: candle.timestampMs,
-              close: candle.close,
-              source: 'yahoo-close-only' as const,
-            }))
-        : [];
-      const candleRows = cachedYahooIsCollapsed
-        ? cachedRealCandles.filter(candle => candle.source !== 'yahoo')
-        : cachedRealCandles;
-      const candles = this.validateAndDeduplicate(candleRows);
+      const trustedCachedCandles = getTrustedMarketCandles(cachedRealCandles);
+      const trustedTimestampKeys = new Set(
+        trustedCachedCandles.map(candle => `${candle.source}:${candle.timestampMs}`)
+      );
+      const closeOnlySeries: YahooCloseObservation[] = cachedRealCandles
+        .filter(candle =>
+          candle.source === 'yahoo' &&
+          !trustedTimestampKeys.has(`${candle.source}:${candle.timestampMs}`)
+        )
+        .map(candle => ({
+          timestamp: candle.timestamp,
+          timestampMs: candle.timestampMs,
+          close: candle.close,
+          source: 'yahoo-close-only' as const,
+        }));
+      const candles = this.validateAndDeduplicate(trustedCachedCandles);
       return {
         candles,
         source: closeOnlySeries.length > 0 ? 'market_closed_close_only' : 'market_closed',
@@ -255,18 +256,30 @@ export class DataFeedEngine {
     // 4. If all public endpoints fail or are closed (weekend/rate limit), use realistic high-fidelity continuity generator
     if (candles.length === 0 && closeOnlySeries.length === 0) {
       const stored = db.getCandles(symbol, limit);
-      if (stored.length > 0 && isCollapsedYahooQuoteCandleBatch(stored)) {
-        // Older releases persisted collapsed Yahoo quotes as OHLC rows. Recover
-        // only their real Close observations for the display-only line chart.
-        closeOnlySeries = stored
-          .filter(candle => candle.source === 'yahoo')
-          .map(candle => ({
-            timestamp: candle.timestamp,
-            timestampMs: candle.timestampMs,
-            close: candle.close,
-            source: 'yahoo-close-only' as const,
-          }));
-        activeSource = closeOnlySeries.length > 0 ? 'yahoo-close-only-cache' : 'none';
+      const trustedStoredCandles = getTrustedMarketCandles(stored);
+      const trustedTimestampKeys = new Set(
+        trustedStoredCandles.map(candle => `${candle.source}:${candle.timestampMs}`)
+      );
+      closeOnlySeries = stored
+        .filter(candle =>
+          candle.source === 'yahoo' &&
+          !trustedTimestampKeys.has(`${candle.source}:${candle.timestampMs}`)
+        )
+        .map(candle => ({
+          timestamp: candle.timestamp,
+          timestampMs: candle.timestampMs,
+          close: candle.close,
+          source: 'yahoo-close-only' as const,
+        }));
+
+      if (trustedStoredCandles.length > 0) {
+        candles = this.extendFromStored(symbol, trustedStoredCandles, limit);
+        if (activeSource === 'none') {
+          activeSource = closeOnlySeries.length > 0 ? 'cached-real+close-only' : 'synthetic';
+        }
+      } else if (closeOnlySeries.length > 0) {
+        // Historical collapsed Yahoo quote rows remain visible as a line only.
+        activeSource = 'yahoo-close-only-cache';
       } else if (stored.length > 0) {
         candles = this.extendFromStored(symbol, stored, limit);
         if (activeSource === 'none') activeSource = 'synthetic';
