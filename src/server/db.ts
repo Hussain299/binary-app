@@ -285,6 +285,12 @@ class DatabaseService {
 
 
   public saveStateSync() {
+    // A synchronous flush supersedes any queued debounce write. Clearing it
+    // avoids a delayed write racing process shutdown or overwriting newer state.
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+      this.saveTimeout = null;
+    }
     this.ensureDataDir();
     const tempFile = `${DB_FILE}.tmp`;
     fs.writeFileSync(tempFile, JSON.stringify(this.state, null, 2), 'utf-8');
