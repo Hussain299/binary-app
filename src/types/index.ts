@@ -80,6 +80,7 @@ export interface AppNotification {
   triggerPrice: number;
   expiryMinutes: number;
   read: boolean;
+  paperOnly?: boolean;
   candleOpenTimeIst?: string;
   candleCloseTimeIst?: string;
   advanceNoticeText?: string;
