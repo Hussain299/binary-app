@@ -77,29 +77,37 @@ export default function App() {
             }
             if (ageSec < 0) continue;
 
-            if (!sig.paperOnly &&
-                ageSec <= 180 &&
-                ['WAITING_FOR_ENTRY', 'ACTIVE'].includes(sig.lifecycleState)) {
+            if (
+              ageSec <= 180 &&
+              ['WAITING_FOR_ENTRY', 'ACTIVE'].includes(sig.lifecycleState)
+            ) {
               notifiedIdsRef.current.add(sig.id);
+              const isPaperOnly = Boolean(sig.paperOnly);
+              const alertTitle = isPaperOnly
+                ? `📊 PAPER RESEARCH: ${sig.symbol} ${sig.direction}`
+                : `🔔 3-Min Advance Signal: ${sig.symbol} ${sig.direction}`;
+              const entryLabel = sig.candleOpenTimeIst || '5M Open';
+              const alertBody = isPaperOnly
+                ? `Paper-only observation. No broker order is placed. Entry at ${entryLabel}; expiry ${sig.expiryMinutes}m.`
+                : `Entry at ${entryLabel} · Dynamic Expiry: ${sig.expiryMinutes}m`;
+
               soundNotificationService.playSignalAlertSound();
-              soundNotificationService.sendBrowserNotification(
-                `🔔 3-Min Advance Signal: ${sig.symbol} ${sig.direction}`,
-                `Entry at ${sig.candleOpenTimeIst || '5M Open'} · Dynamic Expiry: ${sig.expiryMinutes}m`
-              );
+              soundNotificationService.sendBrowserNotification(alertTitle, alertBody);
               setActiveNotification({
                 id: `notif_${sig.id}`,
                 signalId: sig.id,
                 symbol: sig.symbol,
                 direction: sig.direction,
-                title: `🔔 3-Min Advance Signal: ${sig.symbol} ${sig.direction}`,
-                message: `Scheduled entry at 5M candle open (${sig.candleOpenTimeIst}). Dynamic Expiry: ${sig.expiryMinutes} Min.`,
+                title: alertTitle,
+                message: alertBody,
                 timestamp: sig.predictionTimeUtc,
                 triggerPrice: sig.triggerPrice,
                 expiryMinutes: sig.expiryMinutes,
                 read: false,
+                paperOnly: isPaperOnly,
                 candleOpenTimeIst: sig.candleOpenTimeIst,
                 candleCloseTimeIst: sig.candleCloseTimeIst,
-                advanceNoticeText: '3-Minute Advance Signal Alert',
+                advanceNoticeText: isPaperOnly ? 'Paper Research Signal' : '3-Minute Advance Signal Alert',
               });
               break;
             }
