@@ -124,6 +124,7 @@ export class AutonomousScheduler {
     symbol: ForexSymbol; source: string; freshFeed: boolean; newestCandleAt: string | null;
     ageSeconds: number | null; candleCount: number; eligibleTimeframes: number[]; result: string;
   }> = [];
+  private readonly lastDiagnosticLogAt = new Map<string, number>();
 
   constructor() {
     const existingGens = db.getGenerations();
@@ -511,9 +512,38 @@ export class AutonomousScheduler {
     symbol?: ForexSymbol,
     signalId?: string
   ) {
+    const now = Date.now();
+    let dedupeKey: string | null = null;
+    let throttleMs = 60_000;
+
+    const regimeGate = message.match(/^\[REGIME GATE\] Suppressed evolved candidate ([^:]+):/);
+    if (regimeGate) {
+      // One stable diagnostic per pair/genome per five minutes. The measured
+      // regime values may change each pulse; they do not justify 20 repeated alerts.
+      dedupeKey = `REGIME_GATE:${symbol || 'UNKNOWN'}:${regimeGate[1]}`;
+      throttleMs = 5 * 60_000;
+    } else {
+      const memoryVeto = message.match(/^\[EPISODIC MEMORY VETO\] ([A-Z]{3}\/[A-Z]{3}) (BUY|SELL)/);
+      if (memoryVeto) {
+        dedupeKey = `MEMORY_VETO:${memoryVeto[1]}:${memoryVeto[2]}`;
+        throttleMs = 60_000;
+      }
+    }
+
+    if (dedupeKey) {
+      const previousAt = this.lastDiagnosticLogAt.get(dedupeKey);
+      if (previousAt !== undefined && now - previousAt < throttleMs) return;
+      this.lastDiagnosticLogAt.set(dedupeKey, now);
+      if (this.lastDiagnosticLogAt.size > 2_000) {
+        for (const [key, timestamp] of this.lastDiagnosticLogAt) {
+          if (now - timestamp > 10 * 60_000) this.lastDiagnosticLogAt.delete(key);
+        }
+      }
+    }
+
     db.addAutopilotLog({
-      id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      timestamp: new Date().toISOString(),
+      id: `log_${now}_${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: new Date(now).toISOString(),
       role,
       message,
       symbol,
