@@ -961,7 +961,7 @@ apiRouter.get('/autopilot/status', (_req: Request, res: Response) => {
   const scheduler = autonomousScheduler.getAutopilotStatus();
   res.json({
     status: scheduler.schedulerStarted ? 'SCHEDULER_RUNNING' : 'SCHEDULER_STOPPED',
-    mode: 'ALWAYS_ON_24_5_AUTOMATED_PAPER_SIGNAL_AND_RESEARCH',
+    mode: 'PROCESS_LOCAL_PAPER_RESEARCH',
     ...scheduler,
     totalCandles: db.getTotalCandlesCount(),
     pairsMonitored: FOREX_PAIRS.length,
@@ -990,7 +990,7 @@ apiRouter.post('/autopilot/start', (_req: Request, res: Response) => {
 apiRouter.post('/autopilot/stop', (_req: Request, res: Response) => {
   return res.status(409).json({
     error: 'The paper research service is configured for automatic 24/5 operation. Manual pause is disabled; stop the hosting service only for planned maintenance.',
-    mode: 'ALWAYS_ON_24_5_AUTOMATED_PAPER_SIGNAL_AND_RESEARCH',
+    mode: 'PROCESS_LOCAL_PAPER_RESEARCH',
     executionEnabled: false,
   });
 });
