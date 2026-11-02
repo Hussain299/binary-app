@@ -43,8 +43,10 @@ const MIN_ANALOGUES_FOR_FORECAST = 40;
 const MIN_ANALOGUES_FOR_SHORTLIST = 100;
 const MAX_SHORTLIST = 30;
 const PAYOUT_FLOOR = 80;
-const OPPORTUNITY_MODEL_VERSION = "opportunity-research-v1";
-const OPPORTUNITY_HOLDOUT_CANDIDATE_KEY = `${OPPORTUNITY_MODEL_VERSION}|${FEATURE_SCHEMA_VERSION}|ALL_HYPOTHESIS_FAMILIES`;
+const OPPORTUNITY_MODEL_VERSION = "opportunity-research-v2-fixed-m5-entry-dynamic-expiry";
+// Keep the existing holdout-family key so the M5-contract revision cannot
+// reopen chronological windows already inspected by the v1 opportunity engine.
+const OPPORTUNITY_HOLDOUT_CANDIDATE_KEY = `opportunity-research-v1|${FEATURE_SCHEMA_VERSION}|ALL_HYPOTHESIS_FAMILIES`;
 const HOLDOUT_MULTIPLE_TEST_Z = 4.0;
 const FEATURE_NAMES = [
   "return_1", "return_3", "return_5", "return_13",
