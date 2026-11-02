@@ -708,6 +708,7 @@ export interface SystemHealthState {
       selectedTimeframe?: number | null;
       lastStrategyName?: string | null;
       signalPersisted?: boolean;
+      signalCreationError?: string | null;
       result: string;
     }>;
   };
