@@ -48,6 +48,64 @@ export const FOREX_PAIRS: ForexSymbol[] = [
   'GBP/NZD',
 ];
 
+export type AutonomousResearchPairStatus =
+  | 'NO_HISTORY'
+  | 'INSUFFICIENT_HISTORY'
+  | 'LOW_CONTINUITY'
+  | 'READY'
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'WAITING_FOR_NEW_HISTORY'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'INTERRUPTED';
+
+export interface AutonomousResearchPairState {
+  symbol: ForexSymbol;
+  status: AutonomousResearchPairStatus;
+  historyCount: number;
+  usableM1Count: number;
+  zeroVolumeFlatRows: number;
+  continuityRatio: number;
+  firstTimestamp: string | null;
+  lastTimestamp: string | null;
+  monthsStored: number;
+  sources: string[];
+  previousHoldoutEndUtc: string | null;
+  lastInspectedThroughUtc: string | null;
+  genuinelyNewM1Candles: number;
+  queuePosition: number | null;
+  lastBatchId: string | null;
+  lastBatchStartedAt: string | null;
+  lastBatchFinishedAt: string | null;
+  lastBatchCompletedCandidates: number;
+  lastBatchHistoricalPasses: number;
+  lastBatchRejected: number;
+  lastBatchFinalists: number;
+  lastBatchStatus: 'COMPLETED' | 'FAILED' | 'INTERRUPTED' | null;
+  lastError: string | null;
+  readinessMessage: string;
+  updatedAt: string;
+}
+
+export interface AutonomousResearchQueueState {
+  schemaVersion: 1;
+  nextPairIndex: number;
+  currentSymbol: ForexSymbol | null;
+  lastScanAt: string | null;
+  lastScanFinishedAt: string | null;
+  lastBatchStartedAt: string | null;
+  lastBatchFinishedAt: string | null;
+  nextRunAt: string | null;
+  cooldownSeconds: number;
+  batchesStarted: number;
+  batchesCompleted: number;
+  batchesFailed: number;
+  lastRunStatus: 'IDLE' | 'SCANNING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'INTERRUPTED' | 'WAITING';
+  lastRunMessage: string;
+  pairs: Partial<Record<ForexSymbol, AutonomousResearchPairState>>;
+}
+
 export type MarketSessionId = 'ASIA' | 'LONDON' | 'OVERLAP' | 'NEW_YORK' | 'LATE_NEW_YORK';
 
 export interface MarketSessionInfo {
