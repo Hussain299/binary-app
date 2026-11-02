@@ -16,6 +16,7 @@ export const NotificationBanner: React.FC<NotificationBannerProps> = ({
   if (!notification) return null;
 
   const isBuy = notification.direction === 'BUY';
+  const isPaperOnly = Boolean(notification.paperOnly);
 
   // Calculate age string
   const diffSec = Math.max(0, Math.floor((Date.now() - Date.parse(notification.timestamp)) / 1000));
@@ -52,7 +53,7 @@ export const NotificationBanner: React.FC<NotificationBannerProps> = ({
               <Zap className="w-4 h-4 animate-pulse" />
             </span>
             <span className="font-extrabold text-xs uppercase tracking-wider text-amber-400">
-              🔔 3-Min Advance Signal Alert
+              {isPaperOnly ? '📊 Paper Research Signal' : '🔔 3-Min Advance Signal Alert'}
             </span>
           </div>
 
@@ -69,6 +70,12 @@ export const NotificationBanner: React.FC<NotificationBannerProps> = ({
             </button>
           </div>
         </div>
+
+        {isPaperOnly && (
+          <p className="rounded-lg border border-amber-900/60 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-200">
+            Research observation only. No broker order has been placed.
+          </p>
+        )}
 
         {/* Pair & Direction in Big Bold Style */}
         <div className="flex items-center justify-between">
