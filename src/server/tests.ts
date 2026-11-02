@@ -2339,8 +2339,8 @@ export async function runAllVerificationTests(): Promise<{
     const candles = makeM1TestCandles('EUR/USD', 40000);
     const exp = researchEngine.runWalkForwardExperiment('EUR/USD', candles, 'momentum_5', 10, 1, { allowTestFixtures: true });
 
-    if (exp.purgedWindowCandles < 10) {
-      throw new Error(`Purged embargo must cover the 10m horizon, got ${exp.purgedWindowCandles} M1 candles.`);
+    if (exp.purgedWindowCandles !== 10) {
+      throw new Error(`A 10m expiry on 5m entry opportunities requires a 10m chronological embargo, got ${exp.purgedWindowCandles} minutes.`);
     }
     if (exp.metrics.trainSampleSize <= exp.metrics.validationSampleSize || exp.metrics.validationSampleSize <= 0) {
       throw new Error('Training and validation sample counts are missing or incorrectly ordered.');
