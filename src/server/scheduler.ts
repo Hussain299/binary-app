@@ -663,7 +663,7 @@ export class AutonomousScheduler {
         batchId,
         startedAt,
         checkedAt,
-        nextScanAt: queue.nextRunAt,
+        nextScanAt: queue.nextRunAt ?? undefined,
         completedCandidates: 0,
         totalCandidates: RESEARCH_CANDIDATES_PER_BATCH,
         historicalPasses: 0,
