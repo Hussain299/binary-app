@@ -36,6 +36,22 @@ export const SystemHealthView: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  const scheduler = health?.scheduler;
+  const schedulerLabel = !scheduler
+    ? 'TELEMETRY PENDING'
+    : !scheduler.schedulerStarted
+      ? 'STOPPED'
+      : !scheduler.lastHeartbeatAt
+        ? 'STARTING'
+        : scheduler.pulseHealthy
+          ? 'HEALTHY'
+          : 'STALE';
+  const schedulerColor = schedulerLabel === 'HEALTHY'
+    ? 'text-emerald-400'
+    : schedulerLabel === 'STARTING'
+      ? 'text-amber-400'
+      : 'text-rose-400';
+
   return (
     <div className="sf-page">
       <div className="flex items-center justify-between pb-4 border-b border-neutral-800">
@@ -61,14 +77,14 @@ export const SystemHealthView: React.FC = () => {
 
       {health ? (
         <div className="space-y-6 font-mono text-xs">
-          {/* Top Status Cards */}
+          {/* Runtime state is sourced from the real scheduler, not the unrelated cron ledger. */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-              <span className="text-neutral-500 text-[10px] uppercase block">Engine Uptime</span>
+              <span className="text-neutral-500 text-[10px] uppercase block">Process Uptime</span>
               <span className="text-xl font-bold text-white tabular-nums">
                 {Math.floor(health.uptimeSeconds / 60)}m {health.uptimeSeconds % 60}s
               </span>
-              <span className="text-[10px] text-emerald-400 block mt-1">Continuous Execution</span>
+              <span className="text-[10px] text-neutral-400 block mt-1">Node process only; not proof of 24/5 host uptime</span>
             </div>
 
             <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
@@ -77,28 +93,127 @@ export const SystemHealthView: React.FC = () => {
                 {health.dbType}
               </span>
               <span className="text-[10px] text-neutral-400 block mt-1 tabular-nums">
-                {health.totalCandlesStored} candles cached
+                {health.totalCandlesStored.toLocaleString()} rolling candles cached
               </span>
             </div>
 
             <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-              <span className="text-neutral-500 text-[10px] uppercase block">Autopilot Pulse</span>
-              <span className="text-xl font-bold text-emerald-400">
-                {health.isCronRunning ? 'Cycle In Progress' : 'Polling every 20s'}
+              <span className="text-neutral-500 text-[10px] uppercase block">Market Scheduler</span>
+              <span className={`text-xl font-bold ${schedulerColor}`}>
+                {schedulerLabel}
               </span>
               <span className="text-[10px] text-neutral-400 block mt-1">
-                Signal scanning interval: 20 seconds
+                {scheduler?.pulseIntervalSeconds ?? '—'}s cooldown · heartbeat {scheduler?.lastPulseAgeSeconds === null || scheduler?.lastPulseAgeSeconds === undefined ? 'not received' : `${scheduler.lastPulseAgeSeconds}s ago`}
               </span>
             </div>
 
             <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
-              <span className="text-neutral-500 text-[10px] uppercase block">Active Signals</span>
+              <span className="text-neutral-500 text-[10px] uppercase block">Active Paper Signals</span>
               <span className="text-xl font-bold text-white tabular-nums">
-                {health.activeSignalsCount} active / {health.totalExperimentsRun} backtests
+                {health.activeSignalsCount}
               </span>
-              <span className="text-[10px] text-neutral-400 block mt-1">{health.totalForwardObservations || 0} forward paper observations</span>
+              <span className="text-[10px] text-neutral-400 block mt-1">
+                {health.totalForwardObservations || 0} settled observations · {health.totalExperimentsRun} research runs
+              </span>
             </div>
           </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
+              <span className="text-neutral-500 text-[10px] uppercase block">Fresh market feeds</span>
+              <span className="text-2xl font-bold text-white tabular-nums">
+                {scheduler ? `${scheduler.freshPairs}/${scheduler.pairsScanned}` : '—'}
+              </span>
+              <span className="text-[10px] text-neutral-400 block mt-1">Pairs with a recent trusted M1 candle</span>
+            </div>
+            <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
+              <span className="text-neutral-500 text-[10px] uppercase block">Qualified strategies</span>
+              <span className="text-2xl font-bold text-white tabular-nums">
+                {health.strategyReadiness?.historicallyQualified ?? scheduler?.paperStrategiesEligible ?? '—'}
+              </span>
+              <span className="text-[10px] text-neutral-400 block mt-1">
+                {health.strategyReadiness?.storedCandidates ?? scheduler?.storedStrategyCandidates ?? 0} stored candidates
+              </span>
+            </div>
+            <div className="bg-neutral-900/60 border border-neutral-800 rounded p-4">
+              <span className="text-neutral-500 text-[10px] uppercase block">Evolution research</span>
+              <span className="text-base font-bold text-white">
+                {health.evolutionResearch?.status ?? 'UNKNOWN'}
+              </span>
+              <span className="text-[10px] text-neutral-400 block mt-1">
+                {health.evolutionResearch?.message ?? 'Research state unavailable'}
+              </span>
+            </div>
+          </div>
+
+          {health.hosting?.warning && (
+            <div className="rounded-lg border border-amber-900/60 bg-amber-950/20 p-4 text-xs text-amber-100">
+              <strong className="block text-amber-300 mb-1">Hosting requirement</strong>
+              {health.hosting.warning}
+            </div>
+          )}
+          {health.storage?.warning && (
+            <div className="rounded-lg border border-rose-900/50 bg-rose-950/20 p-4 text-xs text-rose-100">
+              <strong className="block text-rose-300 mb-1">Persistence warning</strong>
+              {health.storage.warning}
+            </div>
+          )}
+
+          {scheduler && (
+            <div className="bg-neutral-900/60 border border-neutral-800 rounded p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="text-sm font-semibold text-white">Signal production diagnostics</h4>
+                <span className={`font-semibold ${schedulerColor}`}>{schedulerLabel}</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]">
+                <div className="rounded bg-neutral-950 border border-neutral-800 p-3">
+                  <span className="text-neutral-500 block">Last completed pulse</span>
+                  <strong className="text-neutral-200">{scheduler.lastHeartbeatAt ? new Date(scheduler.lastHeartbeatAt).toLocaleString() : 'No completed pulse yet'}</strong>
+                </div>
+                <div className="rounded bg-neutral-950 border border-neutral-800 p-3">
+                  <span className="text-neutral-500 block">Last skip reason</span>
+                  <strong className="text-neutral-200">{scheduler.lastPulseSkippedReason || 'None'}</strong>
+                </div>
+                <div className="rounded bg-neutral-950 border border-neutral-800 p-3">
+                  <span className="text-neutral-500 block">Last pulse error</span>
+                  <strong className={scheduler.lastPulseError ? 'text-rose-300' : 'text-neutral-200'}>{scheduler.lastPulseError || 'None'}</strong>
+                </div>
+              </div>
+
+              {health.strategyReadiness?.status === 'NO_HISTORICALLY_QUALIFIED_STRATEGY' && (
+                <div className="rounded bg-amber-950/20 border border-amber-900/50 p-3 text-[11px] text-amber-100">
+                  No strategy has passed the historical approval gate. The bot is scanning, but it will not invent an unvalidated trade signal. Research status: {health.strategyReadiness.researchStatus}. {health.strategyReadiness.researchMessage}
+                </div>
+              )}
+
+              <div className="overflow-x-auto border border-neutral-800 rounded">
+                <table className="w-full text-left min-w-[760px]">
+                  <thead className="bg-neutral-950 text-neutral-400 uppercase text-[10px]">
+                    <tr>
+                      <th className="px-3 py-2">Pair</th>
+                      <th className="px-3 py-2">Feed</th>
+                      <th className="px-3 py-2">Age</th>
+                      <th className="px-3 py-2">Candles</th>
+                      <th className="px-3 py-2">Eligible TF</th>
+                      <th className="px-3 py-2">Decision</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-800">
+                    {scheduler.pairDiagnostics.map((pair) => (
+                      <tr key={pair.symbol}>
+                        <td className="px-3 py-2 text-neutral-200">{pair.symbol}</td>
+                        <td className="px-3 py-2 text-neutral-400">{pair.source}</td>
+                        <td className="px-3 py-2 text-neutral-400">{pair.ageSeconds === null ? '—' : `${pair.ageSeconds}s`}</td>
+                        <td className="px-3 py-2 text-neutral-400">{pair.candleCount}</td>
+                        <td className="px-3 py-2 text-neutral-400">{pair.eligibleTimeframes.length ? pair.eligibleTimeframes.join(', ') + 'm' : '—'}</td>
+                        <td className={`px-3 py-2 ${pair.result === 'SIGNAL_CREATED' ? 'text-emerald-300' : 'text-amber-300'}`}>{pair.result}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* Data Providers Health Matrix */}
           <div className="bg-neutral-900/60 border border-neutral-800 rounded p-5 space-y-3">
