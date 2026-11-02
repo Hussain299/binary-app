@@ -103,11 +103,22 @@ export const apiRouter = Router();
 
 // Healthcheck
 apiRouter.get('/_healthcheck', (_req: Request, res: Response) => {
+  const scheduler = autonomousScheduler.getAutopilotStatus();
   res.json({
     status: 'ok',
-    system: 'SignalForge ML Autonomous Research Intelligence',
+    system: 'SignalForge ML Paper Research Service',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
+    scheduler: {
+      started: scheduler.schedulerStarted,
+      pulseHealthy: scheduler.pulseHealthy,
+      lastHeartbeatAt: scheduler.lastHeartbeatAt,
+      lastPulseAgeSeconds: scheduler.lastPulseAgeSeconds,
+      lastPulseError: scheduler.lastPulseError,
+      marketOpen: scheduler.market.isOpen,
+      qualifiedStrategies: scheduler.paperStrategiesEligible,
+      strategyReadiness: scheduler.strategyReadiness,
+    },
   });
 });
 
