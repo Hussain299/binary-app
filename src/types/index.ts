@@ -722,7 +722,18 @@ export interface SystemHealthState {
     historicallyQualified: number;
     promoted: number;
     paperTrading: number;
-    eligibilityDiagnostics?: SystemHealthState['scheduler'] extends infer T ? any : never;
+    eligibilityDiagnostics?: {
+      storedCandidates: number;
+      eligibleForPaperSignals: number;
+      paperTradingCandidates: number;
+      promotedCandidates: number;
+      experimentingCandidates: number;
+      rejectedCandidates: number;
+      mutatingCandidates: number;
+      statusCounts: Record<string, number>;
+      historicalFailureCounts: Record<string, number>;
+      forwardFailureCounts: Record<string, number>;
+    };
     status: string;
     researchStatus: string;
     researchMessage: string;
