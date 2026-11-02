@@ -1400,7 +1400,11 @@ Policy: ${exp.auditorVerdict === 'ACCEPTED'
 
     // Initial parents come only from discovery train/validation records and
     // sufficiently mature forward-paper evidence. The holdout is never read.
-    const initialParentPool = selectEvolutionParents(db.getSynthesizedStrategies(), 30);
+    const executionCompatibleParents = db.getSynthesizedStrategies().filter(gene =>
+      gene.featureSchemaVersion === FEATURE_SCHEMA_VERSION &&
+      gene.researchEngineVersion === RESEARCH_ENGINE_VERSION
+    );
+    const initialParentPool = selectEvolutionParents(executionCompatibleParents, 30);
     let currentParentPool = initialParentPool;
 
     const candidates: Array<{
