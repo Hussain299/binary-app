@@ -74,7 +74,7 @@ export const Header: React.FC<HeaderProps> = ({
             disabled={!autopilotStatus || autopilotStatus.cycleRunning}
             aria-label={autopilotStatus?.schedulerStarted ? 'Stop paper bot' : 'Start paper bot'}
             title={autopilotStatus?.schedulerStarted ? 'Pause market sensing and autonomous research' : 'Start market sensing and autonomous research'}
-            className={`hidden sm:inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-[10px] font-bold tracking-wide transition disabled:cursor-not-allowed disabled:opacity-50 ${autopilotStatus?.schedulerStarted ? 'border-rose-400/25 bg-rose-400/10 text-rose-200 hover:bg-rose-400/15' : 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/15'}`}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[10px] font-bold tracking-wide transition disabled:cursor-not-allowed disabled:opacity-50 ${autopilotStatus?.schedulerStarted ? 'border-rose-400/25 bg-rose-400/10 text-rose-200 hover:bg-rose-400/15' : 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/15'}`}
           >
             <span className={`h-1.5 w-1.5 rounded-full ${autopilotStatus?.schedulerStarted ? 'bg-rose-300' : 'bg-emerald-300'}`} />
             {autopilotStatus?.schedulerStarted ? 'STOP BOT' : 'START BOT'}

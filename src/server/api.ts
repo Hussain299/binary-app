@@ -117,7 +117,8 @@ apiRouter.get('/forex-candles', async (req: Request, res: Response) => {
     const rawSymbol = ((req.query.symbol as string) || 'EUR/USD').toUpperCase();
     let symbol: ForexSymbol = 'EUR/USD';
     const found = FOREX_PAIRS.find(p => p.replace('/', '') === rawSymbol.replace('/', ''));
-    if (found) symbol = found;
+    if (!found) return res.status(400).json({ error: 'Unknown or unsupported forex pair.' });
+    symbol = found;
 
     const limit = Math.min(500, Math.max(10, Number(req.query.limit) || 100));
     const result = await dataFeedEngine.fetchCandles(symbol, limit);
