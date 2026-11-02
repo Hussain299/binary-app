@@ -147,8 +147,8 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({ generations 
       .then(response => response.json())
       .then(payload => {
         const counts: Record<string, number> = {};
-        (payload.pairs || []).forEach((pair: { symbol: string; count: number }) => {
-          counts[pair.symbol] = pair.count;
+        (payload.pairs || []).forEach((pair: { symbol: string; count: number; usableM1Count?: number }) => {
+          counts[pair.symbol] = pair.usableM1Count ?? pair.count;
         });
         setHistoryCounts(counts);
         const readyPair = FOREX_PAIRS.find(pair => (counts[pair] || 0) >= 60_000);
