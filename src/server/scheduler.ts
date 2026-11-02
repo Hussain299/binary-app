@@ -25,7 +25,12 @@ import {
   inferGenomeRuleFamily,
   isStrategyRegimeCompatible,
 } from './evolutionEngine.ts';
-import { findEligibleStartTimeframes } from './tradingClock.ts';
+import {
+  ENTRY_CANDLE_TIMEFRAME_MINUTES,
+  EXPIRY_HORIZONS_MINUTES,
+  findEligibleStartTimeframes,
+  isSupportedExpiryMinutes,
+} from './tradingClock.ts';
 import { FEATURE_SCHEMA_VERSION, RESEARCH_ENGINE_VERSION } from './researchReproducibility.ts';
 import { getTrustedMarketCandles, isBatchCandleStructureValid } from '../utils/marketChart.ts';
 
@@ -139,12 +144,12 @@ export class AutonomousScheduler {
     eligibleTimeframes: number[];
     eligibleStrategyPoolCount: number;
     sessionCompatibleStrategyCount: number;
-    timeframeCompatibleStrategyCount: number;
+    expiryCompatibleStrategyCount: number;
     strategiesEvaluated: number;
     regimeRejected: number;
     activationPassed: number;
     memoryVetoes: number;
-    selectedTimeframe: number | null;
+    selectedExpiryMinutes: number | null;
     lastStrategyName: string | null;
     signalPersisted: boolean;
     signalCreationError: string | null;
@@ -654,12 +659,12 @@ export class AutonomousScheduler {
         eligibleTimeframes: [] as number[],
         eligibleStrategyPoolCount: strategyPool.length,
         sessionCompatibleStrategyCount: 0,
-        timeframeCompatibleStrategyCount: 0,
+        expiryCompatibleStrategyCount: 0,
         strategiesEvaluated: 0,
         regimeRejected: 0,
         activationPassed: 0,
         memoryVetoes: 0,
-        selectedTimeframe: null as number | null,
+        selectedExpiryMinutes: null as number | null,
         lastStrategyName: null as string | null,
         signalPersisted: false,
         signalCreationError: null as string | null,
@@ -834,34 +839,34 @@ export class AutonomousScheduler {
           // with non-linear polynomial operators triggers on this candle
           // -------------------------------------------------------------
           const promotedGenes = strategyPool;
-          const eligibleTimeframeSet = new Set(eligibleSchedules.map(item => item.timeframeMinutes));
+          // There is one execution candle only: the next aligned M5 open.
+          // Strategy horizon is expiry duration, independent of that entry candle.
+          const selectedSchedule = eligibleSchedules[0];
+          if (!selectedSchedule) continue;
+
+          const pairAndSessionGenes = promotedGenes.filter(gene =>
+            (!gene.symbol || gene.symbol === symbol) &&
+            (gene.sessionAffinity === 'ALL' || gene.sessionAffinity === activeSession.id)
+          );
+          const expiryCompatibleGenes = pairAndSessionGenes.filter(gene =>
+            isSupportedExpiryMinutes(gene.optimalHorizonMinutes) &&
+            isForexMarketIntervalOpen(
+              selectedSchedule.entryTimeMs,
+              selectedSchedule.entryTimeMs + gene.optimalHorizonMinutes * 60_000
+            )
+          );
+
           if (pairDiagnostic) {
-            pairDiagnostic.timeframeCompatibleStrategyCount = promotedGenes.filter(gene =>
-              (!gene.symbol || gene.symbol === symbol) &&
-              (gene.sessionAffinity === 'ALL' || gene.sessionAffinity === activeSession.id) &&
-              eligibleTimeframeSet.has(gene.optimalHorizonMinutes)
-            ).length;
+            pairDiagnostic.expiryCompatibleStrategyCount = expiryCompatibleGenes.length;
           }
-          const eligibleGene = promotedGenes.find(gene =>
-            (!gene.symbol || gene.symbol === symbol) &&
-            (gene.sessionAffinity === 'ALL' || gene.sessionAffinity === activeSession.id) &&
-            eligibleTimeframeSet.has(gene.optimalHorizonMinutes)
-          );
-          const pairHasCompatibleGene = promotedGenes.some(gene =>
-            (!gene.symbol || gene.symbol === symbol) &&
-            (gene.sessionAffinity === 'ALL' || gene.sessionAffinity === activeSession.id) &&
-            eligibleTimeframeSet.has(gene.optimalHorizonMinutes)
-          );
-          if (!pairHasCompatibleGene) {
-            if (pairDiagnostic) pairDiagnostic.result = 'NO_QUALIFIED_PAIR_SESSION_HORIZON_STRATEGY';
+          if (expiryCompatibleGenes.length === 0) {
+            if (pairDiagnostic) {
+              pairDiagnostic.result = pairAndSessionGenes.length > 0
+                ? 'NO_VALID_EXPIRY_WINDOW_BEFORE_MARKET_CLOSE'
+                : 'NO_QUALIFIED_PAIR_SESSION_EXPIRY_STRATEGY';
+            }
             continue;
           }
-          const selectedEntryTimeframe = eligibleGene?.optimalHorizonMinutes ?? eligibleSchedules[0].timeframeMinutes;
-          const selectedSchedule = eligibleSchedules.find(item =>
-            item.timeframeMinutes === selectedEntryTimeframe
-          );
-          if (pairDiagnostic) pairDiagnostic.selectedTimeframe = selectedEntryTimeframe;
-          if (!selectedSchedule) continue;
           let regimeRejected = false;
           let memoryVetoed = false;
           let strategyEvaluated = false;
@@ -872,15 +877,10 @@ export class AutonomousScheduler {
             rationale: string;
           } | null = null;
 
-          for (const gene of promotedGenes) {
-            // The train/test horizon and the live entry candle must be identical.
-            if (gene.optimalHorizonMinutes !== selectedEntryTimeframe) continue;
-            // Forward verification must use the same pair whose historical data
-            // established the candidate's edge; never cross-apply a single-pair model.
-            if (gene.symbol && gene.symbol !== symbol) continue;
-            if (gene.sessionAffinity !== 'ALL' && gene.sessionAffinity !== activeSession.id) {
-              continue;
-            }
+          for (const gene of expiryCompatibleGenes) {
+            // The gene's optimal horizon is the independently validated expiry,
+            // not the entry candle size. Every candidate enters at the same M5 open.
+            if (pairDiagnostic) pairDiagnostic.selectedExpiryMinutes = gene.optimalHorizonMinutes;
             const geneStyle = inferGenomeStyle(gene.genome?.expression);
             const regimeGate = isStrategyRegimeCompatible(geneStyle, regimeAssessment.regime);
             if (!regimeGate.allowed) {
@@ -960,7 +960,7 @@ export class AutonomousScheduler {
               signalCandle: c,
               ruleFamily: 'volatility_squeeze',
               expiryMinutes: gene.optimalHorizonMinutes,
-              entryTimeframeMinutes: gene.optimalHorizonMinutes,
+              entryTimeframeMinutes: ENTRY_CANDLE_TIMEFRAME_MINUTES,
               candleOpenTimeUtc: new Date(selectedSchedule.entryTimeMs).toISOString(),
               candleCloseTimeUtc: new Date(selectedSchedule.entryTimeMs + gene.optimalHorizonMinutes * 60_000).toISOString(),
               confidence: novelGeneCandidate.conviction,
@@ -1000,7 +1000,7 @@ export class AutonomousScheduler {
 
             this.logMind(
               'SCIENTIST',
-              `🧬 [EVOLVED SYMBOLIC STRATEGY SIGNAL]: ${symbol} ${signal.direction} [${gene.name} · Dynamic Expiry: ${gene.optimalHorizonMinutes}m · Formula: ${gene.mathematicalFormula} · ${gene.verifiedAccuracy}% historical test WR (n=${gene.sampleCount}). ${gene.status === 'PAPER_TRADING' ? 'PAPER TRADING' : 'FORWARD PAPER GATE PASSED · PAPER ONLY'}. Enters strictly at ${gene.optimalHorizonMinutes}M Candle Open (${signal.candleOpenTimeIst}).`,
+              `🧬 [EVOLVED SYMBOLIC STRATEGY SIGNAL]: ${symbol} ${signal.direction} [${gene.name} · Dynamic Expiry: ${gene.optimalHorizonMinutes}m · Formula: ${gene.mathematicalFormula} · ${gene.verifiedAccuracy}% historical test WR (n=${gene.sampleCount}). ${gene.status === 'PAPER_TRADING' ? 'PAPER TRADING' : 'FORWARD PAPER GATE PASSED · PAPER ONLY'}. Enters strictly at ${ENTRY_CANDLE_TIMEFRAME_MINUTES}M Candle Open (${signal.candleOpenTimeIst}); expires after ${gene.optimalHorizonMinutes}m.`,
               symbol,
               signal.id
             );
