@@ -27,6 +27,7 @@ import {
 } from './evolutionEngine.ts';
 import { findEligibleStartTimeframes } from './tradingClock.ts';
 import { FEATURE_SCHEMA_VERSION, RESEARCH_ENGINE_VERSION } from './researchReproducibility.ts';
+import { getTrustedMarketCandles, isBatchCandleStructureValid } from '../utils/marketChart.ts';
 
 export const MARKET_SENSE_CONCURRENCY = Math.max(1, FOREX_PAIRS.length);
 export const AUTOPILOT_SCAN_INTERVAL_MS = 8_000;
@@ -38,17 +39,25 @@ export function getTrustedFreshCandleSnapshot(candles: Candle[], nowMs: number):
   newestCandle: Candle | null;
   ageMs: number | null;
   isFresh: boolean;
+  isCandleStructureValid: boolean;
 } {
-  const trustedCandles = candles
+  const rawTrustedCandles = candles
     .filter(candle => TRUSTED_MARKET_SOURCES.has(candle.source))
     .sort((a, b) => a.timestampMs - b.timestampMs);
-  const newestCandle = trustedCandles[trustedCandles.length - 1] || null;
+  const isCandleStructureValid = isBatchCandleStructureValid(rawTrustedCandles);
+  const trustedCandles = isCandleStructureValid
+    ? getTrustedMarketCandles(rawTrustedCandles)
+    : [];
+  const newestCandle = trustedCandles[trustedCandles.length - 1] ||
+    rawTrustedCandles[rawTrustedCandles.length - 1] || null;
   const ageMs = newestCandle ? nowMs - newestCandle.timestampMs : null;
+  const isRecent = ageMs !== null && ageMs >= -60_000 && ageMs <= 120_000;
   return {
     candles: trustedCandles,
     newestCandle,
     ageMs,
-    isFresh: ageMs !== null && ageMs >= -60_000 && ageMs <= 120_000,
+    isFresh: isCandleStructureValid && isRecent,
+    isCandleStructureValid,
   };
 }
 
@@ -623,9 +632,9 @@ export class AutonomousScheduler {
       await mapWithConcurrency(FOREX_PAIRS, MARKET_SENSE_CONCURRENCY, async (symbol, index) => {
         freshCandlesMap[symbol] = [];
         const pairDiagnostic = pairDiagnostics[index];
-        const readTrustedHistory = () => db.getCandles(symbol, 5000)
-          .filter(c => trustedSources.has(c.source))
-          .sort((a, b) => a.timestampMs - b.timestampMs);
+        const readTrustedHistory = () => getTrustedMarketCandles(
+          db.getCandles(symbol, 5000).filter(c => trustedSources.has(c.source))
+        );
         lifecycleCandlesMap[symbol] = readTrustedHistory();
 
         try {
@@ -645,11 +654,15 @@ export class AutonomousScheduler {
           lifecycleCandlesMap[symbol] = readTrustedHistory();
           freshCandlesMap[symbol] = isRealFreshFeed ? feedSnapshot.candles : [];
           pairDiagnostic.candleCount = freshCandlesMap[symbol].length;
-          pairDiagnostic.result = !isRealFreshFeed
-            ? 'NO_FRESH_TRUSTED_M1_FEED'
-            : freshCandlesMap[symbol].length < 35
-              ? 'INSUFFICIENT_FRESH_M1_CANDLES'
-              : 'FRESH_FEED_READY';
+          pairDiagnostic.result = res.closeOnlySeries.length >= 2 && !isRealFreshFeed
+            ? 'CLOSE_ONLY_FEED_INELIGIBLE_FOR_STRATEGIES'
+            : !feedSnapshot.isCandleStructureValid
+              ? 'COLLAPSED_OHLC_FEED_INELIGIBLE_FOR_STRATEGIES'
+              : !isRealFreshFeed
+                ? 'NO_FRESH_TRUSTED_M1_FEED'
+                : freshCandlesMap[symbol].length < 35
+                  ? 'INSUFFICIENT_FRESH_M1_CANDLES'
+                  : 'FRESH_FEED_READY';
         } catch (err: any) {
           pairDiagnostic.result = 'FEED_FETCH_FAILED';
           console.error(`[Autopilot] Sensing failed for ${symbol}:`, err.message);

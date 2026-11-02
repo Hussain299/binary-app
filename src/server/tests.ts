@@ -50,8 +50,10 @@ import {
   getLatestObservedCandle,
   getMarketChartPriceDomain,
   getTrustedMarketCandles,
+  isBatchCandleStructureValid,
 } from '../utils/marketChart.ts';
 import {
+  isCollapsedYahooQuoteCandleBatch,
   isLegacyFabricatedYahooFlatCandle,
   normalizeYahooChartCandles,
 } from '../utils/yahooCandles.ts';
@@ -182,12 +184,133 @@ export async function runAllVerificationTests(): Promise<{
       throw new Error('Incomplete OHLC rows must be retained only as explicit close-only observations for a line chart.');
     }
     if (normalized.candles[0].volume !== 0 || normalized.candles[1].volume !== 0 ||
-        normalized.missingVolumeRows !== 2) {
+        normalized.missingVolumeRows !== 4) {
       throw new Error('Missing Yahoo FX volume must be represented as zero, never a fabricated constant.');
     }
     if (normalized.candles[0].open !== 1.1000 || normalized.candles[0].high !== 1.1004 ||
         normalized.candles[0].low !== 1.0998 || normalized.candles[0].close !== 1.1002) {
       throw new Error('Complete Yahoo OHLC values must be preserved exactly.');
+    }
+  });
+
+  await runTest('DATA', 'Yahoo collapsed quote batches are routed to close-only instead of fake candles', () => {
+    const base = Math.floor(Date.parse('2026-11-02T15:00:00.000Z') / 1000);
+    const closes = [1.12095, 1.12091, 1.12088, 1.12093, 1.12102, 1.12110, 1.12104, 1.12115];
+    const normalized = normalizeYahooChartCandles('EUR/USD', {
+      timestamp: closes.map((_, index) => base + index * 60),
+      indicators: {
+        quote: [{
+          open: closes,
+          high: closes,
+          low: closes,
+          close: closes,
+          volume: closes.map(() => 0),
+        }],
+      },
+    });
+    if (!normalized.isCollapsedQuoteSeries) {
+      throw new Error('A batch dominated by High=Low Yahoo quotes must be identified as close-only.');
+    }
+    if (normalized.candles.length !== 0 || normalized.closeOnlyObservations.length !== closes.length) {
+      throw new Error('Collapsed Yahoo quotes must produce no OHLC candles and preserve every valid Close observation.');
+    }
+    if (normalized.zeroRangeRows !== closes.length || normalized.missingVolumeRows !== closes.length) {
+      throw new Error('Zero-range and unavailable-volume diagnostics must count all collapsed FX quote rows.');
+    }
+    if (new Set(normalized.closeOnlyObservations.map(row => row.close)).size !== closes.length) {
+      throw new Error('Distinct Yahoo Close quotes must be preserved in the read-only line series.');
+    }
+    const last = normalized.closeOnlyObservations[normalized.closeOnlyObservations.length - 1];
+    if (last.timestampMs !== (base + (closes.length - 1) * 60) * 1000) {
+      throw new Error('Yahoo Unix timestamps must be normalized to the correct UTC milliseconds.');
+    }
+  });
+
+  await runTest('DATA', 'batch-level Yahoo detection preserves isolated genuine flat dojis', () => {
+    const base = Math.floor(Date.parse('2026-11-02T15:00:00.000Z') / 1000);
+    const opens = [1.1000, 1.1002, 1.1001, 1.1003, 1.1004, 1.1002, 1.1005, 1.1004];
+    const highs = [1.1004, 1.1005, 1.1003, 1.1006, 1.1008, 1.1005, 1.1009, 1.1007];
+    const lows  = [1.0998, 1.1000, 1.0999, 1.1001, 1.1002, 1.1000, 1.1003, 1.1001];
+    const closes= [1.1002, 1.1003, 1.1002, 1.1004, 1.1006, 1.1003, 1.1007, 1.1005];
+    // One genuine zero-range doji within a predominantly valid OHLC series.
+    opens[3] = 1.1003; highs[3] = 1.1003; lows[3] = 1.1003; closes[3] = 1.1003;
+    const normalized = normalizeYahooChartCandles('EUR/USD', {
+      timestamp: opens.map((_, index) => base + index * 60),
+      indicators: {
+        quote: [{
+          open: opens, high: highs, low: lows, close: closes,
+          volume: opens.map(() => null),
+        }],
+      },
+    });
+    if (normalized.isCollapsedQuoteSeries || normalized.candles.length !== opens.length) {
+      throw new Error('An isolated genuine doji must not cause an otherwise valid Yahoo OHLC batch to be downgraded.');
+    }
+    if (normalized.candles[3].open !== normalized.candles[3].close ||
+        normalized.candles[3].high !== normalized.candles[3].low) {
+      throw new Error('The isolated genuine flat doji must be preserved exactly.');
+    }
+  });
+
+  await runTest('DATA', 'Yahoo batches at the 75-percent collapsed-quote threshold are rejected as OHLC', () => {
+    const base = Math.floor(Date.parse('2026-11-02T15:00:00.000Z') / 1000);
+    const prices = [1.1000, 1.1001, 1.1002, 1.1003, 1.1004];
+    const normalized = normalizeYahooChartCandles('EUR/USD', {
+      timestamp: prices.map((_, index) => base + index * 60),
+      indicators: {
+        quote: [{
+          open: [...prices.slice(0, 4), 1.1004],
+          high: [...prices.slice(0, 4), 1.1008],
+          low: [...prices.slice(0, 4), 1.1002],
+          close: [...prices.slice(0, 4), 1.1006],
+          volume: prices.map(() => 0),
+        }],
+      },
+    });
+    if (!normalized.isCollapsedQuoteSeries || normalized.candles.length !== 0 ||
+        normalized.closeOnlyObservations.length !== prices.length) {
+      throw new Error('A batch with at least three rows and at least 75% zero-range values must be classified entirely as close-only.');
+    }
+    if (normalized.zeroRangeRows !== 4) {
+      throw new Error('Batch diagnostics must report exactly the four zero-range quote rows.');
+    }
+  });
+
+  await runTest('DATA', 'collapsed Yahoo quote batches are excluded from trusted historical candles', () => {
+    const base = Date.parse('2026-11-02T15:00:00.000Z');
+    const yahooQuotes: Candle[] = Array.from({ length: 8 }, (_, index) => {
+      const close = 1.1209 + index * 0.00001;
+      return {
+        symbol: 'EUR/USD',
+        timestamp: new Date(base + index * 60_000).toISOString(),
+        timestampMs: base + index * 60_000,
+        open: close,
+        high: close,
+        low: close,
+        close,
+        volume: 0,
+        source: 'yahoo' as const,
+      };
+    });
+    const genuineBiquote: Candle = {
+      ...yahooQuotes[7],
+      timestampMs: base + 8 * 60_000,
+      timestamp: new Date(base + 8 * 60_000).toISOString(),
+      open: 1.1210,
+      high: 1.1214,
+      low: 1.1208,
+      close: 1.1212,
+      source: 'biquote',
+    };
+    if (isBatchCandleStructureValid(yahooQuotes)) {
+      throw new Error('The collapsed Yahoo candle batch must fail OHLC structural validation.');
+    }
+    const trusted = getTrustedMarketCandles([...yahooQuotes, genuineBiquote]);
+    if (trusted.length !== 1 || trusted[0].source !== 'biquote') {
+      throw new Error('Collapsed Yahoo quote rows must be excluded while genuine candles from another provider remain trusted.');
+    }
+    if (!isCollapsedYahooQuoteCandleBatch(yahooQuotes)) {
+      throw new Error('The Yahoo batch classifier must independently identify the collapsed quote series.');
     }
   });
 
@@ -284,6 +407,38 @@ export async function runAllVerificationTests(): Promise<{
     const syntheticOnly = getTrustedFreshCandleSnapshot([synthetic], nowMs);
     if (syntheticOnly.isFresh || syntheticOnly.candles.length !== 0) {
       throw new Error('Synthetic-only data must never be eligible for a live paper signal.');
+    }
+  });
+
+  await runTest('SCHEDULER', 'collapsed Yahoo quote batches are rejected before strategy evaluation', () => {
+    const nowMs = Date.parse('2026-11-02T15:00:00.000Z');
+    const collapsed: Candle[] = Array.from({ length: 8 }, (_, index) => {
+      const close = 1.1209 + index * 0.00001;
+      const timestampMs = nowMs - (7 - index) * 60_000;
+      return {
+        symbol: 'EUR/USD',
+        timestamp: new Date(timestampMs).toISOString(),
+        timestampMs,
+        open: close,
+        high: close,
+        low: close,
+        close,
+        volume: 0,
+        source: 'yahoo' as const,
+      };
+    });
+    const snapshot = getTrustedFreshCandleSnapshot(collapsed, nowMs);
+    if (snapshot.isCandleStructureValid) {
+      throw new Error('Collapsed Yahoo quote rows must fail the scheduler OHLC integrity gate.');
+    }
+    if (snapshot.isFresh || snapshot.candles.length !== 0) {
+      throw new Error('Collapsed Yahoo quotes must never be passed as fresh OHLC strategy input.');
+    }
+    if (snapshot.newestCandle?.timestampMs !== nowMs) {
+      throw new Error('The scheduler must retain the quote timestamp for diagnostics even when OHLC is ineligible.');
+    }
+    if (getTrustedMarketCandles(collapsed).length !== 0) {
+      throw new Error('Collapsed Yahoo history must be excluded from the lifecycle and strategy candle maps.');
     }
   });
 
@@ -1396,11 +1551,20 @@ export async function runAllVerificationTests(): Promise<{
   // ==========================================
   // 1. DATA TESTS
   // ==========================================
-  await runTest('DATA', 'Provider Fallback & Continuity Generation', async () => {
-    // Test that requesting candles never returns empty list even if remote APIs are offline
+  await runTest('DATA', 'Provider fallback preserves OHLC or read-only close-only market data', async () => {
+    // A connected Yahoo FX endpoint may supply genuine Close observations while
+    // its OHLC dimensions are collapsed. That is useful for charting but must not
+    // be converted into synthetic candles just to satisfy an older non-empty-list test.
     const res = await dataFeedEngine.fetchCandles('EUR/USD', 50);
-    if (!res.candles || res.candles.length < 20) {
-      throw new Error(`Expected at least 20 candles, got ${res.candles?.length || 0}`);
+    const hasUsableOhlc = Array.isArray(res.candles) && res.candles.length >= 20;
+    const hasUsableCloseOnly = Array.isArray(res.closeOnlySeries) && res.closeOnlySeries.length >= 20;
+    if (!hasUsableOhlc && !hasUsableCloseOnly) {
+      throw new Error(
+        `Expected at least 20 genuine OHLC candles or close-only observations, got OHLC=${res.candles?.length || 0}, close-only=${res.closeOnlySeries?.length || 0}.`
+      );
+    }
+    if (hasUsableCloseOnly && res.candles.some(candle => candle.source === 'synthetic')) {
+      throw new Error('A connected close-only quote feed must not trigger synthetic OHLC fallback.');
     }
     if (!res.source) {
       throw new Error('Missing active provider source attribution');

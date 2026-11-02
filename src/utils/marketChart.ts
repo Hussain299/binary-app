@@ -1,16 +1,61 @@
 import type { Candle } from '../types/index.js';
-import { isLegacyFabricatedYahooFlatCandle } from './yahooCandles.ts';
+import {
+  isCollapsedYahooQuoteCandleBatch,
+  isLegacyFabricatedYahooFlatCandle,
+} from './yahooCandles.ts';
 
 const TRUSTED_MARKET_SOURCES = new Set(['biquote', 'dukascopy', 'yahoo', 'imported']);
 
-/** Keep provider/imported observations separate from synthetic and known-fake legacy bars. */
+/** True when a Yahoo batch has the structure of sampled quotes, not OHLC bars. */
+export function isBatchCandleStructureValid(candles: Candle[]): boolean {
+  return !isCollapsedYahooQuoteCandleBatch(candles);
+}
+
+/**
+ * Remove known collapsed quote runs from stored history without discarding
+ * genuine Yahoo candles from other periods. A batch dominated by flat Yahoo
+ * records is excluded in full; in a long mixed cache, only flat runs of five
+ * or more consecutive M1 observations are removed.
+ */
 export function getTrustedMarketCandles(candles: Candle[]): Candle[] {
-  return candles
+  const sorted = candles
     .filter(candle =>
       TRUSTED_MARKET_SOURCES.has(candle.source) &&
       !isLegacyFabricatedYahooFlatCandle(candle)
     )
     .sort((a, b) => a.timestampMs - b.timestampMs);
+
+  if (isCollapsedYahooQuoteCandleBatch(sorted)) {
+    return sorted.filter(candle => candle.source !== 'yahoo');
+  }
+
+  const yahooRows = sorted.filter(candle => candle.source === 'yahoo');
+  const collapsedTimestamps = new Set<number>();
+  let flatRun: Candle[] = [];
+  const flushFlatRun = () => {
+    if (flatRun.length >= 5) {
+      for (const row of flatRun) collapsedTimestamps.add(row.timestampMs);
+    }
+    flatRun = [];
+  };
+
+  for (const candle of yahooRows) {
+    const previous = flatRun[flatRun.length - 1];
+    const continuesMinuteRun = !previous ||
+      (candle.timestampMs - previous.timestampMs > 0 &&
+       candle.timestampMs - previous.timestampMs <= 90_000);
+    if (candle.high === candle.low && continuesMinuteRun) {
+      flatRun.push(candle);
+    } else {
+      flushFlatRun();
+      if (candle.high === candle.low) flatRun.push(candle);
+    }
+  }
+  flushFlatRun();
+
+  return sorted.filter(candle =>
+    candle.source !== 'yahoo' || !collapsedTimestamps.has(candle.timestampMs)
+  );
 }
 
 export function getLatestObservedCandle(candles: Candle[]): Candle | null {
