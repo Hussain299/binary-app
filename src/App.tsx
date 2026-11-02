@@ -39,65 +39,79 @@ export default function App() {
   const [autopilotStatus, setAutopilotStatus] = useState<any>(null);
   const [activeNotification, setActiveNotification] = useState<AppNotification | null>(null);
   const notifiedIdsRef = React.useRef<Set<string>>(new Set());
+  const fetchInFlightRef = React.useRef<Promise<void> | null>(null);
+  const [isAutopilotChanging, setIsAutopilotChanging] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
 
   const fetchAllData = async () => {
-    try {
-      const [sigRes, histRes, revRes, genRes, healthRes, autoRes, autoStatusRes] = await Promise.all([
-        fetch('/api/signals').then(r => r.json()).catch(() => ({ signals: [] })),
-        fetch('/api/research/history').then(r => r.json()).catch(() => ({ experiments: [], generations: [] })),
-        fetch('/api/research/agents').then(r => r.json()).catch(() => ({ reviews: [] })),
-        fetch('/api/evolution/state').then(r => r.json()).catch(() => ({ generations: [] })),
-        fetch('/api/system/health').then(r => r.json()).catch(() => ({ providers: [] })),
-        fetch('/api/autopilot/logs').then(r => r.json()).catch(() => ({ logs: [] })),
-        fetch('/api/autopilot/status').then(r => r.json()).catch(() => null),
-      ]);
+    // Keep polling and manual refresh single-flight. This prevents stale snapshots
+    // without starving updates when a provider/API response takes longer than 3s.
+    if (fetchInFlightRef.current) return fetchInFlightRef.current;
 
-      if (sigRes?.signals) {
-        setSignals(sigRes.signals);
+    const request = (async () => {
+      try {
+        const [sigRes, histRes, revRes, genRes, healthRes, autoRes, autoStatusRes] = await Promise.all([
+          fetch('/api/signals').then(r => r.json()).catch(() => ({ signals: [] })),
+          fetch('/api/research/history').then(r => r.json()).catch(() => ({ experiments: [], generations: [] })),
+          fetch('/api/research/agents').then(r => r.json()).catch(() => ({ reviews: [] })),
+          fetch('/api/evolution/state').then(r => r.json()).catch(() => ({ generations: [] })),
+          fetch('/api/system/health').then(r => r.json()).catch(() => ({ providers: [] })),
+          fetch('/api/autopilot/logs').then(r => r.json()).catch(() => ({ logs: [] })),
+          fetch('/api/autopilot/status').then(r => r.json()).catch(() => null),
+        ]);
 
-        // Check for fresh signals generated within last 3 minutes (180s) to notify user
-        const nowMs = Date.now();
-        for (const sig of sigRes.signals) {
-          if (!notifiedIdsRef.current.has(sig.id)) {
-            notifiedIdsRef.current.add(sig.id);
-            const ageSec = Math.floor((nowMs - Date.parse(sig.predictionTimeUtc)) / 1000);
-            if (!sig.paperOnly && ageSec <= 180 && ['WAITING_FOR_ENTRY', 'ACTIVE'].includes(sig.lifecycleState)) {
-              // Play chime and show toast banner with 3-minute advance notice and IST timings
-              soundNotificationService.playSignalAlertSound();
-              soundNotificationService.sendBrowserNotification(
-                `🔔 3-Min Advance Signal: ${sig.symbol} ${sig.direction}`,
-                `Entry at ${sig.candleOpenTimeIst || '5M Open'} · Dynamic Expiry: ${sig.expiryMinutes}m`
-              );
-              setActiveNotification({
-                id: `notif_${sig.id}`,
-                signalId: sig.id,
-                symbol: sig.symbol,
-                direction: sig.direction,
-                title: `🔔 3-Min Advance Signal: ${sig.symbol} ${sig.direction}`,
-                message: `Scheduled entry at 5M candle open (${sig.candleOpenTimeIst}). Dynamic Expiry: ${sig.expiryMinutes} Min.`,
-                timestamp: sig.predictionTimeUtc,
-                triggerPrice: sig.triggerPrice,
-                expiryMinutes: sig.expiryMinutes,
-                read: false,
-                candleOpenTimeIst: sig.candleOpenTimeIst,
-                candleCloseTimeIst: sig.candleCloseTimeIst,
-                advanceNoticeText: '3-Minute Advance Signal Alert',
-              });
-              break;
+        if (sigRes?.signals) {
+          setSignals(sigRes.signals);
+
+          // Check for fresh signals generated within last 3 minutes (180s) to notify user.
+          const nowMs = Date.now();
+          for (const sig of sigRes.signals) {
+            if (!notifiedIdsRef.current.has(sig.id)) {
+              notifiedIdsRef.current.add(sig.id);
+              const ageSec = Math.floor((nowMs - Date.parse(sig.predictionTimeUtc)) / 1000);
+              if (!sig.paperOnly && ageSec <= 180 && ['WAITING_FOR_ENTRY', 'ACTIVE'].includes(sig.lifecycleState)) {
+                soundNotificationService.playSignalAlertSound();
+                soundNotificationService.sendBrowserNotification(
+                  `🔔 3-Min Advance Signal: ${sig.symbol} ${sig.direction}`,
+                  `Entry at ${sig.candleOpenTimeIst || '5M Open'} · Dynamic Expiry: ${sig.expiryMinutes}m`
+                );
+                setActiveNotification({
+                  id: `notif_${sig.id}`,
+                  signalId: sig.id,
+                  symbol: sig.symbol,
+                  direction: sig.direction,
+                  title: `🔔 3-Min Advance Signal: ${sig.symbol} ${sig.direction}`,
+                  message: `Scheduled entry at 5M candle open (${sig.candleOpenTimeIst}). Dynamic Expiry: ${sig.expiryMinutes} Min.`,
+                  timestamp: sig.predictionTimeUtc,
+                  triggerPrice: sig.triggerPrice,
+                  expiryMinutes: sig.expiryMinutes,
+                  read: false,
+                  candleOpenTimeIst: sig.candleOpenTimeIst,
+                  candleCloseTimeIst: sig.candleCloseTimeIst,
+                  advanceNoticeText: '3-Minute Advance Signal Alert',
+                });
+                break;
+              }
             }
           }
         }
+        if (histRes?.experiments) setExperiments(histRes.experiments);
+        if (revRes?.reviews) setReviews(revRes.reviews);
+        if (genRes?.generations) setGenerations(genRes.generations);
+        if (healthRes?.providers) setProviders(healthRes.providers);
+        if (autoRes?.logs) setAutopilotLogs(autoRes.logs);
+        if (autoStatusRes) setAutopilotStatus(autoStatusRes);
+      } catch (err) {
+        console.error('Failed to sync SignalForge data:', err);
       }
-      if (histRes?.experiments) setExperiments(histRes.experiments);
-      if (revRes?.reviews) setReviews(revRes.reviews);
-      if (genRes?.generations) setGenerations(genRes.generations);
-      if (healthRes?.providers) setProviders(healthRes.providers);
-      if (autoRes?.logs) setAutopilotLogs(autoRes.logs);
-      if (autoStatusRes) setAutopilotStatus(autoStatusRes);
-    } catch (err) {
-      console.error('Failed to sync SignalForge data:', err);
+    })();
+
+    fetchInFlightRef.current = request;
+    try {
+      await request;
+    } finally {
+      if (fetchInFlightRef.current === request) fetchInFlightRef.current = null;
     }
   };
 
@@ -118,6 +132,8 @@ export default function App() {
   };
 
   const handleAutopilotToggle = async () => {
+    if (isAutopilotChanging) return;
+    setIsAutopilotChanging(true);
     const currentlyRunning = Boolean(autopilotStatus?.schedulerStarted);
     const endpoint = currentlyRunning ? '/api/autopilot/stop' : '/api/autopilot/start';
     try {
@@ -128,6 +144,8 @@ export default function App() {
     } catch (error) {
       console.error('Autopilot control failed:', error);
       window.alert(error instanceof Error ? error.message : 'Autopilot control failed.');
+    } finally {
+      setIsAutopilotChanging(false);
     }
   };
 
@@ -171,6 +189,7 @@ export default function App() {
         onToggleSidebar={() => setIsMobileMenuOpen(prev => !prev)}
         isSidebarOpen={isMobileMenuOpen}
         autopilotStatus={autopilotStatus}
+        isAutopilotChanging={isAutopilotChanging}
         onToggleAutopilot={handleAutopilotToggle}
       />
 
