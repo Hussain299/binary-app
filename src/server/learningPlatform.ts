@@ -5,9 +5,9 @@
  * Research/paper-only: this module contains no broker integration.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import type { Candle, ForexSymbol, OpportunityHistoricalCandle, TradeOpportunity, VerificationTestResult } from '../types/index.js';
-import { db } from './db.js';
-import { calculateBinarySettlement } from './binarySettlement.js';
+import type { Candle, ForexSymbol, OpportunityHistoricalCandle, TradeOpportunity, VerificationTestResult } from '../types/index.ts';
+import { db } from './db.ts';
+import { calculateBinarySettlement } from './binarySettlement.ts';
 
 export type LearningStatus = 'PENDING' | 'RESOLVED' | 'INVALID_DATA';
 export type LearningDirectionOutcome = 'WIN' | 'LOSS' | 'SCRATCH';

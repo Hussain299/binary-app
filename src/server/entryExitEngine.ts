@@ -12,12 +12,12 @@ import {
   SignalDirection,
   SignalLifecycleEvent,
   SignalLifecycleState,
-} from '../types/index.js';
-import { db } from './db.js';
-import { getSessionFromTimestamp } from './dataFeeds.js';
-import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.js';
-import { isForexMarketOpenAt, isForexMarketIntervalOpen, isForexSignalScheduleValid } from './marketHours.js';
-import { ADVANCE_NOTICE_MS, CLOCK_ALIGNMENT_TOLERANCE_MS, MAX_DECISION_PROCESSING_DELAY_MS, M1_CANDLE_MS, getNextCandleOpenMs, isAlignedCandleOpen, TradingTimeframeMinutes } from './tradingClock.js';
+} from '../types/index.ts';
+import { db } from './db.ts';
+import { getSessionFromTimestamp } from './dataFeeds.ts';
+import { calculateBinarySettlement, DEFAULT_BINARY_PAYOUT_PERCENT } from './binarySettlement.ts';
+import { isForexMarketOpenAt, isForexMarketIntervalOpen, isForexSignalScheduleValid } from './marketHours.ts';
+import { ADVANCE_NOTICE_MS, CLOCK_ALIGNMENT_TOLERANCE_MS, MAX_DECISION_PROCESSING_DELAY_MS, M1_CANDLE_MS, getNextCandleOpenMs, isAlignedCandleOpen, TradingTimeframeMinutes } from './tradingClock.ts';
 
 export interface SignalCreationParams {
   symbol: ForexSymbol;
