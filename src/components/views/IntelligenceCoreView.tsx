@@ -101,7 +101,7 @@ export const IntelligenceCoreView: React.FC = () => {
             ['Resolved forward outcomes',d?.memory.resolvedPredictions],
             ['Pending predictions',d?.memory.pendingPredictions],
             ['Invalidated data records',d?.memory.invalidPredictions],
-            ['Immutable learning events',d?.memory.events],
+            ['Recent learning events',d?.memory.recentLearningEvents],
           ].map(([label,value])=><div key={String(label)} className="sf-intel-row"><span>{label}</span><b>{value ?? '—'}</b></div>)}
         </div>
         <div className="sf-intel-section">
