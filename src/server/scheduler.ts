@@ -382,6 +382,24 @@ export class AutonomousScheduler {
    * A pair is eligible only with 60k usable new M1 bars since its last inspected
    * holdout, so a failed or repeated batch cannot silently reuse old outcomes.
    */
+  /**
+   * Prevent a manual UI-triggered candidate search from running beside the
+   * autonomous fair queue. Both use the same heavyweight engine and holdout
+   * ledger, so concurrent dispatch would break the single-worker resource guard.
+   */
+  public canStartManualResearchBatch(): { allowed: boolean; reason?: string } {
+    const queue = db.getAutonomousResearchQueueState();
+    if (this.researchCoordinatorRunning || researchEngine.isEvolutionBatchRunning() || queue.currentSymbol) {
+      return {
+        allowed: false,
+        reason: queue.currentSymbol
+          ? `The autonomous research queue is currently researching ${queue.currentSymbol}.`
+          : 'The autonomous research worker is already active.',
+      };
+    }
+    return { allowed: true };
+  }
+
   private async checkAutonomousEvolutionResearch(): Promise<void> {
     if (this.researchCoordinatorRunning || researchEngine.isEvolutionBatchRunning()) return;
     this.researchCoordinatorRunning = true;
