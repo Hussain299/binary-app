@@ -6,7 +6,12 @@
 
 import type { Candle, ForexSymbol, ProviderHealth } from '../types/index.ts';
 import { db } from './db.ts';
-import { isLegacyFabricatedYahooFlatCandle, normalizeYahooChartCandles, type YahooCloseObservation } from '../utils/yahooCandles.ts';
+import {
+  isCollapsedYahooQuoteCandleBatch,
+  isLegacyFabricatedYahooFlatCandle,
+  normalizeYahooChartCandles,
+  type YahooCloseObservation,
+} from '../utils/yahooCandles.ts';
 import { getForexMarketState, isForexMarketOpenAt, getReportingSessionFromTimestamp } from './marketHours.ts';
 
 interface RawCandle {
@@ -53,12 +58,28 @@ export class DataFeedEngine {
       const cachedRealCandles = db.getCandles(symbol, limit).filter(candle =>
         ['biquote', 'dukascopy', 'yahoo', 'imported'].includes(candle.source)
       );
-      const candles = this.validateAndDeduplicate(cachedRealCandles);
+      const cachedYahooIsCollapsed = isCollapsedYahooQuoteCandleBatch(cachedRealCandles);
+      const closeOnlySeries: YahooCloseObservation[] = cachedYahooIsCollapsed
+        ? cachedRealCandles
+            .filter(candle => candle.source === 'yahoo')
+            .map(candle => ({
+              timestamp: candle.timestamp,
+              timestampMs: candle.timestampMs,
+              close: candle.close,
+              source: 'yahoo-close-only' as const,
+            }))
+        : [];
+      const candleRows = cachedYahooIsCollapsed
+        ? cachedRealCandles.filter(candle => candle.source !== 'yahoo')
+        : cachedRealCandles;
+      const candles = this.validateAndDeduplicate(candleRows);
       return {
         candles,
-        source: 'market_closed',
-        qualityScore: candles.length ? this.calculateQualityScore(candles) : 0,
-        closeOnlySeries: [],
+        source: closeOnlySeries.length > 0 ? 'market_closed_close_only' : 'market_closed',
+        qualityScore: closeOnlySeries.length > 0 && candles.length === 0
+          ? 40
+          : candles.length ? this.calculateQualityScore(candles) : 0,
+        closeOnlySeries,
       };
     }
 
@@ -169,25 +190,11 @@ export class DataFeedEngine {
             candles = normalized.candles;
             closeOnlySeries = normalized.closeOnlyObservations;
 
-            if (candles.length >= 2) {
-              activeSource = 'yahoo';
-              const isDegraded = normalized.rejectedRows > 0;
-              db.updateFeedHealth({
-                provider: 'yahoo',
-                symbol,
-                status: isDegraded ? 'DEGRADED' : 'ONLINE',
-                latencyMs: Date.now() - start,
-                lastSuccess: new Date().toISOString(),
-                consecutiveFailures: 0,
-                attribution: 'Yahoo Finance Chart Feed (complete OHLC rows only)',
-                errorMessage: isDegraded
-                  ? `Rejected ${normalized.rejectedRows}/${normalized.inputRows} incomplete or invalid OHLC rows; ${normalized.missingVolumeRows} rows had no reported volume (stored as 0, not estimated).`
-                  : undefined,
-              });
-            } else {
-              // Do not label a close-only/invalid response as an online candle feed.
+            if (normalized.isCollapsedQuoteSeries) {
+              // Yahoo supplied quote samples with collapsed OHLC dimensions.
+              // Preserve Close for the line chart, but never expose these rows as candles.
               candles = [];
-              activeSource = closeOnlySeries.length >= 2 ? 'yahoo-close-only' : 'none';
+              activeSource = 'yahoo-close-only';
               db.updateFeedHealth({
                 provider: 'yahoo',
                 symbol,
@@ -195,8 +202,38 @@ export class DataFeedEngine {
                 latencyMs: Date.now() - start,
                 lastSuccess: new Date().toISOString(),
                 consecutiveFailures: 0,
-                attribution: 'Yahoo Finance Chart Feed (close-only observations; OHLC unavailable)',
-                errorMessage: `Yahoo returned ${normalized.inputRows} rows but only ${normalized.candles.length} complete valid OHLC candles. ${closeOnlySeries.length} close-price observations are retained for a read-only line chart; they are not trading candles and cannot create signals.`,
+                attribution: 'Yahoo Finance (collapsed OHLC quote feed; close-only)',
+                errorMessage: `Detected a collapsed Yahoo FX quote batch: ${normalized.zeroRangeRows}/${normalized.candles.length + normalized.closeOnlyObservations.length} records have High=Low. ${closeOnlySeries.length} Close observations are display-only and ineligible for candlestick strategies.`,
+              });
+            } else if (candles.length >= 2) {
+              activeSource = 'yahoo';
+              const isDegraded = normalized.rejectedRows > 0 || normalized.missingVolumeRows > 0;
+              db.updateFeedHealth({
+                provider: 'yahoo',
+                symbol,
+                status: isDegraded ? 'DEGRADED' : 'ONLINE',
+                latencyMs: Date.now() - start,
+                lastSuccess: new Date().toISOString(),
+                consecutiveFailures: 0,
+                attribution: 'Yahoo Finance Chart Feed (validated OHLC rows)',
+                errorMessage: isDegraded
+                  ? `Rejected ${normalized.rejectedRows}/${normalized.inputRows} incomplete rows; ${normalized.missingVolumeRows} rows had unavailable spot-FX volume. Volume is not estimated.`
+                  : undefined,
+              });
+            } else {
+              // Preserve close observations even when a response has too few full
+              // candles for a series. Do not claim an online candle feed.
+              candles = [];
+              activeSource = closeOnlySeries.length > 0 ? 'yahoo-close-only' : 'none';
+              db.updateFeedHealth({
+                provider: 'yahoo',
+                symbol,
+                status: 'DEGRADED',
+                latencyMs: Date.now() - start,
+                lastSuccess: new Date().toISOString(),
+                consecutiveFailures: 0,
+                attribution: 'Yahoo Finance Chart Feed (OHLC unavailable or insufficient)',
+                errorMessage: `Yahoo returned ${normalized.inputRows} rows, ${normalized.candles.length} complete OHLC candles, and ${closeOnlySeries.length} close-only observations. Close-only values are display-only and cannot create signals.`,
               });
             }
           }
@@ -216,7 +253,7 @@ export class DataFeedEngine {
     }
 
     // 4. If all public endpoints fail or are closed (weekend/rate limit), use realistic high-fidelity continuity generator
-    if (candles.length === 0) {
+    if (candles.length === 0 && closeOnlySeries.length === 0) {
       const stored = db.getCandles(symbol, limit);
       if (stored.length > 0) {
         candles = this.extendFromStored(symbol, stored, limit);
@@ -225,22 +262,27 @@ export class DataFeedEngine {
         candles = this.generateRealisticHistoricalCandles(symbol, limit);
         if (activeSource === 'none') activeSource = 'synthetic';
       }
-    } else {
-      // Ensure returned API candles extend up to current live time
+    } else if (candles.length > 0) {
+      // Ensure returned API candles extend up to current live time.
       candles = this.bridgeToCurrentTime(symbol, candles, limit);
     }
 
     // Audit quality, sort chronologically, remove duplicates
     const validated = this.validateAndDeduplicate(candles);
-    const qualityScore = this.calculateQualityScore(validated);
+    const qualityScore = closeOnlySeries.length > 0 && validated.length === 0
+      ? 40
+      : this.calculateQualityScore(validated);
 
-    // Save to persistent database
-    db.storeCandles(symbol, validated);
+    // Close-only points are display-only and are deliberately not stored in
+    // the OHLC candle table or made available to the signal engine.
+    if (validated.length > 0) db.storeCandles(symbol, validated);
 
     const containsSynthetic = validated.some(candle => candle.source === 'synthetic');
-    const reportedSource = containsSynthetic
-      ? (activeSource === 'synthetic' ? 'synthetic' : `${activeSource}+synthetic`)
-      : activeSource;
+    const reportedSource = closeOnlySeries.length > 0 && validated.length === 0
+      ? 'yahoo-close-only'
+      : containsSynthetic
+        ? (activeSource === 'synthetic' ? 'synthetic' : `${activeSource}+synthetic`)
+        : activeSource;
     return {
       candles: validated,
       source: reportedSource,
