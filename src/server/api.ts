@@ -866,6 +866,63 @@ apiRouter.post('/learning/champion', (req: Request, res: Response) => {
   }
 });
 
+apiRouter.get('/intelligence/overview', (_req: Request, res: Response) => {
+  try {
+    const scheduler = autonomousScheduler.getAutopilotStatus();
+    const regimes = db.getMarketRegimes();
+    const signals = db.getSignals();
+    const experiments = db.getExperiments();
+    const generations = db.getGenerations();
+    const reviews = db.getReviews();
+    const autopsies = db.getLossAutopsies();
+    const opportunities = db.getOpportunities(3000);
+    const learning = learningPlatform.getBoard(150);
+    const regimeCounts = regimes.reduce((counts: Record<string, number>, item) => {
+      counts[item.regime] = (counts[item.regime] || 0) + 1;
+      return counts;
+    }, {});
+    const summary = learning.summary;
+    return res.json({
+      generatedAt: new Date().toISOString(),
+      researchOnly: true,
+      brokerExecutionEnabled: false,
+      scheduler,
+      worldModel: {
+        regimeSnapshots: regimes.length,
+        regimeCounts,
+        assessedPairs: regimes.map(item => ({ symbol: item.symbol, regime: item.regime, session: item.session, assessedAt: item.assessedAt, observationCount: item.observationCount, directionalEfficiency: item.directionalEfficiency, atrRatio: item.atrRatio })),
+      },
+      memory: {
+        episodicExperiences: db.getEpisodicMemoryCount(),
+        lossAutopsies: autopsies.length,
+        forwardPredictions: summary.predictions,
+        resolvedPredictions: summary.resolved,
+        pendingPredictions: summary.pending,
+        invalidPredictions: summary.invalidData,
+        recentLearningEvents: learning.latestEvents.length,
+      },
+      research: {
+        opportunities: opportunities.length,
+        experiments: experiments.length,
+        generations: generations.length,
+        agentReviews: reviews.length,
+        signalsObserved: signals.length,
+        latestExperimentAt: experiments[0]?.createdAt || null,
+        latestGenerationAt: (generations[0] as any)?.timestamp || (generations[0] as any)?.createdAt || null,
+      },
+      governance: {
+        immutablePredictionLedger: true,
+        exactCandleSettlement: true,
+        holdoutIsolation: true,
+        humanApprovedLearning: true,
+        paperOnly: true,
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Intelligence overview unavailable.' });
+  }
+});
+
 apiRouter.get('/autopilot/status', (_req: Request, res: Response) => {
   const scheduler = autonomousScheduler.getAutopilotStatus();
   res.json({

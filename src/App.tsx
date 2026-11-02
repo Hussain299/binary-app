@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header.tsx';
 import { Sidebar, ViewTab } from './components/Sidebar.tsx';
 import { DailyAuditView } from './components/views/DailyAuditView.tsx';
+import { IntelligenceCoreView } from './components/views/IntelligenceCoreView.tsx';
 import { OpportunityResearchView } from './components/views/OpportunityResearchView.tsx';
 import { LearningWorkbenchView } from './components/views/LearningWorkbenchView.tsx';
 import { MarketExplorerView } from './components/views/MarketExplorerView.tsx';
@@ -173,6 +174,7 @@ export default function App() {
         {/* Dynamic View Viewport */}
         <main className="app-main min-w-0 flex flex-1 flex-col bg-transparent">
           <div key={activeTab} className="sf-view-stage">
+          {activeTab === 'intelligence' && <IntelligenceCoreView />}
           {activeTab === 'terminal' && (
             <DailyAuditView
               signals={signals}

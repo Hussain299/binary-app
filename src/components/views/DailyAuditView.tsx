@@ -273,10 +273,10 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
       </div>
 
       {autopilotStatus && (
-        <section className="rounded-xl border border-white/[.08] bg-[#0c151e]/85 px-4 py-3" aria-label="Autopilot health">
+        <section className="sf-intelligence-panel px-4 py-4 sm:px-5" aria-label="Autonomous intelligence system status">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[9px] font-bold uppercase tracking-[.13em] text-neutral-500">Signal engine</span>
+              <span className="text-[9px] font-bold uppercase tracking-[.17em] text-violet-200/75">SignalForge intelligence core</span>
               <span className={'rounded-full border px-2 py-1 text-[9px] font-bold ' + (autopilotStatus.schedulerStarted ? 'border-emerald-400/20 bg-emerald-400/[.07] text-emerald-200' : 'border-rose-400/20 bg-rose-400/[.07] text-rose-200')}>
                 {autopilotStatus.schedulerStarted ? 'SCHEDULER RUNNING' : 'SCHEDULER STOPPED'}
               </span>
@@ -288,7 +288,18 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
               Last scan {formatIST(autopilotStatus.lastPulseCompletedAt, true)}
             </span>
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-5">
+          <div className="mt-4 mb-3 flex flex-wrap items-center gap-2" aria-label="Research intelligence cycle">
+            {['Observe','Model','Challenge','Experiment','Learn'].map((step,index) => (
+              <React.Fragment key={step}>
+                <div className="sf-intelligence-node flex items-center gap-2">
+                  <span className="node-dot" />
+                  <span className="text-[9px] font-semibold tracking-wide text-slate-200">{step}</span>
+                </div>
+                {index < 4 && <span className="sf-intelligence-flow hidden min-w-[10px] sm:block" />}
+              </React.Fragment>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-5">
             <div><span className="block text-[8px] uppercase tracking-wide text-neutral-600">Fresh pairs</span><strong className="mt-1 block text-sm tabular-nums text-neutral-100">{autopilotStatus.freshPairs ?? 0}<span className="ml-1 text-[9px] font-normal text-neutral-500">/ {autopilotStatus.pairsMonitored ?? 0}</span></strong></div>
             <div><span className="block text-[8px] uppercase tracking-wide text-neutral-600">Open entry slots</span><strong className="mt-1 block text-sm tabular-nums text-neutral-100">{autopilotStatus.openSignalsCount ?? 0}<span className="ml-1 text-[9px] font-normal text-neutral-500">/ {autopilotStatus.maxConcurrentOpenSignals ?? 4}</span></strong></div>
             <div><span className="block text-[8px] uppercase tracking-wide text-neutral-600">Awaiting settlement</span><strong className="mt-1 block text-sm tabular-nums text-amber-200">{autopilotStatus.verifyingSignalsCount ?? 0}</strong></div>
