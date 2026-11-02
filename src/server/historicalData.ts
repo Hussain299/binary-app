@@ -199,16 +199,95 @@ class HistoricalDataStore {
     };
   }
 
+  private listMonths(symbol: ForexSymbol): string[] {
+    if (!fs.existsSync(ROOT)) return [];
+    const prefix = this.prefixFor(symbol);
+    return fs.readdirSync(ROOT)
+      .filter(name => name.startsWith(prefix) && /^\d{6}\.json$/.test(name.slice(prefix.length)))
+      .map(name => name.slice(prefix.length, -5))
+      .sort();
+  }
+
+  private isResearchUsable(candle: Candle): boolean {
+    return ALLOWED_SOURCES.has(candle.source) &&
+      !(candle.volume === 0 &&
+        candle.open === candle.high &&
+        candle.high === candle.low &&
+        candle.low === candle.close);
+  }
+
+  /**
+   * Stream one month partition at a time. The old implementation assembled up
+   * to 1.9m candles just to paint the readiness dashboard, creating avoidable
+   * memory pressure across a 20-pair research universe.
+   */
   public getStats(symbol: ForexSymbol) {
-    const candles = this.getCandles(symbol);
+    const months = this.listMonths(symbol);
+    let count = 0;
+    let usableM1Count = 0;
+    let zeroVolumeFlatRows = 0;
+    let minuteSteps = 0;
+    let previousUsableTimestamp: number | null = null;
+    let firstTimestamp: string | null = null;
+    let lastTimestamp: string | null = null;
+    const sources = new Set<string>();
+    let monthsStored = 0;
+
+    for (const month of months) {
+      const rows = this.readMonth(symbol, month)
+        .sort((a, b) => a.timestampMs - b.timestampMs);
+      if (rows.length === 0) continue;
+      monthsStored++;
+      count += rows.length;
+      for (const candle of rows) {
+        sources.add(candle.source);
+        if (!firstTimestamp || candle.timestampMs < Date.parse(firstTimestamp)) {
+          firstTimestamp = candle.timestamp;
+        }
+        if (!lastTimestamp || candle.timestampMs > Date.parse(lastTimestamp)) {
+          lastTimestamp = candle.timestamp;
+        }
+        if (!this.isResearchUsable(candle)) {
+          if (candle.volume === 0 &&
+              candle.open === candle.high &&
+              candle.high === candle.low &&
+              candle.low === candle.close) {
+            zeroVolumeFlatRows++;
+          }
+          continue;
+        }
+        usableM1Count++;
+        if (previousUsableTimestamp !== null &&
+            Math.abs((candle.timestampMs - previousUsableTimestamp) - 60_000) <= 5_000) {
+          minuteSteps++;
+        }
+        previousUsableTimestamp = candle.timestampMs;
+      }
+    }
+
     return {
       symbol,
-      count: candles.length,
-      firstTimestamp: candles[0]?.timestamp ?? null,
-      lastTimestamp: candles[candles.length - 1]?.timestamp ?? null,
-      monthsStored: candles.length ? new Set(candles.map(c => c.timestamp.slice(0, 7))).size : 0,
-      sources: [...new Set(candles.map(c => c.source))],
+      count,
+      usableM1Count,
+      zeroVolumeFlatRows,
+      continuityRatio: minuteSteps / Math.max(1, usableM1Count - 1),
+      firstTimestamp,
+      lastTimestamp,
+      monthsStored,
+      sources: [...sources].sort(),
     };
+  }
+
+  /** Count only usable M1 observations newer than an already inspected boundary. */
+  public countUsableCandlesSince(symbol: ForexSymbol, timestampMs: number): number {
+    if (!Number.isFinite(timestampMs)) return 0;
+    let count = 0;
+    for (const month of this.listMonths(symbol)) {
+      for (const candle of this.readMonth(symbol, month)) {
+        if (candle.timestampMs >= timestampMs && this.isResearchUsable(candle)) count++;
+      }
+    }
+    return count;
   }
 }
 
