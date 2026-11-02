@@ -1234,6 +1234,93 @@ export async function runAllVerificationTests(): Promise<{
     }
   });
 
+  await runTest('ML', 'Only strategies validated under fixed M5-entry dynamic-expiry contract can qualify', () => {
+    const searchBatchId = `fixed_m5_contract_test_${Date.now()}`;
+    const candidate = researchEngine.synthesizeInfiniteNovelStrategy(
+      [],
+      'EUR/USD',
+      999,
+      [],
+      searchBatchId,
+      false,
+      createSeededRandom(searchBatchId),
+      {
+        researchSeed: 'fixed-m5-entry-expiry-research-seed',
+        datasetFingerprint: 'sha256:fixed-m5-entry-expiry-test',
+      }
+    );
+    const adjustedTestLower = wilsonLowerBound(300, 400, 2.576);
+    const validMetrics = {
+      trainSampleSize: 200,
+      trainScoredSampleSize: 200,
+      validationSampleSize: 200,
+      validationScoredSampleSize: 200,
+      trainWinRate: 0.72,
+      validationWinRate: 0.75,
+      testWinRate: 0.75,
+      testAccuracy: 0.75,
+      testSampleSize: 400,
+      testScoredSampleSize: 400,
+      testWins: 300,
+      testLosses: 100,
+      binaryPayoutPct: 80,
+      excludedZeroVolumeFlatCandles: 0,
+      expectedValueUnits: 0.35,
+      profitFactor: 1.35,
+      confidenceInterval95: [0.68, 0.81] as [number, number],
+      multipleTestingLowerBound: adjustedTestLower,
+      testBlockWinRates: [0.72, 0.74, 0.75],
+      trainPeriod: { start: '2026-01-01T00:00:00.000Z', end: '2026-02-01T00:00:00.000Z' },
+      validationPeriod: { start: '2026-02-02T00:00:00.000Z', end: '2026-02-20T00:00:00.000Z' },
+      testPeriod: { start: '2026-02-22T00:00:00.000Z', end: '2026-03-30T00:00:00.000Z' },
+    };
+
+    Object.assign(candidate, {
+      status: 'PAPER_TRADING',
+      accuracyStatus: 'BACKTESTED',
+      verifiedAccuracy: 0.75,
+      sampleCount: 400,
+      backtestMetrics: validMetrics,
+    });
+    if (candidate.featureSchemaVersion !== FEATURE_SCHEMA_VERSION ||
+        candidate.researchEngineVersion !== RESEARCH_ENGINE_VERSION) {
+      throw new Error('A newly researched candidate must carry the current execution-contract version.');
+    }
+
+    const oldEngine = {
+      ...candidate,
+      id: `${candidate.id}_old_engine`,
+      researchEngineVersion: 'research-engine-v1',
+    };
+    const oldFeatures = {
+      ...candidate,
+      id: `${candidate.id}_old_features`,
+      featureSchemaVersion: 'causal-market-features-v0',
+    };
+    db.addSynthesizedStrategy(candidate);
+    db.addSynthesizedStrategy(oldEngine);
+    db.addSynthesizedStrategy(oldFeatures);
+
+    const eligibleIds = new Set(db.getPaperTradingStrategies().map(gene => gene.id));
+    if (!eligibleIds.has(candidate.id)) {
+      throw new Error('A fully approved strategy evaluated under the current M5-entry contract should remain eligible.');
+    }
+    if (eligibleIds.has(oldEngine.id) || eligibleIds.has(oldFeatures.id)) {
+      throw new Error('Old entry-contract historical results must not qualify under the new M5-entry execution rules.');
+    }
+
+    const diagnostics = db.getStrategyEligibilityDiagnostics();
+    if ((diagnostics.historicalFailureCounts.RESEARCH_CONTRACT_VERSION_MISMATCH || 0) < 1 ||
+        (diagnostics.historicalFailureCounts.FEATURE_SCHEMA_VERSION_MISMATCH || 0) < 1) {
+      throw new Error('The old contract and feature-schema exclusions must be visible in strategy diagnostics.');
+    }
+
+    for (const gene of [candidate, oldEngine, oldFeatures]) {
+      gene.status = 'REJECTED';
+      db.updateSynthesizedStrategy(gene);
+    }
+  });
+
   await runTest('RESEARCH', 'Trade outcomes cannot cross chronological partition boundaries', () => {
     const start = Date.parse('2026-01-01T00:00:00.000Z');
     const end = start + 10 * 60_000;
