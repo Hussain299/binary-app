@@ -21,7 +21,7 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
   });
 
   return (
-    <div className="flex min-w-0 flex-col bg-neutral-950">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-neutral-950">
       {/* Subheader Toolbar */}
       <div className="h-12 border-b border-neutral-800 px-6 flex items-center justify-between shrink-0 bg-neutral-900/30">
         <div className="flex items-center gap-3">
@@ -79,7 +79,7 @@ export const ExperimentHistoryView: React.FC<ExperimentHistoryViewProps> = ({ ex
           <strong className="text-amber-200">Legacy research warning:</strong> single-rule runs from the previous workflow may have inspected overlapping final-test windows. Their stored percentages are historical diagnostics only, not current strategy-approval evidence. New candidate tests are restricted to preselected batches and non-reused holdout periods.
         </div>
       </div>
-      <div className="p-6">
+      <div className="flex-1 overflow-y-auto p-6">
         {filtered.length === 0 ? (
           <div className="h-64 flex flex-col items-center justify-center text-center text-neutral-500 font-mono text-xs">
             <History className="w-8 h-8 text-neutral-600 mb-2" />

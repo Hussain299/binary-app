@@ -1,10 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header.tsx';
 import { Sidebar, ViewTab } from './components/Sidebar.tsx';
-import { DailyAuditView } from './components/views/DailyAuditView.tsx';
-import { IntelligenceCoreView } from './components/views/IntelligenceCoreView.tsx';
-import { OpportunityResearchView } from './components/views/OpportunityResearchView.tsx';
-import { LearningWorkbenchView } from './components/views/LearningWorkbenchView.tsx';
+import { SignalTerminalView } from './components/views/SignalTerminalView.tsx';
 import { MarketExplorerView } from './components/views/MarketExplorerView.tsx';
 import { ModelLabView } from './components/views/ModelLabView.tsx';
 import { StrategyDiscoveryView } from './components/views/StrategyDiscoveryView.tsx';
@@ -15,7 +12,7 @@ import { EntryExitMonitorView } from './components/views/EntryExitMonitorView.ts
 import { PerformanceAnalyticsView } from './components/views/PerformanceAnalyticsView.tsx';
 import { SystemHealthView } from './components/views/SystemHealthView.tsx';
 import { ConfigurationView } from './components/views/ConfigurationView.tsx';
-import { LineChart, Menu, Zap, Lightbulb, BrainCircuit } from 'lucide-react';
+import { LineChart, Menu, Zap, Lightbulb } from 'lucide-react';
 import { soundNotificationService } from './utils/notifications.ts';
 import { NotificationBanner } from './components/NotificationBanner.tsx';
 import {
@@ -152,6 +149,10 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
+  const activeSignalsCount = signals.filter(s =>
+    ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE'].includes(s.lifecycleState)
+  ).length;
+
   return (
     <div className="app-shell sf-app-shell relative flex min-h-[100dvh] w-full min-w-0 flex-col text-neutral-100 antialiased font-sans">
       {/* Real-time In-App Signal Alert Banner */}
@@ -178,7 +179,8 @@ export default function App() {
         <Sidebar
           activeTab={activeTab}
           onTabChange={setActiveTab}
-            totalExperiments={experiments.length}
+          activeSignalsCount={activeSignalsCount}
+          totalExperiments={experiments.length}
           isOpen={isMobileMenuOpen}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={() => setIsSidebarCollapsed(prev => !prev)}
@@ -188,17 +190,14 @@ export default function App() {
         {/* Dynamic View Viewport */}
         <main className="app-main min-w-0 flex flex-1 flex-col bg-transparent">
           <div key={activeTab} className="sf-view-stage">
-          {activeTab === 'intelligence' && <IntelligenceCoreView />}
           {activeTab === 'terminal' && (
-            <DailyAuditView
+            <SignalTerminalView
               signals={signals}
+              autopilotLogs={autopilotLogs}
               onEvaluateSignals={handleEvaluateSignals}
               isEvaluating={isEvaluating}
-              autopilotStatus={autopilotStatus}
             />
           )}
-          {activeTab === 'opportunities' && <OpportunityResearchView />}
-          {activeTab === 'learning' && <LearningWorkbenchView />}
           {activeTab === 'explorer' && <MarketExplorerView providers={providers} />}
           {activeTab === 'modellab' && (
             <ModelLabView
@@ -236,20 +235,7 @@ export default function App() {
           }`}
         >
           <Zap className="w-4 h-4" />
-          <span className="text-[10px]">Audit</span>
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveTab('opportunities');
-            setIsMobileMenuOpen(false);
-          }}
-          className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 transition-colors ${
-            activeTab === 'opportunities' ? 'text-emerald-400 font-bold' : 'text-neutral-400 hover:text-neutral-200'
-          }`}
-        >
-          <BrainCircuit className="w-4 h-4" />
-          <span className="text-[10px]">Ideas</span>
+          <span className="text-[10px]">Signals</span>
         </button>
 
         <button

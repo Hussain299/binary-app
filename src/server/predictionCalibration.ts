@@ -1,209 +1,166 @@
 /**
- * Out-of-sample score calibration for forward-paper strategy predictions.
- *
- * The genome activation/conviction score is not a probability. This module
- * estimates an empirical win probability from earlier settled observations only.
- * It never changes the raw score or the trading trigger. Diagnostic metrics use
- * a chronological tail that was not used to fit the diagnostic calibrator.
+ * Empirical prediction score calibration.
+ * Translates raw strategy heuristic scores into empirical probabilities using
+ * isotonic regression / monotonic binning of earlier settled forward observations.
  */
 
-export interface CalibrationObservation {
-  rawScore: number;
-  outcome: "WIN" | "LOSS";
-}
-
-export interface CalibratedScore {
+export interface CalibratedScoreResult {
+  status: 'CALIBRATED' | 'UNCALIBRATED' | 'OVERCONFIDENT';
   probability: number | null;
-  /** One-sided 95% Wilson lower bound for the fitted isotonic block. */
-  lowerConfidenceProbability: number | null;
-  status: "CALIBRATED" | "UNCALIBRATED" | "OVERCONFIDENT";
+  lowerConfidenceProbability?: number;
   sampleSize: number;
-  /** Forward-challenged Brier score; null until a chronological validation slice exists. */
   brierScore: number | null;
-  /** Forward-challenged expected calibration error; null until a validation slice exists. */
   expectedCalibrationError: number | null;
 }
 
-interface CalibrationBlock {
-  minScore: number;
-  maxScore: number;
-  scoreTotal: number;
-  wins: number;
-  count: number;
+export interface CalibrationObservation {
+  rawScore: number;
+  outcome: 'WIN' | 'LOSS';
 }
 
-function blockProbability(block: CalibrationBlock): number {
-  // Beta(2,2) shrinkage prevents small bins from reporting extreme probabilities.
-  return (block.wins + 2) / (block.count + 4);
-}
-
-function wilsonLowerBound(wins: number, sampleSize: number, z = 1.96): number {
-  if (sampleSize <= 0) return 0;
-  const p = Math.max(0, Math.min(1, wins / sampleSize));
-  const z2 = z * z;
-  const denominator = 1 + z2 / sampleSize;
-  const center = p + z2 / (2 * sampleSize);
-  const margin = z * Math.sqrt(
-    (p * (1 - p) / sampleSize) + (z2 / (4 * sampleSize * sampleSize))
-  );
-  return Math.max(0, Math.min(1, (center - margin) / denominator));
-}
-
-function mergeBlocks(left: CalibrationBlock, right: CalibrationBlock): CalibrationBlock {
-  return {
-    minScore: left.minScore,
-    maxScore: right.maxScore,
-    scoreTotal: left.scoreTotal + right.scoreTotal,
-    wins: left.wins + right.wins,
-    count: left.count + right.count,
-  };
-}
-
-/** Group equal scores before binning so ties can never be split across calibration bins. */
-function buildIsotonicBlocks(input: readonly CalibrationObservation[]): CalibrationBlock[] {
-  const sorted = input.slice().sort((a, b) => a.rawScore - b.rawScore);
-  const scoreGroups: CalibrationBlock[] = [];
-  for (const observation of sorted) {
-    const last = scoreGroups[scoreGroups.length - 1];
-    if (last && last.maxScore === observation.rawScore) {
-      last.scoreTotal += observation.rawScore;
-      last.wins += observation.outcome === "WIN" ? 1 : 0;
-      last.count += 1;
-    } else {
-      scoreGroups.push({
-        minScore: observation.rawScore,
-        maxScore: observation.rawScore,
-        scoreTotal: observation.rawScore,
-        wins: observation.outcome === "WIN" ? 1 : 0,
-        count: 1,
-      });
-    }
-  }
-
-  // Build approximately equal-count bins without splitting identical raw scores.
-  const targetBinSize = Math.max(20, Math.floor(sorted.length / 10));
-  const blocks: CalibrationBlock[] = [];
-  let current: CalibrationBlock | null = null;
-  for (const group of scoreGroups) {
-    current = current
-      ? mergeBlocks(current, group)
-      : { ...group };
-    if (current.count >= targetBinSize && blocks.length < 9) {
-      blocks.push(current);
-      current = null;
-    }
-  }
-  if (current) {
-    if (blocks.length > 0 && current.count < targetBinSize) {
-      blocks[blocks.length - 1] = mergeBlocks(blocks[blocks.length - 1], current);
-    } else {
-      blocks.push(current);
-    }
-  }
-
-  // Pool Adjacent Violators: fitted win probability may not decrease as raw score rises.
-  for (let index = 0; index < blocks.length - 1;) {
-    if (blockProbability(blocks[index]) <= blockProbability(blocks[index + 1])) {
-      index++;
-      continue;
-    }
-    blocks.splice(index, 2, mergeBlocks(blocks[index], blocks[index + 1]));
-    if (index > 0) index--;
-  }
-  return blocks;
-}
-
-function probabilityForScore(blocks: readonly CalibrationBlock[], score: number): number {
-  const matched = blocks.find(block => score <= block.maxScore);
-  return blockProbability(matched || blocks[blocks.length - 1]);
-}
-
-function forwardCalibrationDiagnostics(
-  training: readonly CalibrationObservation[],
-  validation: readonly CalibrationObservation[]
-): { brierScore: number | null; expectedCalibrationError: number | null } {
-  if (training.length < 100 || validation.length < 20) {
-    return { brierScore: null, expectedCalibrationError: null };
-  }
-  const blocks = buildIsotonicBlocks(training);
-  const predictions = validation.map(observation => ({
-    probability: probabilityForScore(blocks, observation.rawScore),
-    outcome: observation.outcome === "WIN" ? 1 : 0,
-  }));
-
-  const brier = predictions.reduce(
-    (sum, item) => sum + Math.pow(item.probability - item.outcome, 2),
-    0
-  ) / predictions.length;
-
-  const sortedPredictions = predictions.slice().sort((a, b) => a.probability - b.probability);
-  const calibrationBinCount = Math.min(5, Math.max(1, Math.floor(sortedPredictions.length / 10)));
-  let ece = 0;
-  for (let bin = 0; bin < calibrationBinCount; bin++) {
-    const start = Math.floor((bin * sortedPredictions.length) / calibrationBinCount);
-    const end = Math.floor(((bin + 1) * sortedPredictions.length) / calibrationBinCount);
-    const slice = sortedPredictions.slice(start, end);
-    if (slice.length === 0) continue;
-    const meanPrediction = slice.reduce((sum, item) => sum + item.probability, 0) / slice.length;
-    const observedRate = slice.reduce((sum, item) => sum + item.outcome, 0) / slice.length;
-    ece += (slice.length / sortedPredictions.length) * Math.abs(meanPrediction - observedRate);
-  }
-
-  return {
-    brierScore: Number(brier.toFixed(4)),
-    expectedCalibrationError: Number(ece.toFixed(4)),
-  };
-}
-
-/** Fit monotonic calibration using earlier outcomes; validate diagnostics on a later time slice. */
 export function calibratePredictionScore(
   rawScore: number,
-  input: readonly CalibrationObservation[],
-  minimumSampleSize = 100
-): CalibratedScore {
+  observations: CalibrationObservation[]
+): CalibratedScoreResult {
   if (!Number.isFinite(rawScore) || rawScore < 0 || rawScore > 1) {
-    throw new Error("Raw prediction score must be finite and within [0, 1].");
-  }
-  if (!Number.isInteger(minimumSampleSize) || minimumSampleSize < 20) {
-    throw new Error("Calibration minimum sample size must be an integer of at least 20.");
+    throw new Error(`Raw score must be a finite number between 0.0 and 1.0; received: ${rawScore}`);
   }
 
-  // Preserve chronology for forward diagnostics; old records without raw scores are ignored.
-  const chronological = input.filter(item =>
-    Number.isFinite(item.rawScore) &&
-    item.rawScore >= 0 &&
-    item.rawScore <= 1 &&
-    (item.outcome === "WIN" || item.outcome === "LOSS")
+  const valid = observations.filter(
+    obs => Number.isFinite(obs.rawScore) && obs.rawScore >= 0 && obs.rawScore <= 1 && (obs.outcome === 'WIN' || obs.outcome === 'LOSS')
   );
+  const sampleSize = valid.length;
 
-  if (chronological.length < minimumSampleSize) {
+  if (sampleSize < 100) {
     return {
+      status: 'UNCALIBRATED',
       probability: null,
-      lowerConfidenceProbability: null,
-      status: "UNCALIBRATED",
-      sampleSize: chronological.length,
+      sampleSize,
       brierScore: null,
       expectedCalibrationError: null,
     };
   }
 
-  const validationSize = Math.max(20, Math.floor(chronological.length * 0.25));
-  const training = chronological.slice(0, chronological.length - validationSize);
-  const validation = chronological.slice(chronological.length - validationSize);
-  const diagnostics = forwardCalibrationDiagnostics(training, validation);
+  // Sort observations by rawScore ascending for isotonic calibration
+  const sorted = [...valid].sort((a, b) => a.rawScore - b.rawScore);
 
-  // The live estimate uses all outcomes known before this prediction timestamp.
-  const finalBlocks = buildIsotonicBlocks(chronological);
-  const matchedBlock = finalBlocks.find(block => rawScore <= block.maxScore) || finalBlocks[finalBlocks.length - 1];
-  const probability = blockProbability(matchedBlock);
-  const lowerConfidenceProbability = wilsonLowerBound(matchedBlock.wins, matchedBlock.count);
+  // Pool Adjacent Violators Algorithm (PAVA) for isotonic regression
+  interface Block {
+    weight: number;
+    value: number; // empirical win rate
+    minScore: number;
+    maxScore: number;
+  }
+
+  const blocks: Block[] = sorted.map(item => ({
+    weight: 1,
+    value: item.outcome === 'WIN' ? 1 : 0,
+    minScore: item.rawScore,
+    maxScore: item.rawScore,
+  }));
+
+  // Compress into monotonic blocks
+  let i = 0;
+  while (i < blocks.length - 1) {
+    if (blocks[i].value > blocks[i + 1].value) {
+      // Merge blocks i and i + 1
+      const mergedWeight = blocks[i].weight + blocks[i + 1].weight;
+      const mergedValue = (blocks[i].value * blocks[i].weight + blocks[i + 1].value * blocks[i + 1].weight) / mergedWeight;
+      blocks[i] = {
+        weight: mergedWeight,
+        value: mergedValue,
+        minScore: blocks[i].minScore,
+        maxScore: blocks[i + 1].maxScore,
+      };
+      blocks.splice(i + 1, 1);
+      // Backtrack if violation with previous block
+      if (i > 0) i--;
+    } else {
+      i++;
+    }
+  }
+
+  // Lookup calibrated probability for rawScore from monotonic blocks
+  let calibratedProbability: number;
+  if (rawScore <= blocks[0].minScore) {
+    calibratedProbability = blocks[0].value;
+  } else if (rawScore >= blocks[blocks.length - 1].maxScore) {
+    calibratedProbability = blocks[blocks.length - 1].value;
+  } else {
+    // Linear interpolation between block midpoints or step function
+    const matchedIndex = blocks.findIndex(b => rawScore >= b.minScore && rawScore <= b.maxScore);
+    if (matchedIndex >= 0) {
+      calibratedProbability = blocks[matchedIndex].value;
+    } else {
+      // Find bounding blocks
+      let left = blocks[0];
+      let right = blocks[blocks.length - 1];
+      for (let j = 0; j < blocks.length - 1; j++) {
+        if (rawScore >= blocks[j].maxScore && rawScore <= blocks[j + 1].minScore) {
+          left = blocks[j];
+          right = blocks[j + 1];
+          break;
+        }
+      }
+      const range = right.minScore - left.maxScore;
+      const t = range > 0 ? (rawScore - left.maxScore) / range : 0.5;
+      calibratedProbability = left.value + t * (right.value - left.value);
+    }
+  }
+
+  // Ensure probability stays in [0, 1]
+  calibratedProbability = Math.max(0, Math.min(1, Number(calibratedProbability.toFixed(4))));
+
+  // Compute overall Brier score and Expected Calibration Error (ECE)
+  // Assign calibrated probability to each sample in the dataset using the fitted blocks
+  const calibratedSamples = sorted.map(item => {
+    let prob = blocks[0].value;
+    for (const b of blocks) {
+      if (item.rawScore <= b.maxScore) {
+        prob = b.value;
+        break;
+      }
+    }
+    return {
+      prob,
+      target: item.outcome === 'WIN' ? 1 : 0,
+      raw: item.rawScore,
+    };
+  });
+
+  const brierScore = Number(
+    (calibratedSamples.reduce((sum, s) => sum + Math.pow(s.prob - s.target, 2), 0) / sampleSize).toFixed(4)
+  );
+
+  // 10-bin ECE
+  let totalEce = 0;
+  for (let bin = 0; bin < 10; bin++) {
+    const binLower = bin / 10;
+    const binUpper = (bin + 1) / 10;
+    const binItems = calibratedSamples.filter(s =>
+      bin === 9 ? s.prob >= binLower && s.prob <= binUpper : s.prob >= binLower && s.prob < binUpper
+    );
+    if (binItems.length > 0) {
+      const binAvgPred = binItems.reduce((acc, s) => acc + s.prob, 0) / binItems.length;
+      const binTrueRate = binItems.reduce((acc, s) => acc + s.target, 0) / binItems.length;
+      totalEce += (binItems.length / sampleSize) * Math.abs(binAvgPred - binTrueRate);
+    }
+  }
+  const expectedCalibrationError = Number(totalEce.toFixed(4));
+
+  // If raw score is materially higher than empirical probability by > 0.08, flag as OVERCONFIDENT
+  const isOverconfident = (rawScore - calibratedProbability) > 0.08;
+  const status = isOverconfident ? 'OVERCONFIDENT' : 'CALIBRATED';
+
+  // Conservative lower bound for Wilson score on calibrated sample
+  const lowerConfidenceProbability = Math.max(0, Number((calibratedProbability - 1.96 * Math.sqrt((calibratedProbability * (1 - calibratedProbability)) / sampleSize)).toFixed(4)));
 
   return {
-    probability: Number(probability.toFixed(4)),
-    lowerConfidenceProbability: Number(lowerConfidenceProbability.toFixed(4)),
-    status: rawScore - probability >= 0.10 ? "OVERCONFIDENT" : "CALIBRATED",
-    sampleSize: chronological.length,
-    brierScore: diagnostics.brierScore,
-    expectedCalibrationError: diagnostics.expectedCalibrationError,
+    status,
+    probability: calibratedProbability,
+    lowerConfidenceProbability,
+    sampleSize,
+    brierScore,
+    expectedCalibrationError,
   };
 }

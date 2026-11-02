@@ -34,7 +34,7 @@ export const ResearchAgentsView: React.FC<ResearchAgentsViewProps> = ({ reviews 
   };
 
   return (
-    <div className="flex min-w-0 flex-col bg-neutral-950">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-neutral-950">
       {/* Compact filter toolbar */}
       <div className="min-h-12 border-b border-white/[0.07] px-4 py-2 sm:px-5 flex flex-wrap items-center justify-between gap-3 shrink-0 bg-[#0b1018]">
         <div className="text-sm font-semibold text-white">Research agents</div>
@@ -77,7 +77,7 @@ export const ResearchAgentsView: React.FC<ResearchAgentsViewProps> = ({ reviews 
       </div>
 
       {/* Reviews Stream */}
-      <div className="p-4 sm:p-5 space-y-3">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3">
         {filtered.length === 0 ? (
           <div className="h-64 flex flex-col items-center justify-center text-center text-neutral-500 font-mono text-xs">
             <Users className="w-8 h-8 text-neutral-600 mb-2" />

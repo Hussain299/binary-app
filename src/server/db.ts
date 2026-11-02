@@ -25,7 +25,7 @@ import {
 import type { LearningPlatformPersistedState } from './learningPlatform.ts';
 import { sanitizeLossAutopsy } from './researchGovernance.ts';
 import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.ts';
-import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid } from './marketHours.ts';
+import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid, ReportingSession } from './marketHours.ts';
 import {
   assessNearestNeighbors,
   EpisodicTradeMemory,
@@ -697,7 +697,7 @@ class DatabaseService {
     );
     const sessions = getMarketSessionDefinitions(now);
 
-    return sessions.map(sess => {
+    return sessions.map((sess: ReportingSession) => {
       const sessSignals = closedSignals.filter(signal => {
         const entryTime = signal.actualEntryTimeUtc || signal.predictionTimeUtc;
         return getReportingSessionFromTimestamp(entryTime).id === sess.id;
