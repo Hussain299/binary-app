@@ -130,8 +130,24 @@ export class AutonomousScheduler {
   private lastPulseError: string | null = null;
   private lastPulseResult: { durationMs: number; pairsProcessed: number; signalsCreated: number; signalsUpdated: number } | null = null;
   private lastPairDiagnostics: Array<{
-    symbol: ForexSymbol; source: string; freshFeed: boolean; newestCandleAt: string | null;
-    ageSeconds: number | null; candleCount: number; eligibleTimeframes: number[]; result: string;
+    symbol: ForexSymbol;
+    source: string;
+    freshFeed: boolean;
+    newestCandleAt: string | null;
+    ageSeconds: number | null;
+    candleCount: number;
+    eligibleTimeframes: number[];
+    eligibleStrategyPoolCount: number;
+    sessionCompatibleStrategyCount: number;
+    timeframeCompatibleStrategyCount: number;
+    strategiesEvaluated: number;
+    regimeRejected: number;
+    activationPassed: number;
+    memoryVetoes: number;
+    selectedTimeframe: number | null;
+    lastStrategyName: string | null;
+    signalPersisted: boolean;
+    result: string;
   }> = [];
   private readonly lastDiagnosticLogAt = new Map<string, number>();
 
@@ -229,6 +245,7 @@ export class AutonomousScheduler {
     const openSignals = db.getOpenSignals();
     const awaitingSettlement = db.getSignalsAwaitingSettlement();
     const eligibleStrategies = db.getPaperTradingStrategies();
+    const strategyEligibility = db.getStrategyEligibilityDiagnostics();
     const reasonCounts = new Map<string, number>();
     for (const item of this.lastPairDiagnostics) {
       reasonCounts.set(item.result, (reasonCounts.get(item.result) || 0) + 1);
@@ -261,6 +278,7 @@ export class AutonomousScheduler {
       availableOpenSlots: Math.max(0, 4 - openSignals.length),
       paperStrategiesEligible: eligibleStrategies.length,
       storedStrategyCandidates: db.getSynthesizedStrategies().length,
+      strategyEligibility,
       strategyReadiness: eligibleStrategies.length > 0 ? 'READY' : 'NO_HISTORICALLY_QUALIFIED_STRATEGY',
       promotedStrategies: eligibleStrategies.filter(item => item.status === 'PROMOTED_ACTIVE').length,
       freshPairs: this.lastPairDiagnostics.filter(item => item.freshFeed).length,
@@ -621,9 +639,28 @@ export class AutonomousScheduler {
       const lifecycleCandlesMap: Record<ForexSymbol, Candle[]> = {} as any;
       const freshCandlesMap: Record<ForexSymbol, Candle[]> = {} as any;
       const trustedSources = TRUSTED_MARKET_SOURCES;
+      const strategyPool = db.getPaperTradingStrategies().sort((a, b) =>
+        Number(b.status === 'PROMOTED_ACTIVE') - Number(a.status === 'PROMOTED_ACTIVE') ||
+        db.getStrategyBayesianUcbScore(b.id) - db.getStrategyBayesianUcbScore(a.id)
+      );
       const pairDiagnostics = FOREX_PAIRS.map(symbol => ({
-        symbol, source: 'none', freshFeed: false, newestCandleAt: null as string | null,
-        ageSeconds: null as number | null, candleCount: 0, eligibleTimeframes: [] as number[],
+        symbol,
+        source: 'none',
+        freshFeed: false,
+        newestCandleAt: null as string | null,
+        ageSeconds: null as number | null,
+        candleCount: 0,
+        eligibleTimeframes: [] as number[],
+        eligibleStrategyPoolCount: strategyPool.length,
+        sessionCompatibleStrategyCount: 0,
+        timeframeCompatibleStrategyCount: 0,
+        strategiesEvaluated: 0,
+        regimeRejected: 0,
+        activationPassed: 0,
+        memoryVetoes: 0,
+        selectedTimeframe: null as number | null,
+        lastStrategyName: null as string | null,
+        signalPersisted: false,
         result: 'FEED_NOT_CHECKED',
       }));
 
@@ -734,6 +771,12 @@ export class AutonomousScheduler {
       const activeSymbols = new Set(currentActive.map(s => s.symbol));
       const diagnosticBySymbol = new Map(pairDiagnostics.map(item => [item.symbol, item]));
       const activeSession = getSessionFromTimestamp(new Date());
+      for (const diagnostic of pairDiagnostics) {
+        diagnostic.sessionCompatibleStrategyCount = strategyPool.filter(gene =>
+          (!gene.symbol || gene.symbol === diagnostic.symbol) &&
+          (gene.sessionAffinity === 'ALL' || gene.sessionAffinity === activeSession.id)
+        ).length;
+      }
 
       const nowMs = Date.now();
 
@@ -788,11 +831,15 @@ export class AutonomousScheduler {
           // Checks if an evolved, multi-dimensional quantitative formula
           // with non-linear polynomial operators triggers on this candle
           // -------------------------------------------------------------
-          const promotedGenes = db.getPaperTradingStrategies().sort((a, b) =>
-            Number(b.status === 'PROMOTED_ACTIVE') - Number(a.status === 'PROMOTED_ACTIVE') ||
-            db.getStrategyBayesianUcbScore(b.id) - db.getStrategyBayesianUcbScore(a.id)
-          );
+          const promotedGenes = strategyPool;
           const eligibleTimeframeSet = new Set(eligibleSchedules.map(item => item.timeframeMinutes));
+          if (pairDiagnostic) {
+            pairDiagnostic.timeframeCompatibleStrategyCount = promotedGenes.filter(gene =>
+              (!gene.symbol || gene.symbol === symbol) &&
+              (gene.sessionAffinity === 'ALL' || gene.sessionAffinity === activeSession.id) &&
+              eligibleTimeframeSet.has(gene.optimalHorizonMinutes)
+            ).length;
+          }
           const eligibleGene = promotedGenes.find(gene =>
             (!gene.symbol || gene.symbol === symbol) &&
             (gene.sessionAffinity === 'ALL' || gene.sessionAffinity === activeSession.id) &&
@@ -811,6 +858,7 @@ export class AutonomousScheduler {
           const selectedSchedule = eligibleSchedules.find(item =>
             item.timeframeMinutes === selectedEntryTimeframe
           );
+          if (pairDiagnostic) pairDiagnostic.selectedTimeframe = selectedEntryTimeframe;
           if (!selectedSchedule) continue;
           let regimeRejected = false;
           let memoryVetoed = false;
@@ -835,6 +883,7 @@ export class AutonomousScheduler {
             const regimeGate = isStrategyRegimeCompatible(geneStyle, regimeAssessment.regime);
             if (!regimeGate.allowed) {
               regimeRejected = true;
+              if (pairDiagnostic) pairDiagnostic.regimeRejected++;
               this.logMind(
                 'AUDITOR',
                 '[REGIME GATE] Suppressed evolved candidate ' + gene.id + ': ' + regimeGate.reason +
@@ -846,6 +895,10 @@ export class AutonomousScheduler {
               continue;
             }
             strategyEvaluated = true;
+            if (pairDiagnostic) {
+              pairDiagnostic.strategiesEvaluated++;
+              pairDiagnostic.lastStrategyName = gene.name;
+            }
             const evalResult = researchEngine.evaluateSynthesizedGeneSignal(
               gene,
               c,
@@ -856,6 +909,7 @@ export class AutonomousScheduler {
               rsi14
             );
             if (evalResult.shouldTrigger) {
+              if (pairDiagnostic) pairDiagnostic.activationPassed++;
               const memoryAssessment = db.assessEpisodicMemory({
                 symbol,
                 direction: evalResult.direction,
@@ -865,6 +919,7 @@ export class AutonomousScheduler {
               });
               if (memoryAssessment.veto) {
                 memoryVetoed = true;
+                if (pairDiagnostic) pairDiagnostic.memoryVetoes++;
                 this.logMind(
                   'AUDITOR',
                   '[EPISODIC MEMORY VETO] ' + symbol + ' ' + evalResult.direction +
@@ -920,6 +975,7 @@ export class AutonomousScheduler {
 
             createdSignals.push(signal);
             activeSymbols.add(symbol);
+            if (pairDiagnostic) pairDiagnostic.signalPersisted = true;
 
             this.logMind(
               'SCIENTIST',
