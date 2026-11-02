@@ -698,7 +698,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
       {/* 3. MAIN SIGNALS FEED: BOLD, UNCLUTTERED, DIRECT TRADING TICKETS */}
       <div className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-5 space-y-3">
-        {activeSignals.length === 0 && autopilotStatus && (
+        {activeSignals.length === 0 && verifyingSignals.length === 0 && autopilotStatus && (
           <div className="rounded-xl border border-amber-900/50 bg-amber-950/10 p-3 sm:p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs font-bold uppercase tracking-wide text-amber-200">Why no paper signals are appearing</div>
