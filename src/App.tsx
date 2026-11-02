@@ -40,7 +40,6 @@ export default function App() {
   const [activeNotification, setActiveNotification] = useState<AppNotification | null>(null);
   const notifiedIdsRef = React.useRef<Set<string>>(new Set());
   const fetchInFlightRef = React.useRef<Promise<void> | null>(null);
-  const [isAutopilotChanging, setIsAutopilotChanging] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
 
@@ -131,24 +130,6 @@ export default function App() {
     }
   };
 
-  const handleAutopilotToggle = async () => {
-    if (isAutopilotChanging) return;
-    setIsAutopilotChanging(true);
-    const currentlyRunning = Boolean(autopilotStatus?.schedulerStarted);
-    const endpoint = currentlyRunning ? '/api/autopilot/stop' : '/api/autopilot/start';
-    try {
-      const response = await fetch(endpoint, { method: 'POST' });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || 'Unable to change scheduler state.');
-      await fetchAllData();
-    } catch (error) {
-      console.error('Autopilot control failed:', error);
-      window.alert(error instanceof Error ? error.message : 'Autopilot control failed.');
-    } finally {
-      setIsAutopilotChanging(false);
-    }
-  };
-
   const handleEvaluateSignals = async () => {
     setIsEvaluating(true);
     try {
@@ -189,8 +170,6 @@ export default function App() {
         onToggleSidebar={() => setIsMobileMenuOpen(prev => !prev)}
         isSidebarOpen={isMobileMenuOpen}
         autopilotStatus={autopilotStatus}
-        isAutopilotChanging={isAutopilotChanging}
-        onToggleAutopilot={handleAutopilotToggle}
       />
 
       {/* Main Content Area */}

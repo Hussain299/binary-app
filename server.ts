@@ -59,7 +59,8 @@ async function startServer() {
     });
   }
 
-  // Start background autonomous research cycle
+  // Start the always-on background service before accepting dashboard requests.
+  // True 24/5 uptime requires an always-running Node host with CPU available between requests.
   autonomousScheduler.start();
 
   // Reconcile due, human-approved paper predictions independently of UI polling.

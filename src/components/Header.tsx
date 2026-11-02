@@ -6,9 +6,12 @@ interface HeaderProps {
   isRefreshing: boolean;
   onToggleSidebar?: () => void;
   isSidebarOpen?: boolean;
-  autopilotStatus?: { schedulerStarted?: boolean; cycleRunning?: boolean } | null;
-  isAutopilotChanging?: boolean;
-  onToggleAutopilot?: () => void;
+  autopilotStatus?: {
+    schedulerStarted?: boolean;
+    cycleRunning?: boolean;
+    pulseHealthy?: boolean;
+    nextPulseAt?: string | null;
+  } | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -17,8 +20,6 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleSidebar,
   isSidebarOpen,
   autopilotStatus,
-  isAutopilotChanging = false,
-  onToggleAutopilot,
 }) => {
   const [timeIst, setTimeIst] = useState('');
 
@@ -69,19 +70,17 @@ export const Header: React.FC<HeaderProps> = ({
           <span>{timeIst}</span>
           <span className="text-neutral-500">IST</span>
         </div>
-        {onToggleAutopilot && (
-          <button
-            type="button"
-            onClick={onToggleAutopilot}
-            disabled={!autopilotStatus || isAutopilotChanging}
-            aria-label={autopilotStatus?.schedulerStarted ? 'Stop paper bot' : 'Start paper bot'}
-            title={autopilotStatus?.schedulerStarted ? 'Pause future market and research cycles; an active cycle may finish' : 'Start market sensing and autonomous research'}
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[10px] font-bold tracking-wide transition disabled:cursor-not-allowed disabled:opacity-50 ${autopilotStatus?.schedulerStarted ? 'border-rose-400/25 bg-rose-400/10 text-rose-200 hover:bg-rose-400/15' : 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/15'}`}
-          >
-            <span className={`h-1.5 w-1.5 rounded-full ${autopilotStatus?.schedulerStarted ? 'bg-rose-300' : 'bg-emerald-300'}`} />
-            {autopilotStatus?.schedulerStarted ? 'STOP BOT' : 'START BOT'}
-          </button>
-        )}
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-2 text-[9px] font-bold tracking-wide ${autopilotStatus?.schedulerStarted && autopilotStatus?.pulseHealthy !== false ? 'border-emerald-400/20 bg-emerald-400/[.07] text-emerald-200' : 'border-amber-400/20 bg-amber-400/[.07] text-amber-200'}`}
+          title={autopilotStatus?.schedulerStarted
+            ? autopilotStatus?.cycleRunning
+              ? '24/5 paper service is processing the current market-sensing cycle'
+              : `24/5 paper service active${autopilotStatus?.nextPulseAt ? `; next pulse ${autopilotStatus.nextPulseAt}` : ''}`
+            : 'Paper service has not started in this server process'}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${autopilotStatus?.schedulerStarted && autopilotStatus?.pulseHealthy !== false ? 'bg-emerald-300' : 'bg-amber-300'}`} />
+          {autopilotStatus?.schedulerStarted ? 'AUTO 24/5' : 'BOT STARTING'}
+        </span>
         <button
           type="button"
           onClick={onRefresh}

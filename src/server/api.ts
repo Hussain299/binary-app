@@ -928,7 +928,7 @@ apiRouter.get('/autopilot/status', (_req: Request, res: Response) => {
   const scheduler = autonomousScheduler.getAutopilotStatus();
   res.json({
     status: scheduler.schedulerStarted ? 'SCHEDULER_RUNNING' : 'SCHEDULER_STOPPED',
-    mode: 'AUTOMATED_PAPER_SIGNAL_AND_RESEARCH',
+    mode: 'ALWAYS_ON_24_5_AUTOMATED_PAPER_SIGNAL_AND_RESEARCH',
     ...scheduler,
     totalCandles: db.getTotalCandlesCount(),
     pairsMonitored: FOREX_PAIRS.length,
@@ -955,17 +955,9 @@ apiRouter.post('/autopilot/start', (_req: Request, res: Response) => {
 });
 
 apiRouter.post('/autopilot/stop', (_req: Request, res: Response) => {
-  try {
-    autonomousScheduler.stop();
-    const status = autonomousScheduler.getAutopilotStatus();
-    return res.json({
-      success: true,
-      status: status.schedulerStarted ? 'STOPPING' : 'SCHEDULER_STOPPED',
-      message: 'New market and research cycles paused. An already-running cycle may finish safely.',
-      ...status,
-      executionEnabled: false,
-    });
-  } catch (error: any) {
-    return res.status(500).json({ error: error?.message || 'Could not stop the paper bot.' });
-  }
+  return res.status(409).json({
+    error: 'The paper research service is configured for automatic 24/5 operation. Manual pause is disabled; stop the hosting service only for planned maintenance.',
+    mode: 'ALWAYS_ON_24_5_AUTOMATED_PAPER_SIGNAL_AND_RESEARCH',
+    executionEnabled: false,
+  });
 });
