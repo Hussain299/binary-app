@@ -39,10 +39,13 @@ export default function App() {
   const [autopilotStatus, setAutopilotStatus] = useState<any>(null);
   const [activeNotification, setActiveNotification] = useState<AppNotification | null>(null);
   const notifiedIdsRef = React.useRef<Set<string>>(new Set());
+  const fetchSequenceRef = React.useRef(0);
+  const [isAutopilotChanging, setIsAutopilotChanging] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
 
   const fetchAllData = async () => {
+    const requestId = ++fetchSequenceRef.current;
     try {
       const [sigRes, histRes, revRes, genRes, healthRes, autoRes, autoStatusRes] = await Promise.all([
         fetch('/api/signals').then(r => r.json()).catch(() => ({ signals: [] })),
@@ -53,6 +56,9 @@ export default function App() {
         fetch('/api/autopilot/logs').then(r => r.json()).catch(() => ({ logs: [] })),
         fetch('/api/autopilot/status').then(r => r.json()).catch(() => null),
       ]);
+      // Polls and manual refreshes can overlap on slow connections. Only the newest
+      // snapshot may update application state or trigger notifications.
+      if (requestId !== fetchSequenceRef.current) return;
 
       if (sigRes?.signals) {
         setSignals(sigRes.signals);
@@ -97,7 +103,9 @@ export default function App() {
       if (autoRes?.logs) setAutopilotLogs(autoRes.logs);
       if (autoStatusRes) setAutopilotStatus(autoStatusRes);
     } catch (err) {
-      console.error('Failed to sync SignalForge data:', err);
+      if (requestId === fetchSequenceRef.current) {
+        console.error('Failed to sync SignalForge data:', err);
+      }
     }
   };
 
@@ -118,6 +126,8 @@ export default function App() {
   };
 
   const handleAutopilotToggle = async () => {
+    if (isAutopilotChanging) return;
+    setIsAutopilotChanging(true);
     const currentlyRunning = Boolean(autopilotStatus?.schedulerStarted);
     const endpoint = currentlyRunning ? '/api/autopilot/stop' : '/api/autopilot/start';
     try {
@@ -128,6 +138,8 @@ export default function App() {
     } catch (error) {
       console.error('Autopilot control failed:', error);
       window.alert(error instanceof Error ? error.message : 'Autopilot control failed.');
+    } finally {
+      setIsAutopilotChanging(false);
     }
   };
 
@@ -171,6 +183,7 @@ export default function App() {
         onToggleSidebar={() => setIsMobileMenuOpen(prev => !prev)}
         isSidebarOpen={isMobileMenuOpen}
         autopilotStatus={autopilotStatus}
+        isAutopilotChanging={isAutopilotChanging}
         onToggleAutopilot={handleAutopilotToggle}
       />
 

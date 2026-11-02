@@ -40,6 +40,12 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
           [c.open, c.high, c.low, c.close].every(Number.isFinite) &&
           c.high >= Math.max(c.open, c.close, c.low) &&
           c.low <= Math.min(c.open, c.close, c.high))
+        .map((c: Candle) => ({
+          ...c,
+          timestamp: typeof c.timestamp === 'string' && Number.isFinite(Date.parse(c.timestamp))
+            ? c.timestamp
+            : new Date(c.timestampMs).toISOString(),
+        }))
         .sort((a: Candle, b: Candle) => a.timestampMs - b.timestampMs);
       setCandles(validCandles);
       setHoveredCandle(null);
@@ -195,7 +201,7 @@ export const MarketExplorerView: React.FC<MarketExplorerViewProps> = ({ provider
             </span>
           </div>
           <div className="text-[11px] text-neutral-500">
-            Time: {(hoveredCandle || latestCandle)?.timestamp.substring(11, 19)} UTC
+            Time: {(hoveredCandle || latestCandle)?.timestamp?.substring(11, 19) || '—'} UTC
           </div>
         </div>
       </div>
