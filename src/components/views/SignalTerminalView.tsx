@@ -20,7 +20,6 @@ import {
   ChevronUp,
   RefreshCw,
   Sparkles,
-  Trash2,
   Globe,
   Layers,
   Dna,
@@ -147,7 +146,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   onEvaluateSignals,
   isEvaluating,
 }) => {
-  const [filterState, setFilterState] = useState<'ACTIVE' | 'ALL' | 'CLOSED'>('ACTIVE');
+  const [filterState, setFilterState] = useState<'ACTIVE' | 'VERIFYING' | 'ALL' | 'CLOSED'>('ACTIVE');
   const [selectedSignal, setSelectedSignal] = useState<ResearchSignal | null>(null);
   const [selectedAutopsy, setSelectedAutopsy] = useState<LossAutopsy | null>(null);
   const [showLearningModal, setShowLearningModal] = useState<boolean>(false);
@@ -155,8 +154,6 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   const [showSessionsModal, setShowSessionsModal] = useState<boolean>(false);
   const [showGenesisModal, setShowGenesisModal] = useState<boolean>(false);
   const [showLogsAccordion, setShowLogsAccordion] = useState<boolean>(false);
-  const [isClearingHistory, setIsClearingHistory] = useState<boolean>(false);
-  const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
   const [sessionData, setSessionData] = useState<MarketSessionInfo[]>([]);
   const [synthesizedStrategies, setSynthesizedStrategies] = useState<SynthesizedStrategyGene[]>([]);
   const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformanceRecord[]>([]);
@@ -463,9 +460,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     ['CLOSED', 'EXPIRED', 'INVALIDATED'].includes(s.lifecycleState)
   );
   const completedSignals = signals.filter(
-    s => s.isNovelAiSynthesized === true &&
-      !!s.synthesizedGeneId &&
-      s.lifecycleState === 'CLOSED' &&
+    s => s.lifecycleState === 'CLOSED' &&
       ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult)
   );
   const archivedRuleBasedOutcomes = signals.filter(
@@ -485,8 +480,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   );
 
   const activeSignals = signals.filter(s =>
-    ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE', 'EXIT_PENDING'].includes(s.lifecycleState)
+    ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE'].includes(s.lifecycleState)
   );
+  const verifyingSignals = signals.filter(s => s.lifecycleState === 'EXIT_PENDING');
   const leadingPairBlockers = [...(autopilotStatus?.blockedPairReasons || [])]
     .sort((a, b) => b.count - a.count)
     .slice(0, 3);
@@ -502,28 +498,14 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
   const filteredSignals = signals.filter(s => {
     if (filterState === 'ACTIVE') {
-      return ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE', 'EXIT_PENDING'].includes(
-        s.lifecycleState
-      );
+      return ['WAITING_FOR_ENTRY', 'ENTRY_TRIGGERED', 'ACTIVE'].includes(s.lifecycleState);
     }
+    if (filterState === 'VERIFYING') return s.lifecycleState === 'EXIT_PENDING';
     if (filterState === 'CLOSED') {
       return ['CLOSED', 'EXPIRED', 'INVALIDATED'].includes(s.lifecycleState);
     }
     return true;
   });
-
-  const handleClearHistory = async () => {
-    setIsClearingHistory(true);
-    try {
-      await fetch('/api/signals/clear-history', { method: 'POST' });
-      onEvaluateSignals();
-      setShowClearConfirm(false);
-    } catch (err) {
-      console.error('Failed to clear history:', err);
-    } finally {
-      setIsClearingHistory(false);
-    }
-  };
 
   const getSignalAge = (isoString: string) => {
     const diffSec = Math.max(0, Math.floor((nowMs - Date.parse(isoString)) / 1000));
@@ -602,7 +584,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
       {/* 2. SECONDARY CONTROLS & INFO BUTTONS */}
       <div className="bg-[#0b1018] px-3 sm:px-5 py-2 border-b border-white/[0.07] flex flex-wrap items-center justify-between gap-2 shrink-0">
-        {/* Filters: Active | All | History */}
+        {/* Lifecycle filters keep live contracts separate from expired contracts awaiting verification. */}
         <div className="flex items-center gap-1 bg-neutral-900 p-1 rounded-lg border border-neutral-800 text-xs font-medium">
           <button
             onClick={() => setFilterState('ACTIVE')}
@@ -614,6 +596,14 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
           >
             <Zap className="w-3 h-3" />
             <span>Active ({activeSignals.length})</span>
+          </button>
+
+          <button
+            onClick={() => setFilterState('VERIFYING')}
+            className={`px-3 py-1 rounded-md transition-colors ${filterState === 'VERIFYING' ? 'bg-amber-400/20 text-amber-200 font-bold' : 'text-neutral-400 hover:text-white'}`}
+            title="Expired contracts waiting for trusted settlement data"
+          >
+            <span>Verifying ({verifyingSignals.length})</span>
           </button>
 
           <button
@@ -641,18 +631,6 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
         {/* Secondary Actions & Clear History */}
         <div className="flex items-center gap-2">
-          {filterState === 'CLOSED' && historySignals.length > 0 && (
-            <button
-              onClick={() => setShowClearConfirm(true)}
-              disabled={isClearingHistory}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 text-xs text-rose-300 font-medium transition-colors disabled:opacity-50"
-              title="Clear completed trade history"
-            >
-              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-              <span>{isClearingHistory ? 'Clearing...' : 'Clear History'}</span>
-            </button>
-          )}
-
           <button
             onClick={() => setShowGenesisModal(true)}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-600/80 text-xs text-cyan-200 font-bold transition-all shadow-xs"
@@ -692,7 +670,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
       {/* 3. MAIN SIGNALS FEED: BOLD, UNCLUTTERED, DIRECT TRADING TICKETS */}
       <div className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-5 space-y-3">
-        {activeSignals.length === 0 && autopilotStatus && (
+        {activeSignals.length === 0 && verifyingSignals.length === 0 && autopilotStatus && (
           <div className="rounded-xl border border-amber-900/50 bg-amber-950/10 p-3 sm:p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs font-bold uppercase tracking-wide text-amber-200">Why no paper signals are appearing</div>
@@ -780,7 +758,9 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             <h3 className="text-lg font-bold text-white">
               {filterState === 'CLOSED'
                 ? 'No Closed Trades in History Yet'
-                : 'Waiting for the next 5-minute entry candle'}
+                : filterState === 'VERIFYING'
+                  ? 'No Trades Awaiting Verification'
+                  : 'Waiting for the next 5-minute entry candle'}
             </h3>
             <p className="mt-2 text-xs sm:text-sm text-neutral-400 max-w-md leading-relaxed">
               {filterState === 'CLOSED'
@@ -801,6 +781,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               const isWaiting = sig.lifecycleState === 'WAITING_FOR_ENTRY';
               const isActive = ['ACTIVE', 'ENTRY_TRIGGERED'].includes(sig.lifecycleState);
               const isClosed = sig.lifecycleState === 'CLOSED';
+              const isVerifying = sig.lifecycleState === 'EXIT_PENDING';
               const isWin = sig.outcomeResult === 'WIN';
               const isLoss = sig.outcomeResult === 'LOSS';
 
@@ -808,8 +789,10 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                 <div
                   key={sig.id}
                   onClick={() => setSelectedSignal(sig)}
-                  className={`border rounded-xl p-3.5 sm:p-4 flex flex-col justify-between transition-colors cursor-pointer relative ${
-                    isActive
+                  className={`sf-trade-card border rounded-xl p-3.5 sm:p-4 flex flex-col justify-between transition-colors cursor-pointer relative ${
+                    isVerifying
+                      ? 'bg-neutral-900/95 border-violet-400/70 shadow-violet-950/30'
+                      : isActive
                       ? 'bg-neutral-900/95 border-emerald-500 shadow-emerald-950/40 ring-1 ring-emerald-500/40'
                       : isWaiting
                       ? 'bg-neutral-900/95 border-amber-500/80 shadow-amber-950/20'
@@ -904,6 +887,19 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                         <span className="font-mono text-xs font-black text-white bg-emerald-900 px-2 py-1 rounded border border-emerald-600 shrink-0 ml-2">
                           {getRemainingTime(sig.plannedExitTimeUtc)}
                         </span>
+                      </div>
+                    )}
+
+                    {isVerifying && (
+                      <div className="sf-settlement-pending rounded-xl p-3 text-xs flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Clock className="w-4 h-4 text-violet-300 shrink-0" />
+                          <div className="min-w-0">
+                            <span className="font-extrabold text-violet-200 block">SETTLEMENT VERIFICATION</span>
+                            <span className="text-[10px] text-violet-200/70">Expiry passed · waiting for the exact trusted candle · no result guessed</span>
+                          </div>
+                        </div>
+                        <span className="shrink-0 rounded-lg border border-violet-300/20 bg-violet-300/10 px-2 py-1 text-[10px] font-bold text-violet-100">PENDING</span>
                       </div>
                     )}
 
@@ -1611,36 +1607,6 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
             >
               Close
             </button>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 4: CLEAR HISTORY CONFIRMATION */}
-      {showClearConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-neutral-900 border border-neutral-700 rounded-2xl max-w-sm w-full p-5 text-neutral-200 space-y-4 shadow-2xl">
-            <div className="flex items-center gap-2 text-rose-400">
-              <Trash2 className="w-5 h-5" />
-              <h3 className="text-base font-bold text-white">Clear Trade History?</h3>
-            </div>
-            <p className="text-xs text-neutral-400 leading-relaxed">
-              This will remove all {historySignals.length} completed trade records and reset win/loss statistics. Active trades in progress will not be affected.
-            </p>
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                onClick={() => setShowClearConfirm(false)}
-                className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleClearHistory}
-                disabled={isClearingHistory}
-                className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-colors disabled:opacity-50"
-              >
-                {isClearingHistory ? 'Clearing...' : 'Yes, Clear History'}
-              </button>
-            </div>
           </div>
         </div>
       )}
