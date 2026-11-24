@@ -260,10 +260,19 @@ apiRouter.get('/metrics/overall-accuracy', (_req: Request, res: Response) => {
 apiRouter.get('/metrics/daily-loss', (req: Request, res: Response) => {
   const all = db.getSignals();
   const dateQuery = typeof req.query.date === 'string' ? req.query.date.trim() : 'ALL';
+  const parsedDate = dateQuery === 'ALL' ? null : new Date(dateQuery + 'T00:00:00.000Z');
+  if (dateQuery !== 'ALL' && (
+    !/^\\d{4}-\\d{2}-\\d{2}$/.test(dateQuery) ||
+    !parsedDate ||
+    !Number.isFinite(parsedDate.getTime()) ||
+    parsedDate.toISOString().slice(0, 10) !== dateQuery
+  )) {
+    return res.status(400).json({ error: 'date must be a real calendar date in YYYY-MM-DD format or ALL.' });
+  }
   const losses = all.filter(s => s.lifecycleState === 'CLOSED' && s.outcomeResult === 'LOSS');
   const filtered = dateQuery === 'ALL'
     ? losses
-    : losses.filter(s => (s.actualExitTimeUtc || s.predictionTimeUtc || '').startsWith(dateQuery));
+    : losses.filter(s => getEconomicConclusionIstDate(s) === dateQuery);
   const totalLossUnits = Number(filtered.reduce((sum, s) => sum + Math.abs(Math.min(0, s.netReturnUnits ?? -1)), 0).toFixed(3));
   res.json({
     date: dateQuery,

@@ -28,6 +28,12 @@ import { sanitizeLossAutopsy } from './researchGovernance.ts';
 import { FEATURE_SCHEMA_VERSION, RESEARCH_ENGINE_VERSION } from './researchReproducibility.ts';
 import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.ts';
 import { createInitialAutonomousResearchQueueState } from './researchQueue.ts';
+import {
+  filterPersistedGenerations,
+  filterPersistedResearchHoldouts,
+  filterPersistedSignals,
+  filterPersistedStrategies,
+} from './persistenceIntegrity.ts';
 import { getMarketSessionDefinitions, getReportingSessionFromTimestamp, isForexMarketOpenAt, isForexSignalScheduleValid, type ReportingSession } from './marketHours.ts';
 import {
   assessNearestNeighbors,
@@ -40,7 +46,6 @@ import {
   doesResearchHoldoutOverlap,
   hasSufficientHistoricalApprovalEvidence,
   getHistoricalApprovalFailureReasons,
-  wilsonLowerBound,
 } from './evolutionEngine.ts';
 
 interface DatabaseSchema {
@@ -165,16 +170,14 @@ class DatabaseService {
         // Historical versions wrote fabricated strategy accuracy values. Never trust them
         // without stored untouched-test evidence; quarantine all such legacy candidates.
         if (Array.isArray(parsed.synthesizedStrategies)) {
-          const hardcodedSeedIds = new Set([
-            'synth_gen7_fractal_wick',
-            'synth_gen12_harmonic_flow',
-            'synth_gen19_stochastic_drift',
-            'synth_gen26_macro_resonance',
-            'synth_gen33_compression_decoupling',
-          ]);
-          parsed.synthesizedStrategies = parsed.synthesizedStrategies.filter(
-            (gene: any) => !hardcodedSeedIds.has(gene.id)
-          );
+          // Quarantine known synthetic seeds and their fabricated research batches.
+          parsed.synthesizedStrategies = filterPersistedStrategies(parsed.synthesizedStrategies);
+          if (Array.isArray(parsed.generations)) {
+            parsed.generations = filterPersistedGenerations(parsed.generations);
+          }
+          if (Array.isArray(parsed.researchHoldoutWindows)) {
+            parsed.researchHoldoutWindows = filterPersistedResearchHoldouts(parsed.researchHoldoutWindows);
+          }
           const completedBatchIds = new Set(
             (Array.isArray(parsed.generations) ? parsed.generations : [])
               .filter((generation: any) =>
@@ -210,140 +213,11 @@ class DatabaseService {
             return gene;
           });
 
-          // Ensure baseline qualified paper strategies exist so scheduler pulse and learning loop can operate continuously
-          const validPaperGenes = parsed.synthesizedStrategies.filter(
-            (g: any) => (g.status === 'PAPER_TRADING' || g.status === 'PROMOTED_ACTIVE') &&
-              g.featureSchemaVersion === FEATURE_SCHEMA_VERSION &&
-              g.researchEngineVersion === RESEARCH_ENGINE_VERSION &&
-              hasSufficientHistoricalApprovalEvidence(g.backtestMetrics, g.accuracyStatus, g.sampleCount)
-          );
-
-          if (validPaperGenes.length === 0) {
-            const adjustedLower = wilsonLowerBound(300, 400, 2.576);
-            const baselineSeeds: Array<{ symbol: ForexSymbol; id: string; name: string; formula: string; horizon: number }> = [
-              {
-                symbol: 'EUR/USD',
-                id: 'synth_EURUSD_causal_v2',
-                name: 'EUR/USD Multi-Scale Directional Core (M5)',
-                formula: '(return_5 > 0.00015) && (relative_volatility_14 < 1.4) && (rsi_14 > 48)',
-                horizon: 15,
-              },
-              {
-                symbol: 'GBP/USD',
-                id: 'synth_GBPUSD_causal_v2',
-                name: 'GBP/USD Liquidity Rebound Alpha (M5)',
-                formula: '(return_autocorrelation_34 < -0.05) && (range_position_34 < 0.25)',
-                horizon: 15,
-              },
-              {
-                symbol: 'USD/JPY',
-                id: 'synth_USDJPY_causal_v2',
-                name: 'USD/JPY Trend Continuation Engine (M5)',
-                formula: '(return_5 > 0.0002) && (directional_efficiency_14 > 0.55)',
-                horizon: 10,
-              },
-            ];
-
-            for (const seed of baselineSeeds) {
-              const batchId = `seed_batch_${seed.symbol.replace('/', '')}_v2`;
-              const backtestMetrics = {
-                trainSampleSize: 200,
-                trainScoredSampleSize: 200,
-                validationSampleSize: 200,
-                validationScoredSampleSize: 200,
-                trainWinRate: 0.72,
-                validationWinRate: 0.74,
-                testWinRate: 0.75,
-                testAccuracy: 0.75,
-                testSampleSize: 400,
-                testScoredSampleSize: 400,
-                testWins: 300,
-                testLosses: 100,
-                binaryPayoutPct: 80,
-                excludedZeroVolumeFlatCandles: 0,
-                expectedValueUnits: 0.35,
-                profitFactor: 1.35,
-                confidenceInterval95: [0.68, 0.81] as [number, number],
-                multipleTestingLowerBound: adjustedLower,
-                testBlockWinRates: [0.72, 0.74, 0.75],
-                trainPeriod: { start: '2026-01-01T00:00:00.000Z', end: '2026-02-01T00:00:00.000Z' },
-                validationPeriod: { start: '2026-02-02T00:00:00.000Z', end: '2026-02-20T00:00:00.000Z' },
-                testPeriod: { start: '2026-02-22T00:00:00.000Z', end: '2026-03-30T00:00:00.000Z' },
-              };
-
-              const newGene: SynthesizedStrategyGene = {
-                id: seed.id,
-                name: seed.name,
-                code: seed.formula,
-                symbol: seed.symbol,
-                generation: 1,
-                mathematicalFormula: seed.formula,
-                parents: [],
-                mutationRate: 0.05,
-                optimalHorizonMinutes: seed.horizon as 5 | 10 | 15 | 20 | 25 | 30,
-                status: 'PAPER_TRADING',
-                accuracyStatus: 'BACKTESTED',
-                verifiedAccuracy: 0.75,
-                sampleCount: 400,
-                sessionAffinity: 'ALL',
-                searchBatchId: batchId,
-                featureSchemaVersion: FEATURE_SCHEMA_VERSION,
-                researchEngineVersion: RESEARCH_ENGINE_VERSION,
-                backtestMetrics,
-                discoveryMetrics: {
-                  trainScoredTrades: 200,
-                  validationScoredTrades: 200,
-                  trainWinRate: 0.72,
-                  validationWinRate: 0.74,
-                  validationExpectedValueUnits: 0.35,
-                  validationProfitFactor: 1.35,
-                },
-                genome: {
-                  version: 1,
-                  expression: { kind: 'feature', feature: 'return_5' },
-                  activationThreshold: 0.45,
-                  signature: `sig_${seed.id}`,
-                  complexity: 5,
-                },
-                scientificHypothesis: `Nonlinear multi-scale feature activation on ${seed.symbol}`,
-                whyHumansMissThis: 'Combines micro-timeframe volatility with causal polynomial returns across distinct windows.',
-                createdAt: new Date().toISOString(),
-              };
-
-              parsed.synthesizedStrategies.unshift(newGene);
-
-              if (!Array.isArray(parsed.generations)) parsed.generations = [];
-              parsed.generations.unshift({
-                researchBatchId: batchId,
-                status: 'COMPLETED',
-                symbol: seed.symbol,
-                timestamp: new Date().toISOString(),
-                totalExperiments: 300,
-                acceptedCount: 1,
-                rejectedCount: 299,
-                summary: `Evolved candidate ${seed.name} approved for forward paper trading.`,
-                bestValidationExpectedValueUnits: 0.35,
-                holdoutPeriod: { start: '2026-02-22T00:00:00.000Z', end: '2026-03-30T00:00:00.000Z' },
-              });
-
-              if (!Array.isArray(parsed.researchHoldoutWindows)) parsed.researchHoldoutWindows = [];
-              parsed.researchHoldoutWindows.push({
-                batchId,
-                symbol: seed.symbol,
-                startMs: Date.parse('2026-02-22T00:00:00.000Z'),
-                endMs: Date.parse('2026-03-30T00:00:00.000Z'),
-              });
-            }
-          }        }
+        }
         // An empty population stays empty until the research engine actually generates candidates.
         if (Array.isArray(parsed.signals)) {
           // Keep persistent trade history while filtering out removed pairs or test artifacts
-          parsed.signals = parsed.signals.filter((s: any) => {
-            if (s.symbol === 'USD/CHF' || s.symbol === 'NZD/USD') return false;
-            if (typeof s.candleOpenTimeIst === 'string' && s.candleOpenTimeIst.includes('19:35:00 IST')) return false;
-            if (s.ruleFamily?.startsWith('test_')) return false;
-            return true;
-          });
+          parsed.signals = filterPersistedSignals(parsed.signals);
           // Migrate legacy loss records to an observation-only state.
           // Older versions inferred causes and generated antidotes from OHLC heuristics;
           // those claims are retained as explicitly unverified archive fields only.

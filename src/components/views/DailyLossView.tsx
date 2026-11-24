@@ -14,6 +14,7 @@ import {
   Percent,
 } from 'lucide-react';
 import { ResearchSignal, LossAutopsy } from '../../types/index.js';
+import { getEconomicConclusionIstDate } from '../../utils/signalAnalytics.ts';
 
 interface DailyLossViewProps {
   signals: ResearchSignal[];
@@ -55,23 +56,16 @@ export const DailyLossView: React.FC<DailyLossViewProps> = ({ signals }) => {
 
   const lossSignals = closedSignals.filter(s => s.outcomeResult === 'LOSS');
 
-  // Extract available dates (YYYY-MM-DD) from loss signals
-  const availableDates = Array.from(
-    new Set(
-      lossSignals.map(s => {
-        const dateStr = s.actualExitTimeUtc || s.plannedExitTimeUtc || s.predictionTimeUtc;
-        return dateStr ? dateStr.substring(0, 10) : '';
-      }).filter(Boolean)
-    )
-  ).sort().reverse();
+  // Use the canonical economic-conclusion date in Asia/Kolkata, not the UTC date substring.
+  const lossDates = lossSignals
+    .map(getEconomicConclusionIstDate)
+    .filter((date): date is string => Boolean(date));
+  const availableDates = Array.from(new Set(lossDates)).sort().reverse();
 
-  // Filter by selected date
+  // Filter losses by the same IST date contract used by /api/history.
   const filteredLosses = selectedDate === 'ALL'
     ? lossSignals
-    : lossSignals.filter(s => {
-        const dateStr = s.actualExitTimeUtc || s.plannedExitTimeUtc || s.predictionTimeUtc;
-        return dateStr && dateStr.startsWith(selectedDate);
-      });
+    : lossSignals.filter(s => getEconomicConclusionIstDate(s) === selectedDate);
 
   const totalLossUnits = filteredLosses.reduce(
     (sum, s) => sum + Math.abs(Math.min(0, s.netReturnUnits ?? -1)),
