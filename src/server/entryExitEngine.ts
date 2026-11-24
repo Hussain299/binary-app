@@ -243,6 +243,18 @@ export class EntryExitEngine {
     // Calibration uses only earlier settled outcomes for this exact strategy identity.
     const strategyId = params.strategyId || `rule:${params.ruleFamily}`;
     const probabilityCalibration = db.calibratePredictionScore(strategyId, params.confidence);
+    // Independent online classifier runs in shadow mode. Its prediction is frozen
+    // now and can only be learned from after this signal has a verified settlement.
+    const onlineLearningPrediction = params.marketFeatureVector &&
+      params.marketFeatureVector.length === 19 &&
+      params.marketFeatureVector.every(Number.isFinite)
+      ? db.predictOnlineOutcome({
+          symbol: params.symbol,
+          direction: params.direction,
+          ruleFamily: params.ruleFamily,
+          marketFeatureVector: params.marketFeatureVector,
+        })
+      : null;
 
     const signal: ResearchSignal = {
       id: `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -269,6 +281,9 @@ export class EntryExitEngine {
       calibratedProbabilityLowerBound: probabilityCalibration.lowerConfidenceProbability ?? undefined,
       calibrationSampleSize: probabilityCalibration.sampleSize,
       calibrationBrierScore: probabilityCalibration.brierScore ?? undefined,
+      onlineLearnerPrediction: onlineLearningPrediction?.probability,
+      onlineLearnerSampleSize: onlineLearningPrediction?.sampleSize,
+      onlineLearnerVersion: onlineLearningPrediction?.version,
       lifecycleState: 'WAITING_FOR_ENTRY',
       lifecycleHistory: initialHistory,
       grossReturnPips: null,
@@ -634,7 +649,8 @@ export class EntryExitEngine {
       }
 
       if (changed) {
-        db.updateSignal(signal);
+        // Make the CLOSED settlement durable before downstream learners run.
+        db.updateSignal(signal, signal.lifecycleState === 'CLOSED');
         updatedSignals.push(signal);
       }
     }

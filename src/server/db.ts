@@ -27,6 +27,17 @@ import type { LearningPlatformPersistedState } from './learningPlatform.ts';
 import { sanitizeLossAutopsy } from './researchGovernance.ts';
 import { FEATURE_SCHEMA_VERSION, RESEARCH_ENGINE_VERSION } from './researchReproducibility.ts';
 import { calibratePredictionScore as fitPredictionCalibration } from './predictionCalibration.ts';
+import {
+  createInitialOnlineLearnerState,
+  getOnlineLearnerSummary,
+  learnOnlineOutcome,
+  normalizeOnlineLearnerState,
+  predictOnlineOutcome as scoreOnlineOutcome,
+  replayOnlineLearnerHistory,
+  ONLINE_LEARNER_VERSION,
+  type OnlineLearningContext,
+  type OnlineLearnerState,
+} from './onlineLearning.ts';
 import { createInitialAutonomousResearchQueueState } from './researchQueue.ts';
 import {
   filterPersistedGenerations,
@@ -68,8 +79,14 @@ interface DatabaseSchema {
   episodicMemory: EpisodicTradeMemory[];
   /** Latest measured regime state per pair; telemetry is sourced from the decision engine. */
   marketRegimes: Record<string, MarketRegimeSnapshot>;
-  /** Global idempotency ledger; prevents replayed settlement events from retraining state. */
+  /** Global idempotency ledger; retained for the full lifetime of the signal ledger. */
   processedOutcomeIds: string[];
+  /** Durable idempotency ledger independent of the capped experiment display history. */
+  recordedForwardObservationIds: string[];
+  /** Signals already used to update the incremental learner. */
+  onlineLearnerProcessedSignalIds: string[];
+  /** Incremental prequential classifier; shadow-only and never used for trade selection. */
+  onlineLearner: OnlineLearnerState;
   /** Holdout time ranges already inspected by candidate searches; prevents reuse. */
   researchHoldoutWindows: Array<{ symbol: ForexSymbol; batchId: string; startUtc: string; endUtc: string; reservedAt: string }>;
   /** Durable fair queue state for autonomous per-pair evolutionary research. */
@@ -148,7 +165,22 @@ class DatabaseService {
         if (!parsed.strategyPerformance || typeof parsed.strategyPerformance !== 'object') parsed.strategyPerformance = {};
         if (!Array.isArray(parsed.episodicMemory)) parsed.episodicMemory = [];
         if (!parsed.marketRegimes || typeof parsed.marketRegimes !== 'object') parsed.marketRegimes = {};
-        if (!Array.isArray(parsed.processedOutcomeIds)) parsed.processedOutcomeIds = [];
+        const persistedStrategySignalIds = Object.values(parsed.strategyPerformance || {})
+          .flatMap((record: any) => Array.isArray(record?.signalIds) ? record.signalIds : []);
+        parsed.processedOutcomeIds = [...new Set([
+          ...(Array.isArray(parsed.processedOutcomeIds) ? parsed.processedOutcomeIds : []),
+          ...persistedStrategySignalIds.filter((id: any) => typeof id === 'string'),
+        ])];
+        const persistedForwardSignalIds = (Array.isArray(parsed.experiments) ? parsed.experiments : [])
+          .filter((experiment: any) => experiment?.experimentType === 'FORWARD_OBSERVATION' &&
+            typeof experiment.id === 'string' && experiment.id.startsWith('exp_forward_'))
+          .map((experiment: any) => experiment.id.slice('exp_forward_'.length));
+        parsed.recordedForwardObservationIds = [...new Set([
+          ...(Array.isArray(parsed.recordedForwardObservationIds) ? parsed.recordedForwardObservationIds : []),
+          ...persistedForwardSignalIds,
+        ])];
+        if (!Array.isArray(parsed.onlineLearnerProcessedSignalIds)) parsed.onlineLearnerProcessedSignalIds = [];
+        parsed.onlineLearner = normalizeOnlineLearnerState(parsed.onlineLearner);
         if (!Array.isArray(parsed.researchHoldoutWindows)) parsed.researchHoldoutWindows = [];
         if (!Array.isArray(parsed.opportunityHoldoutWindows)) parsed.opportunityHoldoutWindows = [];
         const defaultResearchQueue = createInitialAutonomousResearchQueueState();
@@ -315,6 +347,9 @@ class DatabaseService {
       episodicMemory: [],
       marketRegimes: {},
       processedOutcomeIds: [],
+      recordedForwardObservationIds: [],
+      onlineLearnerProcessedSignalIds: [],
+      onlineLearner: createInitialOnlineLearnerState(),
       researchHoldoutWindows: [],
       opportunityHoldoutWindows: [],
       autonomousResearchQueue: createInitialAutonomousResearchQueueState(),
@@ -594,11 +629,14 @@ class DatabaseService {
     return signal;
   }
 
-  public updateSignal(signal: ResearchSignal) {
+  public updateSignal(signal: ResearchSignal, flushImmediately = false) {
     const idx = this.state.signals.findIndex(s => s.id === signal.id);
     if (idx !== -1) {
       this.state.signals[idx] = signal;
-      this.scheduleSave();
+      // A CLOSED result is the source of truth for every downstream learner.
+      // Flush it before the scheduler starts updating derived learning ledgers.
+      if (flushImmediately) this.saveStateSync();
+      else this.scheduleSave();
     }
   }
 
@@ -651,6 +689,14 @@ class DatabaseService {
    * independently validate a strategy or train model weights.
    */
   public recordForwardObservation(sig: ResearchSignal): ResearchExperiment {
+    if (sig.lifecycleState !== 'CLOSED' ||
+        !['WIN', 'LOSS', 'SCRATCH'].includes(sig.outcomeResult) ||
+        !sig.actualEntryTimeUtc ||
+        !Number.isFinite(sig.actualEntryPrice) ||
+        !Number.isFinite(sig.netReturnUnits) ||
+        !Number.isFinite(sig.payoutPct)) {
+      throw new Error('Forward observations require a filled, CLOSED contract with a verified settlement and payout.');
+    }
     const netPips = sig.netReturnPips ?? 0;
     const netReturnUnits = sig.netReturnUnits ?? 0;
     const sessionName = sig.marketSessionName || 'Market Session';
@@ -807,12 +853,22 @@ class DatabaseService {
   }
 
   // Experiments
-  public addExperiment(exp: ResearchExperiment) {
+  public addExperiment(exp: ResearchExperiment): boolean {
+    if (this.state.experiments.some(existing => existing.id === exp.id)) return false;
+    if (exp.experimentType === 'FORWARD_OBSERVATION' && exp.id.startsWith('exp_forward_')) {
+      const signalId = exp.id.slice('exp_forward_'.length);
+      if (!Array.isArray(this.state.recordedForwardObservationIds)) {
+        this.state.recordedForwardObservationIds = [];
+      }
+      if (this.state.recordedForwardObservationIds.includes(signalId)) return false;
+      this.state.recordedForwardObservationIds.push(signalId);
+    }
     this.state.experiments.unshift(exp);
     if (this.state.experiments.length > 300) {
       this.state.experiments = this.state.experiments.slice(0, 300);
     }
     this.scheduleSave();
+    return true;
   }
 
   public getExperiments(): ResearchExperiment[] {
@@ -1016,13 +1072,41 @@ class DatabaseService {
       return { ...existing };
     }
     this.state.processedOutcomeIds.push(signal.id);
-    if (this.state.processedOutcomeIds.length > 100_000) {
-      this.state.processedOutcomeIds = this.state.processedOutcomeIds.slice(-100_000);
-    }
+    // The source signal ledger is not truncated. Its idempotency ledger must not
+    // be truncated either, or sufficiently old outcomes could be learned twice.
     existing.signalIds.push(signal.id);
     if (existing.signalIds.length > 600) existing.signalIds = existing.signalIds.slice(-600);
 
     const strategyGene = this.getSynthesizedStrategyById(strategyId);
+
+    // Update the shadow online model once, using the prediction frozen when this
+    // signal was created. A delayed close must not substitute a score from today.
+    if ((signal.outcomeResult === 'WIN' || signal.outcomeResult === 'LOSS') &&
+        !this.state.onlineLearnerProcessedSignalIds.includes(signal.id) &&
+        signal.onlineLearnerVersion === ONLINE_LEARNER_VERSION &&
+        Number.isFinite(signal.onlineLearnerPrediction) &&
+        signal.onlineLearnerPrediction! >= 0 && signal.onlineLearnerPrediction! <= 1 &&
+        Array.isArray(signal.marketFeatureVector) && signal.marketFeatureVector.length === 19 &&
+        signal.marketFeatureVector.every(Number.isFinite)) {
+      const context: OnlineLearningContext = {
+        symbol: signal.symbol,
+        direction: signal.direction,
+        ruleFamily: signal.ruleFamily,
+        marketFeatureVector: signal.marketFeatureVector,
+      };
+      const observedAtCandidate = signal.settlementCandleSealTimeUtc || signal.resolvedAtUtc || signal.actualExitTimeUtc || signal.plannedExitTimeUtc || '';
+      const observedAt = Number.isFinite(Date.parse(observedAtCandidate))
+        ? observedAtCandidate
+        : new Date().toISOString();
+      this.state.onlineLearner = learnOnlineOutcome(
+        this.state.onlineLearner,
+        context,
+        signal.outcomeResult,
+        signal.onlineLearnerPrediction!,
+        observedAt,
+      );
+      this.state.onlineLearnerProcessedSignalIds.push(signal.id);
+    }
 
     // Capture the market state frozen at prediction time, but only after a real decisive
     // binary settlement. The expiry timestamp is the first time the result is knowable.
@@ -1215,6 +1299,203 @@ class DatabaseService {
 
   public getEpisodicMemoryCount(): number {
     return (this.state.episodicMemory || []).length;
+  }
+
+  public predictOnlineOutcome(context: OnlineLearningContext) {
+    return scoreOnlineOutcome(this.state.onlineLearner, context);
+  }
+
+  /**
+   * Rebuild the shadow model using a chronological event stream. Prediction
+   * events are evaluated before outcome events at the same timestamp, ensuring
+   * no trade can learn from a result that was not yet knowable at its decision.
+   */
+  public rebuildOnlineLearnerFromHistory() {
+    const candidates = this.getSignals().filter(signal =>
+      signal.lifecycleState === 'CLOSED' &&
+      (signal.outcomeResult === 'WIN' || signal.outcomeResult === 'LOSS') &&
+      Array.isArray(signal.marketFeatureVector) &&
+      signal.marketFeatureVector.length === 19 &&
+      signal.marketFeatureVector.every(Number.isFinite) &&
+      isForexSignalScheduleValid(
+        Date.parse(signal.predictionTimeUtc),
+        Date.parse(signal.actualEntryTimeUtc || signal.candleOpenTimeUtc || signal.entryWindowStartUtc),
+        Date.parse(signal.plannedExitTimeUtc || signal.actualExitTimeUtc || signal.candleCloseTimeUtc || signal.entryWindowEndUtc)
+      )
+    );
+
+    const replay = replayOnlineLearnerHistory(candidates.map(signal => ({
+      signalId: signal.id,
+      predictionTimeUtc: signal.predictionTimeUtc,
+      outcomeTimeUtc: signal.settlementCandleSealTimeUtc || signal.resolvedAtUtc || signal.actualExitTimeUtc || signal.plannedExitTimeUtc || '',
+      outcome: signal.outcomeResult as 'WIN' | 'LOSS',
+      context: {
+        symbol: signal.symbol,
+        direction: signal.direction,
+        ruleFamily: signal.ruleFamily,
+        marketFeatureVector: signal.marketFeatureVector!,
+      },
+      storedPrediction: signal.onlineLearnerPrediction,
+      storedVersion: signal.onlineLearnerVersion,
+    })));
+
+    // Atomic replacement means a restart after an interrupted learning cycle
+    // deterministically reconstructs the same model from the complete signal ledger.
+    this.state.onlineLearner = replay.state;
+    this.state.onlineLearnerProcessedSignalIds = replay.processedSignalIds;
+    this.saveStateSync();
+    return {
+      replayedOutcomes: replay.processedSignalIds.length,
+      reconstructedPredictions: replay.reconstructedPredictions,
+      learner: getOnlineLearnerSummary(replay.state),
+      completedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Replay CLOSED, filled and settled signals after process restarts. Both
+   * learning ledgers are independently idempotent; this is safe at startup and
+   * on demand without duplicating experiments or strategy posterior updates.
+   */
+  public reconcileClosedSignalLearning() {
+    const closedSignals = this.getSignals()
+      .filter(signal => signal.lifecycleState === 'CLOSED' &&
+        ['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult) &&
+        Boolean(signal.actualEntryTimeUtc) && Number.isFinite(signal.actualEntryPrice) &&
+        Number.isFinite(signal.netReturnUnits) && Number.isFinite(signal.payoutPct))
+      .sort((a, b) => {
+        const aTime = Date.parse(a.settlementCandleSealTimeUtc || a.resolvedAtUtc || a.actualExitTimeUtc || a.plannedExitTimeUtc || a.predictionTimeUtc);
+        const bTime = Date.parse(b.settlementCandleSealTimeUtc || b.resolvedAtUtc || b.actualExitTimeUtc || b.plannedExitTimeUtc || b.predictionTimeUtc);
+        return aTime - bTime || a.id.localeCompare(b.id);
+      });
+
+    let forwardObservationsRecovered = 0;
+    let strategyOutcomesRecovered = 0;
+    let scheduleRejected = 0;
+    let incompleteOutcomesSkipped = 0;
+
+    for (const signal of closedSignals) {
+      const wasForwardRecorded = this.state.recordedForwardObservationIds.includes(signal.id);
+      const wasStrategyProcessed = this.state.processedOutcomeIds.includes(signal.id);
+      this.recordForwardObservation(signal);
+      if (!wasForwardRecorded && this.state.recordedForwardObservationIds.includes(signal.id)) {
+        forwardObservationsRecovered++;
+      }
+
+      const decisionMs = Date.parse(signal.predictionTimeUtc);
+      const entryMs = Date.parse(signal.actualEntryTimeUtc || signal.candleOpenTimeUtc || signal.entryWindowStartUtc);
+      const expiryMs = Date.parse(signal.plannedExitTimeUtc || signal.actualExitTimeUtc || signal.candleCloseTimeUtc || signal.entryWindowEndUtc);
+      if (!isForexSignalScheduleValid(decisionMs, entryMs, expiryMs)) {
+        scheduleRejected++;
+        continue;
+      }
+      if (!Number.isFinite(signal.netReturnUnits) || !Number.isFinite(signal.payoutPct)) {
+        incompleteOutcomesSkipped++;
+        continue;
+      }
+
+      this.recordStrategyOutcome(signal);
+      if (!wasStrategyProcessed && this.state.processedOutcomeIds.includes(signal.id)) {
+        strategyOutcomesRecovered++;
+      }
+    }
+
+    const recovered = forwardObservationsRecovered > 0 || strategyOutcomesRecovered > 0;
+    if (recovered) this.saveStateSync();
+    return {
+      scannedClosedSignals: closedSignals.length,
+      forwardObservationsRecovered,
+      strategyOutcomesRecovered,
+      onlineLearnerProcessedSignals: this.state.onlineLearnerProcessedSignalIds.length,
+      scheduleRejected,
+      incompleteOutcomesSkipped,
+      alreadyProcessed: closedSignals.filter(signal => this.state.processedOutcomeIds.includes(signal.id)).length,
+      completedAt: new Date().toISOString(),
+    };
+  }
+
+  /** Compact operational audit; never exposes raw feature vectors or database contents. */
+  public getEvolutionDiagnostics() {
+    const signals = this.getSignals();
+    const countBy = (values: string[]) => values.reduce<Record<string, number>>((counts, value) => {
+      counts[value] = (counts[value] || 0) + 1;
+      return counts;
+    }, {});
+    const closed = signals.filter(signal => signal.lifecycleState === 'CLOSED' &&
+      ['WIN', 'LOSS', 'SCRATCH'].includes(signal.outcomeResult));
+    const filled = signals.filter(signal => Boolean(signal.actualEntryTimeUtc) || Number.isFinite(signal.actualEntryPrice));
+    const terminalUnfilled = signals.filter(signal =>
+      ['EXPIRED', 'INVALIDATED', 'AMBIGUOUS'].includes(signal.lifecycleState) &&
+      !signal.actualEntryTimeUtc && !Number.isFinite(signal.actualEntryPrice));
+    const forwardIds = new Set(this.state.recordedForwardObservationIds || []);
+    const processedIds = new Set(this.state.processedOutcomeIds || []);
+    const missingForward = closed.filter(signal => !forwardIds.has(signal.id));
+    const scheduleValidClosed = closed.filter(signal => isForexSignalScheduleValid(
+      Date.parse(signal.predictionTimeUtc),
+      Date.parse(signal.actualEntryTimeUtc || signal.candleOpenTimeUtc || signal.entryWindowStartUtc),
+      Date.parse(signal.plannedExitTimeUtc || signal.actualExitTimeUtc || signal.candleCloseTimeUtc || signal.entryWindowEndUtc)
+    ));
+    const validForStrategy = scheduleValidClosed.filter(signal =>
+      Number.isFinite(signal.netReturnUnits) && Number.isFinite(signal.payoutPct));
+    const missingStrategy = validForStrategy.filter(signal => !processedIds.has(signal.id));
+
+    const expiredReasons: Record<string, number> = {};
+    for (const signal of signals) {
+      for (const event of signal.lifecycleHistory || []) {
+        if (event.toState !== 'EXPIRED' && event.toState !== 'INVALIDATED' && event.toState !== 'AMBIGUOUS') continue;
+        const reason = String(event.reason || 'UNSPECIFIED').toLowerCase();
+        const key = reason.includes('exact') && reason.includes('entry candle')
+          ? 'EXACT_ENTRY_CANDLE_UNAVAILABLE'
+          : reason.includes('entry window elapsed')
+            ? 'ENTRY_WINDOW_ELAPSED'
+            : reason.includes('trusted candles')
+              ? 'NO_TRUSTED_CANDLES_BEFORE_ENTRY_WINDOW_END'
+              : reason.includes('trigger') && reason.includes('invalidation')
+                ? 'TRIGGER_AND_INVALIDATION_AMBIGUOUS'
+                : event.toState;
+        expiredReasons[key] = (expiredReasons[key] || 0) + 1;
+      }
+    }
+
+    const memoryByFamily = (this.state.episodicMemory || []).reduce<Record<string, number>>((counts, item) => {
+      const key = item.ruleFamily || 'UNCLASSIFIED';
+      counts[key] = (counts[key] || 0) + 1;
+      return counts;
+    }, {});
+    const lifecycleCounts = countBy(signals.map(signal => signal.lifecycleState));
+    const outcomeCounts = countBy(signals.map(signal => signal.outcomeResult));
+    const terminalCount = filled.length + terminalUnfilled.length;
+
+    return {
+      generatedAt: new Date().toISOString(),
+      signals: {
+        total: signals.length,
+        lifecycleCounts,
+        outcomeCounts,
+        filledSignals: filled.length,
+        terminalUnfilledSignals: terminalUnfilled.length,
+        entryFillRatePct: terminalCount ? Number((filled.length / terminalCount * 100).toFixed(2)) : null,
+        awaitingSettlement: lifecycleCounts.EXIT_PENDING || 0,
+        closedSettled: closed.length,
+      },
+      learning: {
+        processedOutcomeIds: processedIds.size,
+        forwardObservationIds: forwardIds.size,
+        closedMissingForwardObservation: missingForward.length,
+        closedMissingStrategyUpdate: missingStrategy.length,
+        strategyEligibleClosedOutcomes: validForStrategy.length,
+        scheduleRejectedClosedOutcomes: closed.length - scheduleValidClosed.length,
+        incompleteClosedOutcomeRecords: scheduleValidClosed.length - validForStrategy.length,
+        episodicMemoryTrades: (this.state.episodicMemory || []).length,
+        episodicMemoryByRuleFamily: memoryByFamily,
+        onlineLearner: {
+          ...getOnlineLearnerSummary(this.state.onlineLearner),
+          processedSignalCount: this.state.onlineLearnerProcessedSignalIds.length,
+        },
+      },
+      entryFailureReasons: expiredReasons,
+      strategyEligibility: this.getStrategyEligibilityDiagnostics(),
+    };
   }
 
   public updateMarketRegime(symbol: string, session: MarketRegimeSnapshot['session'], assessment: Omit<MarketRegimeSnapshot, 'symbol' | 'session' | 'assessedAt'>): void {
