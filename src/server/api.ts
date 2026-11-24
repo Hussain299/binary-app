@@ -262,7 +262,7 @@ apiRouter.get('/metrics/daily-loss', (req: Request, res: Response) => {
   const dateQuery = typeof req.query.date === 'string' ? req.query.date.trim() : 'ALL';
   const parsedDate = dateQuery === 'ALL' ? null : new Date(dateQuery + 'T00:00:00.000Z');
   if (dateQuery !== 'ALL' && (
-    !/^\\d{4}-\\d{2}-\\d{2}$/.test(dateQuery) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(dateQuery) ||
     !parsedDate ||
     !Number.isFinite(parsedDate.getTime()) ||
     parsedDate.toISOString().slice(0, 10) !== dateQuery
