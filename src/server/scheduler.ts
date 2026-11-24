@@ -1213,6 +1213,7 @@ export class AutonomousScheduler {
             direction: 'BUY' | 'SELL';
             conviction: number;
             rationale: string;
+            ruleFamily: RuleFamily;
           } | null = null;
 
           for (const gene of expiryCompatibleGenes) {
@@ -1250,10 +1251,11 @@ export class AutonomousScheduler {
             );
             if (evalResult.shouldTrigger) {
               if (pairDiagnostic) pairDiagnostic.activationPassed++;
+              const learningRuleFamily = inferGenomeRuleFamily(gene.genome?.expression);
               const memoryAssessment = db.assessEpisodicMemory({
                 symbol,
                 direction: evalResult.direction,
-                ruleFamily: inferGenomeRuleFamily(gene.genome?.expression),
+                ruleFamily: learningRuleFamily,
                 featureVector: marketFeatureVector,
                 predictionTimeUtc: new Date().toISOString(),
               });
@@ -1275,6 +1277,7 @@ export class AutonomousScheduler {
                 direction: evalResult.direction,
                 conviction: evalResult.conviction,
                 rationale: evalResult.rationale,
+                ruleFamily: learningRuleFamily,
               };
               break;
             }
@@ -1296,7 +1299,7 @@ export class AutonomousScheduler {
               symbol,
               direction: novelGeneCandidate.direction,
               signalCandle: c,
-              ruleFamily: 'volatility_squeeze',
+              ruleFamily: novelGeneCandidate.ruleFamily,
               expiryMinutes: gene.optimalHorizonMinutes,
               entryTimeframeMinutes: ENTRY_CANDLE_TIMEFRAME_MINUTES,
               candleOpenTimeUtc: new Date(selectedSchedule.entryTimeMs).toISOString(),

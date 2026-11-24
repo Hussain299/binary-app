@@ -16,6 +16,7 @@ import {
   selectEvolutionParents,
   classifyMarketRegime,
   inferGenomeStyle,
+  inferGenomeRuleFamily,
   isStrategyRegimeCompatible,
   updateBetaPosterior,
   type EpisodicTradeMemory,
@@ -74,6 +75,12 @@ import {
   normalizeYahooChartCandles,
 } from '../utils/yahooCandles.ts';
 import { aggregateSignalPerformance, getEconomicConclusionIstDate, getIstDateString } from '../utils/signalAnalytics.ts';
+import {
+  filterPersistedGenerations,
+  filterPersistedResearchHoldouts,
+  filterPersistedSignals,
+  filterPersistedStrategies,
+} from './persistenceIntegrity.ts';
 
 const makeM1TestCandles = (symbol: ForexSymbol, count: number): Candle[] =>
   dataFeedEngine.generateRealisticHistoricalCandles(symbol, count).map(c => {
@@ -144,13 +151,54 @@ export async function runAllVerificationTests(): Promise<{
     ];
     const report = aggregateSignalPerformance(rows, '2026-11-03');
     if (getIstDateString('2026-11-02T19:05:00.000Z') !== '2026-11-03' ||
-        getEconomicConclusionIstDate(rows[0]) !== '2026-11-03') {
+        getEconomicConclusionIstDate(rows[0]) !== '2026-11-03' ||
+        getEconomicConclusionIstDate(rows[1]) !== '2026-11-03') {
       throw new Error('Economic conclusion dates must use Asia/Kolkata, including UTC-to-IST midnight rollover.');
     }
     if (report.totalTrades !== 3 || report.wins !== 1 || report.losses !== 1 ||
         report.scratches !== 1 || report.decidedTrades !== 2 || report.winRate !== 50 ||
         report.netReturnUnits !== -0.2 || report.pendingCount !== 1 || report.unresolvedCount !== 1) {
       throw new Error('Trade totals, scratch handling, net return or unresolved counts are inconsistent.');
+    }
+  });
+
+  await runTest('DATA', 'database migration quarantines fabricated baseline evidence without deleting real signal history', () => {
+    const strategies = filterPersistedStrategies([
+      { id: 'synth_gen7_fractal_wick' },
+      { id: 'synth_gen12_harmonic_flow' },
+      { id: 'synth_EURUSD_causal_v2' },
+      { id: 'synth_GBPUSD_causal_v2' },
+      { id: 'synth_USDJPY_causal_v2' },
+      { id: 'genuine_researched_candidate' },
+    ]);
+    if (strategies.length !== 1 || strategies[0].id !== 'genuine_researched_candidate') {
+      throw new Error('Synthetic baseline strategies must be quarantined while genuine candidates are retained.');
+    }
+
+    const generations = filterPersistedGenerations([
+      { researchBatchId: 'seed_batch_EURUSD_v2' },
+      { researchBatchId: 'real_research_batch' },
+    ]);
+    const holdouts = filterPersistedResearchHoldouts([
+      { batchId: 'seed_batch_GBPUSD_v2' },
+      { batchId: 'real_holdout_batch' },
+    ]);
+    if (generations.length !== 1 || generations[0].researchBatchId !== 'real_research_batch' ||
+        holdouts.length !== 1 || holdouts[0].batchId !== 'real_holdout_batch') {
+      throw new Error('Fabricated seed generations and holdout reservations must be removed.');
+    }
+
+    const signals = filterPersistedSignals([
+      { id: 'usd-chf-history', symbol: 'USD/CHF', candleOpenTimeIst: '2026-11-24 19:35:00 IST', ruleFamily: 'wick_reversal' },
+      { id: 'nzd-usd-history', symbol: 'NZD/USD', ruleFamily: 'momentum_5' },
+      { id: 'timestamp-history', symbol: 'EUR/USD', candleOpenTimeIst: '2026-11-24 19:35:00 IST', ruleFamily: 'momentum_5' },
+      { id: 'test-fixture', symbol: 'EUR/USD', ruleFamily: 'test_fixture' },
+    ]);
+    if (signals.length !== 3 ||
+        !signals.some(s => s.id === 'usd-chf-history') ||
+        !signals.some(s => s.id === 'nzd-usd-history') ||
+        !signals.some(s => s.id === 'timestamp-history')) {
+      throw new Error('Real signal history must survive pair/timestamp migrations; only test fixtures may be filtered.');
     }
   });
 
@@ -1760,6 +1808,53 @@ export async function runAllVerificationTests(): Promise<{
     const species = new Set(selected.map(parent => genomeSpeciesKey(parent.genome)));
     if (species.size < 3) {
       throw new Error('Parent selection must protect distinct validated symbolic species before filling by fitness.');
+    }
+  });
+
+  await runTest('ML', 'evolved strategy memory uses the same inferred family at storage and lookup', () => {
+    const expression = {
+      kind: 'binary' as const,
+      operator: 'add' as const,
+      left: { kind: 'feature' as const, feature: 'return_5' as const },
+      right: { kind: 'feature' as const, feature: 'ema_spread' as const },
+    };
+    const learningFamily = inferGenomeRuleFamily(expression);
+    if (learningFamily !== 'momentum_5') {
+      throw new Error('A trend genome must be assigned the momentum_5 learning family.');
+    }
+
+    const featureVector = Array(19).fill(0);
+    const memory: EpisodicTradeMemory[] = Array.from({ length: 10 }, (_, index) => ({
+      signalId: 'family-match-' + index,
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      ruleFamily: learningFamily,
+      featureVector: [...featureVector],
+      outcome: 'LOSS',
+      netReturnUnits: -1,
+      closedAt: new Date(Date.parse('2026-10-01T00:00:00.000Z') + index * 60_000).toISOString(),
+    }));
+    const result = assessNearestNeighbors({
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      ruleFamily: inferGenomeRuleFamily(expression),
+      featureVector,
+      predictionTimeUtc: '2026-10-02T00:00:00.000Z',
+    }, memory);
+    if (result.neighborsFound !== 10 || result.status !== 'NEGATIVE_EXPECTANCY' || !result.veto) {
+      throw new Error('Ten earlier outcomes saved under the evolved genome family must be visible to its next k-NN query.');
+    }
+
+    const legacyGenericFamilyMemory = memory.map(item => ({ ...item, ruleFamily: 'volatility_squeeze' }));
+    const legacyResult = assessNearestNeighbors({
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      ruleFamily: learningFamily,
+      featureVector,
+      predictionTimeUtc: '2026-10-02T00:00:00.000Z',
+    }, legacyGenericFamilyMemory);
+    if (legacyResult.status !== 'INSUFFICIENT_HISTORY' || legacyResult.neighborsFound !== 0) {
+      throw new Error('The regression fixture must demonstrate why legacy generic-family memories were invisible.');
     }
   });
 
