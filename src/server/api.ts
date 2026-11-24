@@ -514,6 +514,35 @@ apiRouter.get('/evolution/state', (_req: Request, res: Response) => {
   });
 });
 
+// Detailed learning and entry audit. This endpoint reports evidence; it does not
+// alter signals, thresholds, or broker execution.
+apiRouter.get('/evolution/diagnostics', (_req: Request, res: Response) => {
+  res.json({
+    ...db.getEvolutionDiagnostics(),
+    researchCoordinator: autonomousScheduler.getEvolutionResearchState(),
+  });
+});
+
+// Safe, idempotent recovery for deployments that have upgraded without restarting.
+// Rebuild the shadow learner in chronological event order, then repair missing ledgers.
+apiRouter.post('/evolution/reconcile', (_req: Request, res: Response) => {
+  try {
+    const onlineReplay = db.rebuildOnlineLearnerFromHistory();
+    const outcomeRecovery = db.reconcileClosedSignalLearning();
+    return res.json({
+      onlineReplay,
+      outcomeRecovery,
+      diagnostics: db.getEvolutionDiagnostics(),
+    });
+  } catch (error: any) {
+    console.error('[Learning] Manual reconciliation failed:', error);
+    return res.status(500).json({
+      error: 'Learning reconciliation failed.',
+      details: error?.message || String(error),
+    });
+  }
+});
+
 // Individual holdout testing is deliberately disabled: the untouched test is only
 // exposed to pre-registered finalists from a complete discovery-ranked batch.
 apiRouter.post('/strategies/validate', (_req: Request, res: Response) => {

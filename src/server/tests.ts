@@ -49,6 +49,13 @@ import {
 } from './researchReproducibility.ts';
 import { sanitizeLossAutopsy, OBSERVATION_ONLY_LESSONS } from './researchGovernance.ts';
 import { calibratePredictionScore } from './predictionCalibration.ts';
+import {
+  createInitialOnlineLearnerState,
+  getOnlineLearnerSummary,
+  learnOnlineOutcome,
+  predictOnlineOutcome,
+  replayOnlineLearnerHistory,
+} from './onlineLearning.ts';
 import { opportunityEngine, evaluateOpportunityHoldout, buildOpportunitySchedule } from './opportunityEngine.ts';
 import { AUTOPILOT_SCAN_INTERVAL_MS, getTrustedFreshCandleSnapshot, mapWithConcurrency, MARKET_SENSE_CONCURRENCY } from './scheduler.ts';
 import {
@@ -126,6 +133,153 @@ export async function runAllVerificationTests(): Promise<{
       });
     }
   };
+
+  await runTest('ML', 'Prequential FTRL learner updates only from frozen outcomes and remains shadow-only', () => {
+    const context = {
+      symbol: 'EUR/USD',
+      direction: 'BUY' as const,
+      ruleFamily: 'momentum_5',
+      marketFeatureVector: Array(19).fill(0.1),
+    };
+    let model = createInitialOnlineLearnerState();
+    const first = predictOnlineOutcome(model, context);
+    if (first.probability !== 0.5 || first.sampleSize !== 0 ||
+        first.status !== 'WARMUP' || first.isActionable !== false) {
+      throw new Error('A fresh online model must start neutral, in warmup, and non-actionable.');
+    }
+
+    for (let index = 0; index < 100; index++) {
+      const prediction = predictOnlineOutcome(model, context);
+      model = learnOnlineOutcome(
+        model,
+        context,
+        'WIN',
+        prediction.probability,
+        new Date(Date.UTC(2026, 10, 1, 0, index)).toISOString(),
+      );
+    }
+
+    const learned = predictOnlineOutcome(model, context);
+    const summary = getOnlineLearnerSummary(model);
+    if (!(learned.probability > first.probability) || learned.sampleSize !== 100 ||
+        learned.status !== 'SHADOW_ONLY' || learned.isActionable !== false ||
+        summary.mode !== 'SHADOW_ONLY' || summary.isUsedForTradeSelection !== false ||
+        summary.sampleCount !== 100 || !Number.isFinite(summary.meanBrierScore) ||
+        !(summary.brierSkillVs50Baseline! > 0)) {
+      throw new Error('Verified online outcomes should update the shadow model without making it actionable.');
+    }
+
+    let rejectedScratch = false;
+    try {
+      learnOnlineOutcome(model, context, 'SCRATCH' as any, 0.5);
+    } catch {
+      rejectedScratch = true;
+    }
+    if (!rejectedScratch) {
+      throw new Error('Scratches must not become directional classification labels.');
+    }
+  });
+
+  await runTest('ML', 'Adaptive-window drift monitor detects a material change in prequential error', () => {
+    const context = {
+      symbol: 'GBP/USD',
+      direction: 'SELL' as const,
+      ruleFamily: 'wick_reversal',
+      marketFeatureVector: Array(19).fill(-0.1),
+    };
+    let model = createInitialOnlineLearnerState();
+    for (let index = 0; index < 40; index++) {
+      model = learnOnlineOutcome(
+        model, context, 'WIN', 0.99,
+        new Date(Date.UTC(2026, 10, 2, 0, index)).toISOString(),
+      );
+    }
+    for (let index = 40; index < 90; index++) {
+      model = learnOnlineOutcome(
+        model, context, 'LOSS', 0.99,
+        new Date(Date.UTC(2026, 10, 2, 0, index)).toISOString(),
+      );
+    }
+    const summary = getOnlineLearnerSummary(model);
+    if (summary.driftEvents < 1 || !summary.lastDriftAt) {
+      throw new Error('A sustained abrupt increase in online Brier error should raise a drift event.');
+    }
+  });
+
+  await runTest('ML', 'Prequential history replay excludes outcomes not yet known at decision time', () => {
+    const context = {
+      symbol: 'EUR/USD',
+      direction: 'BUY' as const,
+      ruleFamily: 'momentum_5',
+      marketFeatureVector: Array(19).fill(0.15),
+    };
+    const replay = replayOnlineLearnerHistory([
+      {
+        signalId: 'replay-a',
+        predictionTimeUtc: '2026-11-03T00:00:00.000Z',
+        outcomeTimeUtc: '2026-11-03T00:10:00.000Z',
+        outcome: 'WIN',
+        context,
+      },
+      {
+        signalId: 'replay-b',
+        predictionTimeUtc: '2026-11-03T00:05:00.000Z',
+        outcomeTimeUtc: '2026-11-03T00:15:00.000Z',
+        outcome: 'LOSS',
+        context,
+      },
+      {
+        signalId: 'replay-c',
+        predictionTimeUtc: '2026-11-03T00:10:00.000Z',
+        outcomeTimeUtc: '2026-11-03T00:20:00.000Z',
+        outcome: 'WIN',
+        context,
+      },
+      {
+        signalId: 'replay-d',
+        predictionTimeUtc: '2026-11-03T00:11:00.000Z',
+        outcomeTimeUtc: '2026-11-03T00:21:00.000Z',
+        outcome: 'WIN',
+        context,
+      },
+    ]);
+    const a = replay.decisionProbabilities.get('replay-a');
+    const b = replay.decisionProbabilities.get('replay-b');
+    const c = replay.decisionProbabilities.get('replay-c');
+    const d = replay.decisionProbabilities.get('replay-d');
+    if (a !== 0.5 || b !== 0.5 || c !== 0.5 || !(d! > 0.5)) {
+      throw new Error('Replay leaked a later settlement into an earlier or same-time prediction.');
+    }
+    if (replay.state.sampleCount !== 4 || replay.processedSignalIds.length !== 4 ||
+        replay.reconstructedPredictions !== 4) {
+      throw new Error('Chronological replay did not process each verified historical outcome exactly once.');
+    }
+  });
+
+  await runTest('SYSTEM', 'Unfilled and cancelled setups cannot enter the forward trade ledger', () => {
+    let rejected = false;
+    try {
+      db.recordForwardObservation({
+        id: 'test_unfilled_forward_observation',
+        lifecycleState: 'EXPIRED',
+        outcomeResult: 'CANCELLED',
+      } as ResearchSignal);
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) {
+      throw new Error('An expired unfilled setup was accepted as a forward trade observation.');
+    }
+  });
+
+  await runTest('SYSTEM', 'Evolution diagnostics expose fill, recovery, and shadow-learning health', () => {
+    const diagnostics = db.getEvolutionDiagnostics();
+    if (!diagnostics.signals || !diagnostics.learning ||
+        !diagnostics.entryFailureReasons || !diagnostics.learning.onlineLearner ||
+        diagnostics.learning.onlineLearner.isUsedForTradeSelection !== false) {
+      throw new Error('Evolution diagnostics are missing one or more required learning-health sections.');
+    }
+  });
 
   await runTest('ENTRY_EXIT', 'trade analytics count settled outcomes and retain unresolved contracts', () => {
     const makeSignal = (id: string, outcomeResult: 'WIN' | 'LOSS' | 'SCRATCH', netReturnUnits: number, ruleFamily = 'momentum_5'): ResearchSignal => ({

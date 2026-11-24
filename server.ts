@@ -91,6 +91,17 @@ async function startServer() {
     });
   }
 
+  // Recover settled signal learning before any new strategy decisions are evaluated.
+  // The model rebuild replays prediction/outcome events chronologically to prevent lookahead.
+  const onlineReplay = db.rebuildOnlineLearnerFromHistory();
+  const outcomeRecovery = db.reconcileClosedSignalLearning();
+  console.info(
+    '[Learning] Startup recovery complete: ' +
+    onlineReplay.replayedOutcomes + ' prequential outcomes replayed; ' +
+    outcomeRecovery.forwardObservationsRecovered + ' forward observations and ' +
+    outcomeRecovery.strategyOutcomesRecovered + ' strategy outcomes recovered.',
+  );
+
   // Start the always-on background service before accepting dashboard requests.
   // True 24/5 uptime requires an always-running Node host with CPU available between requests.
   autonomousScheduler.start();

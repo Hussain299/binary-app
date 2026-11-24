@@ -335,6 +335,10 @@ export interface ResearchSignal {
   calibratedProbabilityLowerBound?: number;
   calibrationSampleSize?: number;
   calibrationBrierScore?: number;
+  /** Raw probability from the incremental FTRL learner, frozen at decision time; shadow-only. */
+  onlineLearnerPrediction?: number;
+  onlineLearnerSampleSize?: number;
+  onlineLearnerVersion?: string;
   lifecycleState: SignalLifecycleState;
   lifecycleHistory: SignalLifecycleEvent[];
   
