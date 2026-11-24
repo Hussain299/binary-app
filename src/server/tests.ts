@@ -16,6 +16,7 @@ import {
   selectEvolutionParents,
   classifyMarketRegime,
   inferGenomeStyle,
+  inferGenomeRuleFamily,
   isStrategyRegimeCompatible,
   updateBetaPosterior,
   type EpisodicTradeMemory,
@@ -1807,6 +1808,48 @@ export async function runAllVerificationTests(): Promise<{
     const species = new Set(selected.map(parent => genomeSpeciesKey(parent.genome)));
     if (species.size < 3) {
       throw new Error('Parent selection must protect distinct validated symbolic species before filling by fitness.');
+    }
+  });
+
+  await runTest('ML', 'evolved strategy memory uses the same inferred family at storage and lookup', () => {
+    const expression = { kind: 'feature' as const, feature: 'return_5' as const };
+    const learningFamily = inferGenomeRuleFamily(expression);
+    if (learningFamily !== 'momentum_5') {
+      throw new Error('A trend genome must be assigned the momentum_5 learning family.');
+    }
+
+    const featureVector = Array(19).fill(0);
+    const memory: EpisodicTradeMemory[] = Array.from({ length: 10 }, (_, index) => ({
+      signalId: 'family-match-' + index,
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      ruleFamily: learningFamily,
+      featureVector: [...featureVector],
+      outcome: 'LOSS',
+      netReturnUnits: -1,
+      closedAt: new Date(Date.parse('2026-10-01T00:00:00.000Z') + index * 60_000).toISOString(),
+    }));
+    const result = assessNearestNeighbors({
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      ruleFamily: inferGenomeRuleFamily(expression),
+      featureVector,
+      predictionTimeUtc: '2026-10-02T00:00:00.000Z',
+    }, memory);
+    if (result.neighborsFound !== 10 || result.status !== 'NEGATIVE_EXPECTANCY' || !result.veto) {
+      throw new Error('Ten earlier outcomes saved under the evolved genome family must be visible to its next k-NN query.');
+    }
+
+    const legacyGenericFamilyMemory = memory.map(item => ({ ...item, ruleFamily: 'volatility_squeeze' }));
+    const legacyResult = assessNearestNeighbors({
+      symbol: 'EUR/USD',
+      direction: 'BUY',
+      ruleFamily: learningFamily,
+      featureVector,
+      predictionTimeUtc: '2026-10-02T00:00:00.000Z',
+    }, legacyGenericFamilyMemory);
+    if (legacyResult.status !== 'INSUFFICIENT_HISTORY' || legacyResult.neighborsFound !== 0) {
+      throw new Error('The regression fixture must demonstrate why legacy generic-family memories were invisible.');
     }
   });
 

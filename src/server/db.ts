@@ -46,6 +46,7 @@ import {
   doesResearchHoldoutOverlap,
   hasSufficientHistoricalApprovalEvidence,
   getHistoricalApprovalFailureReasons,
+  inferGenomeRuleFamily,
 } from './evolutionEngine.ts';
 
 interface DatabaseSchema {
@@ -218,6 +219,27 @@ class DatabaseService {
         if (Array.isArray(parsed.signals)) {
           // Keep persistent trade history while filtering out removed pairs or test artifacts
           parsed.signals = filterPersistedSignals(parsed.signals);
+
+          // Episodic memory must use the same genome-derived family that the
+          // scheduler uses when querying neighbors. Older releases persisted the
+          // generic signal ruleFamily (volatility_squeeze) for every evolved gene,
+          // making those memories invisible to momentum/mean-reversion/wick queries.
+          const signalsById = new Map(parsed.signals.map((signal: any) => [signal.id, signal]));
+          const genesById = new Map(
+            (parsed.synthesizedStrategies || []).map((gene: any) => [gene.id, gene])
+          );
+          parsed.episodicMemory = (Array.isArray(parsed.episodicMemory) ? parsed.episodicMemory : [])
+            .map((memory: any) => {
+              const signal: any = signalsById.get(memory.signalId);
+              const geneId = signal?.strategyId || signal?.synthesizedGeneId;
+              const gene: any = geneId ? genesById.get(geneId) : undefined;
+              if (!gene?.genome?.expression) return memory;
+              return {
+                ...memory,
+                ruleFamily: inferGenomeRuleFamily(gene.genome.expression),
+              };
+            });
+
           // Migrate legacy loss records to an observation-only state.
           // Older versions inferred causes and generated antidotes from OHLC heuristics;
           // those claims are retained as explicitly unverified archive fields only.
@@ -1000,6 +1022,8 @@ class DatabaseService {
     existing.signalIds.push(signal.id);
     if (existing.signalIds.length > 600) existing.signalIds = existing.signalIds.slice(-600);
 
+    const strategyGene = this.getSynthesizedStrategyById(strategyId);
+
     // Capture the market state frozen at prediction time, but only after a real decisive
     // binary settlement. The expiry timestamp is the first time the result is knowable.
     if ((signal.outcomeResult === 'WIN' || signal.outcomeResult === 'LOSS') &&
@@ -1012,7 +1036,10 @@ class DatabaseService {
           signalId: signal.id,
           symbol: signal.symbol,
           direction: signal.direction,
-          ruleFamily: signal.ruleFamily,
+          // Match the family's label used by live k-NN queries for this genome.
+          ruleFamily: strategyGene?.genome?.expression
+            ? inferGenomeRuleFamily(strategyGene.genome.expression)
+            : signal.ruleFamily,
           featureVector: [...signal.marketFeatureVector],
           outcome: signal.outcomeResult,
           netReturnUnits: signal.netReturnUnits!,
@@ -1072,7 +1099,7 @@ class DatabaseService {
     existing.updatedAt = new Date().toISOString();
     this.state.strategyPerformance[strategyId] = existing;
 
-    const gene = this.getSynthesizedStrategyById(strategyId);
+    const gene = strategyGene;
     if (gene && gene.status !== 'REJECTED') {
       const recent = existing.scoredOutcomes;
       const recentWins = recent.filter(outcome => outcome.result === 'WIN').length;
