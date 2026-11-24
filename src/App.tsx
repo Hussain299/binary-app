@@ -10,6 +10,8 @@ import { EvolutionLabView } from './components/views/EvolutionLabView.tsx';
 import { ResearchAgentsView } from './components/views/ResearchAgentsView.tsx';
 import { EntryExitMonitorView } from './components/views/EntryExitMonitorView.tsx';
 import { PerformanceAnalyticsView } from './components/views/PerformanceAnalyticsView.tsx';
+import { DailyLossView } from './components/views/DailyLossView.tsx';
+import { OverallAccuracyView } from './components/views/OverallAccuracyView.tsx';
 import { SystemHealthView } from './components/views/SystemHealthView.tsx';
 import { ConfigurationView } from './components/views/ConfigurationView.tsx';
 import { LineChart, Menu, Zap, Lightbulb } from 'lucide-react';
@@ -238,6 +240,12 @@ export default function App() {
           {activeTab === 'monitor' && <EntryExitMonitorView signals={signals} />}
           {activeTab === 'analytics' && (
             <PerformanceAnalyticsView experiments={experiments} signals={signals} />
+          )}
+          {activeTab === 'accuracy' && (
+            <OverallAccuracyView signals={signals} experiments={experiments} />
+          )}
+          {activeTab === 'daily-loss' && (
+            <DailyLossView signals={signals} />
           )}
           {activeTab === 'health' && <SystemHealthView />}
           {activeTab === 'config' && <ConfigurationView />}

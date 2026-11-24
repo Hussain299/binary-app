@@ -10,14 +10,18 @@ import {
   History,
   Lightbulb,
   LineChart,
+  Percent,
   Settings,
   ShieldCheck,
+  TrendingDown,
   X,
   Zap,
 } from 'lucide-react';
 
 export type ViewTab =
   | 'terminal'
+  | 'accuracy'
+  | 'daily-loss'
   | 'explorer'
   | 'modellab'
   | 'strategy'
@@ -53,9 +57,11 @@ const groups: Array<{
     label: 'Workspace',
     items: [
       { id: 'terminal', label: 'Signals', icon: Zap, count: 'signals' },
+      { id: 'accuracy', label: 'Overall Accuracy', icon: Percent },
+      { id: 'daily-loss', label: 'Daily Loss', icon: TrendingDown },
+      { id: 'analytics', label: 'Performance', icon: BarChart3 },
       { id: 'explorer', label: 'Markets', icon: LineChart },
       { id: 'strategy', label: 'Strategies', icon: Lightbulb },
-      { id: 'analytics', label: 'Performance', icon: BarChart3 },
       { id: 'monitor', label: 'Entry & exit', icon: Clock3 },
     ],
   },

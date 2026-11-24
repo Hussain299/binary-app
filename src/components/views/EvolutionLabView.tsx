@@ -156,21 +156,22 @@ export const EvolutionLabView: React.FC<EvolutionLabViewProps> = ({ generations 
       })
       .catch(() => setSearchError('Could not read historical-data status.'));
 
-    // Queue telemetry is refreshed independently from the heavy strategy tables.
-    const refreshQueue = async () => {
+    // Auto-refresh strategy audit and queue telemetry continuously
+    const refreshAll = async () => {
       try {
-        const response = await fetch('/api/evolution/state');
-        if (!response.ok) return;
-        const payload = await response.json();
-        setResearchCoordinator(payload.researchCoordinator ?? null);
-        setResearchQueue(payload.researchCoordinator?.queue ?? null);
+        await loadData();
       } catch {
-        // Preserve the last known queue snapshot during transient API failures.
+        // Preserve last known state during transient API hiccups
       }
     };
-    const timer = window.setInterval(refreshQueue, 15_000);
+    const timer = window.setInterval(refreshAll, 4_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  // When switching sub-tabs, immediately refresh audit data
+  useEffect(() => {
+    loadData();
+  }, [activeSubTab]);
 
   // Build the genetic mutation timeline linking losses to strategy evolutionary adaptations
   const timelineEvents: MutationTimelineEvent[] = React.useMemo(() => {

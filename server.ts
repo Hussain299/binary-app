@@ -98,6 +98,12 @@ async function startServer() {
   // Reconcile due, human-approved paper predictions independently of UI polling.
   const reconcileLearningOutcomes = () => {
     try {
+      // Capture approved opportunities into the immutable forward learning ledger
+      const opps = db.getOpportunities(3000);
+      if (opps.length > 0) {
+        learningPlatform.captureApprovedOpportunities(opps, Date.now());
+      }
+
       const result = learningPlatform.reconcileDuePredictions(
         symbol => db.getCandles(symbol, 5000),
         Date.now(),

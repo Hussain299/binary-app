@@ -147,6 +147,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
   isEvaluating,
 }) => {
   const [filterState, setFilterState] = useState<'ACTIVE' | 'VERIFYING' | 'ALL' | 'CLOSED'>('ACTIVE');
+  const [historySubFilter, setHistorySubFilter] = useState<'ALL' | 'SCORED' | 'UNSETTLED'>('ALL');
   const [selectedSignal, setSelectedSignal] = useState<ResearchSignal | null>(null);
   const [selectedAutopsy, setSelectedAutopsy] = useState<LossAutopsy | null>(null);
   const [showLearningModal, setShowLearningModal] = useState<boolean>(false);
@@ -226,11 +227,16 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     strategyPerformance.find(item => item.strategyId === (strategyId || '')) || null;
 
   useEffect(() => {
-    fetchSessions();
-    fetchSynthesizedStrategies();
-    fetchStrategyPerformance();
-    fetchEvolutionTelemetry();
-  }, [signals]);
+    const refreshTerminalMetrics = () => {
+      fetchSessions();
+      fetchSynthesizedStrategies();
+      fetchStrategyPerformance();
+      fetchEvolutionTelemetry();
+    };
+    refreshTerminalMetrics();
+    const interval = setInterval(refreshTerminalMetrics, 3000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleEvolveStrategy = async () => {
     setIsEvolvingStrategy(true);
@@ -502,7 +508,15 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
     }
     if (filterState === 'VERIFYING') return s.lifecycleState === 'EXIT_PENDING';
     if (filterState === 'CLOSED') {
-      return ['CLOSED', 'EXPIRED', 'INVALIDATED'].includes(s.lifecycleState);
+      const isHistory = ['CLOSED', 'EXPIRED', 'INVALIDATED'].includes(s.lifecycleState);
+      if (!isHistory) return false;
+      if (historySubFilter === 'SCORED') {
+        return s.lifecycleState === 'CLOSED' && ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult);
+      }
+      if (historySubFilter === 'UNSETTLED') {
+        return s.lifecycleState !== 'CLOSED' || !['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult);
+      }
+      return true;
     }
     return true;
   });
@@ -714,40 +728,85 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
 
         {/* HISTORY SUMMARY BANNER (Shown when viewing History tab) */}
         {filterState === 'CLOSED' && historySignals.length > 0 && (
-          <div className="bg-neutral-900/90 border border-neutral-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
-                <Target className="w-6 h-6" />
+          <div className="bg-neutral-900/90 border border-neutral-800 rounded-2xl p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                  <Target className="w-6 h-6" />
+                </div>
+                <div>
+                  <span className="text-[11px] text-neutral-400 uppercase tracking-wider font-bold block">
+                    Closed Trades Performance
+                  </span>
+                  <div className="text-xl sm:text-2xl font-black font-mono text-white">
+                    {closedSignals.length ? `${calculatedWinRate}% forward paper win rate` : 'No completed forward outcomes'}
+                  </div>
+                </div>
               </div>
-              <div>
-                <span className="text-[11px] text-neutral-400 uppercase tracking-wider font-bold block">
-                  Closed Trades Performance
-                </span>
-                <div className="text-xl sm:text-2xl font-black font-mono text-white">
-                  {closedSignals.length ? `${calculatedWinRate}% forward paper win rate` : 'No completed forward outcomes'}
+
+              <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
+                <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
+                  <span className="text-[10px] text-neutral-400 block uppercase">Total History</span>
+                  <span className="font-bold text-white text-sm">{historySignals.length}</span>
+                </div>
+                <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-blue-900/50">
+                  <span className="text-[10px] text-blue-400 block uppercase">Scored Outcomes</span>
+                  <span className="font-bold text-blue-300 text-sm">{completedSignals.length}</span>
+                </div>
+                <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-emerald-900/50">
+                  <span className="text-[10px] text-emerald-400 block uppercase">Wins</span>
+                  <span className="font-bold text-emerald-300 text-sm">{totalWins}</span>
+                </div>
+                <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-rose-900/50">
+                  <span className="text-[10px] text-rose-400 block uppercase">Losses</span>
+                  <span className="font-bold text-rose-300 text-sm">{totalLosses}</span>
+                </div>
+                <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-amber-900/50">
+                  <span className="text-[10px] text-amber-400 block uppercase">Unsettled / Expired</span>
+                  <span className="font-bold text-amber-300 text-sm">{historySignals.length - completedSignals.length}</span>
+                </div>
+                <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
+                  <span className="text-[10px] text-neutral-400 block uppercase">Net Return</span>
+                  <span className={`font-bold text-sm ${totalNetReturnUnits >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {totalNetReturnUnits > 0 ? '+' : ''}{totalNetReturnUnits.toFixed(3)} Stake Units
+                  </span>
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-4 text-xs font-mono">
-              <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
-                <span className="text-[10px] text-neutral-400 block uppercase">Settled Contracts</span>
-                <span className="font-bold text-white text-sm">{completedSignals.length}</span>
-              </div>
-              <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-emerald-900/50">
-                <span className="text-[10px] text-emerald-400 block uppercase">Wins</span>
-                <span className="font-bold text-emerald-300 text-sm">{totalWins}</span>
-              </div>
-              <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-rose-900/50">
-                <span className="text-[10px] text-rose-400 block uppercase">Losses</span>
-                <span className="font-bold text-rose-300 text-sm">{totalLosses}</span>
-              </div>
-              <div className="text-center bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
-                <span className="text-[10px] text-neutral-400 block uppercase">Net Return</span>
-                <span className={`font-bold text-sm ${totalNetReturnUnits >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {totalNetReturnUnits > 0 ? '+' : ''}{totalNetReturnUnits.toFixed(3)} Stake Units
-                </span>
-              </div>
+            {/* Sub-filter tabs inside History */}
+            <div className="flex items-center gap-2 pt-2 border-t border-neutral-800/80 text-xs font-mono">
+              <span className="text-neutral-500 text-[10px] uppercase">Filter Audit:</span>
+              <button
+                onClick={() => setHistorySubFilter('ALL')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                  historySubFilter === 'ALL'
+                    ? 'bg-neutral-800 text-white border border-neutral-700'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                All History ({historySignals.length})
+              </button>
+              <button
+                onClick={() => setHistorySubFilter('SCORED')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                  historySubFilter === 'SCORED'
+                    ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                Scored Fills ({completedSignals.length})
+              </button>
+              <button
+                onClick={() => setHistorySubFilter('UNSETTLED')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                  historySubFilter === 'UNSETTLED'
+                    ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                Unsettled / Expired Audit ({historySignals.length - completedSignals.length})
+              </button>
             </div>
           </div>
         )}
@@ -784,6 +843,11 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
               const isVerifying = sig.lifecycleState === 'EXIT_PENDING';
               const isWin = sig.outcomeResult === 'WIN';
               const isLoss = sig.outcomeResult === 'LOSS';
+              const isUnsettledAudit =
+                !isWaiting &&
+                !isActive &&
+                !isVerifying &&
+                (!isClosed || !['WIN', 'LOSS', 'SCRATCH'].includes(sig.outcomeResult));
 
               return (
                 <div
@@ -796,6 +860,8 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       ? 'bg-neutral-900/95 border-emerald-500 shadow-emerald-950/40 ring-1 ring-emerald-500/40'
                       : isWaiting
                       ? 'bg-neutral-900/95 border-amber-500/80 shadow-amber-950/20'
+                      : isUnsettledAudit
+                      ? 'bg-neutral-900/85 border-amber-900/60 hover:border-amber-700/80'
                       : 'bg-neutral-900/70 border-neutral-800 hover:border-neutral-700'
                   }`}
                 >
@@ -903,7 +969,7 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                       </div>
                     )}
 
-                    {isClosed && (
+                    {isClosed && ['WIN', 'LOSS', 'SCRATCH'].includes(sig.outcomeResult) && (
                       <div
                         className={`rounded-xl p-3 text-xs flex flex-col gap-2 border ${
                           isWin
@@ -967,6 +1033,39 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                             )}
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {isUnsettledAudit && (
+                      <div className="rounded-xl p-3 text-xs flex flex-col gap-2 border bg-amber-950/30 border-amber-600/60 text-amber-200">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 font-black text-sm">
+                            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                            <span className="text-amber-300 font-mono tracking-tight">
+                              {sig.lifecycleState === 'EXPIRED'
+                                ? 'AUDIT: UNSETTLED / EXPIRED'
+                                : sig.lifecycleState === 'INVALIDATED'
+                                ? 'AUDIT: INVALIDATED'
+                                : `AUDIT: ${sig.lifecycleState}`}
+                            </span>
+                          </div>
+                          <span className="font-mono text-xs font-black px-2 py-0.5 rounded bg-neutral-950 border border-amber-900/60 text-amber-400">
+                            {sig.outcomeResult || 'CANCELLED'} (0.00 Pips)
+                          </span>
+                        </div>
+
+                        <div className="p-2.5 rounded-lg bg-neutral-950/85 border border-amber-900/50 text-[11px] font-mono space-y-1.5">
+                          <div className="text-neutral-200 leading-relaxed">
+                            <strong className="text-amber-400">Audit Reason: </strong>
+                            {sig.lifecycleHistory && sig.lifecycleHistory.length > 0
+                              ? sig.lifecycleHistory[sig.lifecycleHistory.length - 1].reason
+                              : 'Entry window elapsed without trigger condition being satisfied. Contract cancelled unscored.'}
+                          </div>
+                          <div className="text-[10px] text-neutral-400 pt-1 border-t border-neutral-800/70 flex items-center justify-between">
+                            <span>Strict Zero-Lookahead: Unfilled setups carry 0 return</span>
+                            <span className="text-amber-400/90 underline font-bold">Inspect audit trail →</span>
+                          </div>
+                        </div>
                       </div>
                     )}
 
@@ -1581,6 +1680,33 @@ export const SignalTerminalView: React.FC<SignalTerminalViewProps> = ({
                     <div className="pt-1.5 border-t border-rose-900/40 text-[11px] text-neutral-400">
                       No replacement genome was fabricated from this loss. Its outcome is already stored against the original evolved genome and can influence future selection only when the forward sample is sufficiently mature.
                     </div>                  </div>
+                </div>
+              )}
+              {/* UNFILLED / EXPIRED / INVALIDATED AUDIT EXPLANATION */}
+              {['EXPIRED', 'INVALIDATED', 'AMBIGUOUS'].includes(selectedSignal.lifecycleState) && (
+                <div className="pt-2 border-t border-amber-900/60 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-amber-400 uppercase font-black tracking-wider flex items-center gap-1.5 font-mono">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                      UNFILLED AUDIT RECORD · ZERO-LOOKAHEAD ENFORCED
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono text-[9px] font-bold">
+                      {selectedSignal.outcomeResult || 'CANCELLED'}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-900/60 text-xs text-neutral-300 space-y-2 font-mono">
+                    <div>
+                      <strong className="text-amber-300 block mb-1 text-[11px]">Audit Reason:</strong>
+                      <p className="leading-relaxed text-[11px] text-neutral-200">
+                        {selectedSignal.lifecycleHistory && selectedSignal.lifecycleHistory.length > 0
+                          ? selectedSignal.lifecycleHistory[selectedSignal.lifecycleHistory.length - 1].reason
+                          : 'The signal entry window elapsed without meeting required execution criteria. Contract cancelled unscored.'}
+                      </p>
+                    </div>
+                    <div className="pt-1.5 border-t border-amber-900/40 text-[10px] text-neutral-400">
+                      Causal Compliance: Because the exact market execution criteria were not satisfied within the 5-minute window, the contract was safely cancelled without inferring any win or loss.
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

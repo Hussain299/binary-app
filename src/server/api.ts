@@ -234,6 +234,46 @@ apiRouter.get('/sessions/accuracy', (_req: Request, res: Response) => {
   });
 });
 
+// GET /api/metrics/overall-accuracy — Central calculated overall accuracy across all forward paper trades
+apiRouter.get('/metrics/overall-accuracy', (_req: Request, res: Response) => {
+  const all = db.getSignals();
+  const completed = all.filter(s => s.lifecycleState === 'CLOSED' && ['WIN', 'LOSS', 'SCRATCH'].includes(s.outcomeResult));
+  const scored = completed.filter(s => s.outcomeResult === 'WIN' || s.outcomeResult === 'LOSS');
+  const wins = scored.filter(s => s.outcomeResult === 'WIN').length;
+  const losses = scored.filter(s => s.outcomeResult === 'LOSS').length;
+  const scratches = completed.filter(s => s.outcomeResult === 'SCRATCH').length;
+  const overallAccuracy = scored.length > 0 ? Number(((wins / scored.length) * 100).toFixed(1)) : null;
+  const netReturnUnits = Number(completed.reduce((sum, s) => sum + (s.netReturnUnits ?? 0), 0).toFixed(3));
+  res.json({
+    totalCompleted: completed.length,
+    scoredCount: scored.length,
+    wins,
+    losses,
+    scratches,
+    overallAccuracy,
+    netReturnUnits,
+    sessions: db.getSessionAccuracyBreakdown(),
+  });
+});
+
+// GET /api/metrics/daily-loss — Daily loss aggregation and forensic risk tracking
+apiRouter.get('/metrics/daily-loss', (req: Request, res: Response) => {
+  const all = db.getSignals();
+  const dateQuery = typeof req.query.date === 'string' ? req.query.date.trim() : 'ALL';
+  const losses = all.filter(s => s.lifecycleState === 'CLOSED' && s.outcomeResult === 'LOSS');
+  const filtered = dateQuery === 'ALL'
+    ? losses
+    : losses.filter(s => (s.actualExitTimeUtc || s.predictionTimeUtc || '').startsWith(dateQuery));
+  const totalLossUnits = Number(filtered.reduce((sum, s) => sum + Math.abs(Math.min(0, s.netReturnUnits ?? -1)), 0).toFixed(3));
+  res.json({
+    date: dateQuery,
+    totalLossUnits,
+    lossCount: filtered.length,
+    losses: filtered,
+    autopsies: db.getLossAutopsies(),
+  });
+});
+
 // Pre-trade opportunity discovery. This creates hypotheses and forecast cards only;
 // it does not create a ResearchSignal, trigger an entry, or contact a broker.
 apiRouter.post('/opportunities/generate', async (req: Request, res: Response) => {
