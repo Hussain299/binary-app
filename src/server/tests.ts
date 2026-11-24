@@ -1812,7 +1812,12 @@ export async function runAllVerificationTests(): Promise<{
   });
 
   await runTest('ML', 'evolved strategy memory uses the same inferred family at storage and lookup', () => {
-    const expression = { kind: 'feature' as const, feature: 'return_5' as const };
+    const expression = {
+      kind: 'binary' as const,
+      operator: 'add' as const,
+      left: { kind: 'feature' as const, feature: 'return_5' as const },
+      right: { kind: 'feature' as const, feature: 'ema_spread' as const },
+    };
     const learningFamily = inferGenomeRuleFamily(expression);
     if (learningFamily !== 'momentum_5') {
       throw new Error('A trend genome must be assigned the momentum_5 learning family.');
